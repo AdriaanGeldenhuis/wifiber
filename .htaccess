@@ -1,0 +1,53 @@
+# --- Pretty URLs: /pricing -> /pricing.php ----------------------------------
+RewriteEngine On
+
+# Force HTTPS
+RewriteCond %{HTTPS} !=on
+RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
+
+# Strip trailing slash (except for root)
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.+)/$ /$1 [L,R=301]
+
+# /foo  -> /foo.php  (only if the .php file exists)
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteCond %{DOCUMENT_ROOT}/$1.php -f
+RewriteRule ^([^/.]+)$ /$1.php [L]
+
+# --- Security ----------------------------------------------------------------
+# Block dotfiles (e.g. .git, .env)
+RedirectMatch 404 /\..*$
+
+# Disable directory listings
+Options -Indexes
+
+# Don't expose PHP version
+<IfModule mod_headers.c>
+  Header unset X-Powered-By
+  Header set X-Content-Type-Options "nosniff"
+  Header set X-Frame-Options "SAMEORIGIN"
+  Header set Referrer-Policy "strict-origin-when-cross-origin"
+</IfModule>
+
+# Block access to includes/ from the web
+RewriteRule ^includes/ - [F,L]
+
+# --- Caching -----------------------------------------------------------------
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresByType image/webp        "access plus 1 year"
+  ExpiresByType image/png         "access plus 1 year"
+  ExpiresByType image/jpeg        "access plus 1 year"
+  ExpiresByType image/svg+xml     "access plus 1 year"
+  ExpiresByType text/css          "access plus 1 month"
+  ExpiresByType application/javascript "access plus 1 month"
+  ExpiresByType image/x-icon      "access plus 1 year"
+</IfModule>
+
+<IfModule mod_deflate.c>
+  AddOutputFilterByType DEFLATE text/html text/css application/javascript application/json image/svg+xml
+</IfModule>
+
+# --- Custom error pages ------------------------------------------------------
+ErrorDocument 404 /404.php
