@@ -9,6 +9,24 @@ require __DIR__ . '/_layout.php';
   <p class="portal-sub">This is your WiFIBER account portal.</p>
 </div>
 
+<div class="card-grid">
+  <div class="portal-card">
+    <span class="card-label">Your package</span>
+    <div class="card-num" style="font-size:1.4rem;line-height:1.2;"><?= htmlspecialchars($user['package'] ?? '—') ?></div>
+    <p class="card-sub muted">Need to upgrade or change? Call us on <a href="tel:0800111222">0800 111 222</a>.</p>
+  </div>
+  <div class="portal-card">
+    <span class="card-label">Service address</span>
+    <div class="card-num" style="font-size:1rem;line-height:1.4;color:var(--text);"><?= htmlspecialchars($user['address'] ?? '—') ?></div>
+    <p class="card-sub"><a href="/account/profile.php">Edit address &rarr;</a></p>
+  </div>
+  <div class="portal-card">
+    <span class="card-label">Member since</span>
+    <div class="card-num" style="font-size:1.2rem;color:var(--text);"><?= htmlspecialchars(substr((string)($user['created_at'] ?? ''), 0, 10)) ?></div>
+    <p class="card-sub muted">Last login: <?= htmlspecialchars($user['last_login'] ?? 'first time') ?></p>
+  </div>
+</div>
+
 <div class="portal-card">
   <h2>Your details</h2>
   <ul class="kv">
@@ -17,15 +35,19 @@ require __DIR__ . '/_layout.php';
     <?php if (!empty($user['email'])): ?>
       <li><span>Email</span><strong><?= htmlspecialchars($user['email']) ?></strong></li>
     <?php endif; ?>
-    <li><span>Member since</span><strong><?= htmlspecialchars($user['created_at'] ?? '') ?></strong></li>
-    <li><span>Last login</span><strong><?= htmlspecialchars($user['last_login'] ?? 'first time') ?></strong></li>
+    <?php if (!empty($user['phone'])): ?>
+      <li><span>Phone</span><strong><?= htmlspecialchars($user['phone']) ?></strong></li>
+    <?php endif; ?>
   </ul>
+  <div style="margin-top:18px; display:flex; gap:10px;">
+    <a href="/account/profile.php" class="btn btn-primary btn-sm">Edit profile</a>
+    <a href="/account/password.php" class="btn btn-ghost btn-sm">Change password</a>
+  </div>
 </div>
 
 <div class="portal-card">
   <h2>Coming soon</h2>
-  <p class="muted">More account features will appear here as we add them &mdash; package details, invoices, support tickets and the rest.</p>
-  <p class="muted">For now you can <a href="/account/password.php">change your password</a> or <a href="/account/logout.php">log out</a>.</p>
+  <p class="muted">More account features will appear here as we add them &mdash; invoices, support tickets and the rest.</p>
 </div>
 
 <?php require __DIR__ . '/../auth/portal-footer.php'; ?>

@@ -1,0 +1,53 @@
+{
+    "install_24mo_label": "24-Month Contract",
+    "install_24mo_value": "Free wireless installation included.",
+    "install_mtm_label":  "Month-to-Month",
+    "install_mtm_value":  "Once-off installation fee of R2,799.00.",
+    "tiers": {
+        "home": {
+            "name": "Home",
+            "contention": "5:1",
+            "tagline": "Great everyday connectivity for streaming, browsing and remote work.",
+            "plans": [
+                {"down": 2,  "up": 1,    "price": 199},
+                {"down": 4,  "up": 2,    "price": 299},
+                {"down": 6,  "up": 3,    "price": 459},
+                {"down": 8,  "up": 4,    "price": 559},
+                {"down": 10, "up": 5,    "price": 679,  "featured": true},
+                {"down": 15, "up": 7.5,  "price": 959},
+                {"down": 20, "up": 10,   "price": 1399},
+                {"down": 40, "up": 20,   "price": 2799}
+            ]
+        },
+        "business": {
+            "name": "Business",
+            "contention": "2:1",
+            "tagline": "Lower contention for offices, shops and serious work-from-home setups.",
+            "plans": [
+                {"down": 2,  "up": 2,  "price": 479},
+                {"down": 4,  "up": 4,  "price": 599},
+                {"down": 6,  "up": 6,  "price": 799},
+                {"down": 8,  "up": 8,  "price": 999},
+                {"down": 10, "up": 10, "price": 1299, "featured": true},
+                {"down": 15, "up": 15, "price": 1799},
+                {"down": 20, "up": 20, "price": 2499},
+                {"down": 40, "up": 40, "price": 3899}
+            ]
+        },
+        "gaming": {
+            "name": "Gaming",
+            "contention": "1:1",
+            "tagline": "Unshared 1:1 bandwidth. Built for gamers, streamers and latency-sensitive workloads.",
+            "plans": [
+                {"down": 2,  "up": 2,  "price": 599},
+                {"down": 4,  "up": 4,  "price": 749},
+                {"down": 6,  "up": 6,  "price": 949},
+                {"down": 8,  "up": 8,  "price": 1149},
+                {"down": 10, "up": 10, "price": 1499, "featured": true},
+                {"down": 15, "up": 15, "price": 1999},
+                {"down": 20, "up": 20, "price": 2799},
+                {"down": 40, "up": 40, "price": 4499}
+            ]
+        }
+    }
+}

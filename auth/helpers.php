@@ -128,7 +128,7 @@ function update_user(int $id, callable $patch): bool {
     return $found ? save_users($users) : false;
 }
 
-function create_user(string $username, string $password, string $role, string $name, string $email = ''): array {
+function create_user(string $username, string $password, string $role, string $name, string $email = '', array $extra = []): array {
     if (!in_array($role, ['admin', 'client'], true)) {
         throw new InvalidArgumentException("role must be admin or client");
     }
@@ -142,6 +142,9 @@ function create_user(string $username, string $password, string $role, string $n
         'email'         => $email,
         'name'          => $name,
         'role'          => $role,
+        'phone'         => trim((string)($extra['phone']   ?? '')),
+        'address'       => trim((string)($extra['address'] ?? '')),
+        'package'       => trim((string)($extra['package'] ?? '')),
         'password_hash' => password_hash($password, PASSWORD_DEFAULT),
         'created_at'    => date('c'),
         'last_login'    => null,

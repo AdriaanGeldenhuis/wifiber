@@ -4,53 +4,13 @@ $page_desc  = 'Uncapped, unshaped wireless internet packages from R199/m. Home, 
 $page_slug  = '/pricing';
 require __DIR__ . '/includes/header.php';
 
-$tiers = [
-  'home' => [
-    'name'      => 'Home',
-    'contention'=> '5:1',
-    'tagline'   => 'Great everyday connectivity for streaming, browsing and remote work.',
-    'plans' => [
-      [2,  1,   199],
-      [4,  2,   299],
-      [6,  3,   459],
-      [8,  4,   559],
-      [10, 5,   679, true],
-      [15, 7.5, 959],
-      [20, 10,  1399],
-      [40, 20,  2799],
-    ],
-  ],
-  'business' => [
-    'name'      => 'Business',
-    'contention'=> '2:1',
-    'tagline'   => 'Lower contention for offices, shops and serious work-from-home setups.',
-    'plans' => [
-      [2,  2,   479],
-      [4,  4,   599],
-      [6,  6,   799],
-      [8,  8,   999],
-      [10, 10,  1299, true],
-      [15, 15,  1799],
-      [20, 20,  2499],
-      [40, 40,  3899],
-    ],
-  ],
-  'gaming' => [
-    'name'      => 'Gaming',
-    'contention'=> '1:1',
-    'tagline'   => 'Unshared 1:1 bandwidth. Built for gamers, streamers and latency-sensitive workloads.',
-    'plans' => [
-      [2,  2,   599],
-      [4,  4,   749],
-      [6,  6,   949],
-      [8,  8,   1149],
-      [10, 10,  1499, true],
-      [15, 15,  1999],
-      [20, 20,  2799],
-      [40, 40,  4499],
-    ],
-  ],
-];
+$pricing_file = __DIR__ . '/data/pricing.json';
+$pricing = is_file($pricing_file) ? (json_decode((string)@file_get_contents($pricing_file), true) ?: []) : [];
+$tiers   = $pricing['tiers'] ?? [];
+$install_24mo_label = $pricing['install_24mo_label'] ?? '24-Month Contract';
+$install_24mo_value = $pricing['install_24mo_value'] ?? 'Free wireless installation included.';
+$install_mtm_label  = $pricing['install_mtm_label']  ?? 'Month-to-Month';
+$install_mtm_value  = $pricing['install_mtm_value']  ?? 'Once-off installation fee of R2,799.00.';
 ?>
 
 <section class="page-hero">
@@ -79,14 +39,16 @@ $tiers = [
       <div class="tier-panel<?= $first ? ' active' : '' ?>" data-panel="<?= htmlspecialchars($key) ?>" role="tabpanel">
         <p class="tier-blurb"><strong><?= htmlspecialchars($tier['contention']) ?> contention</strong> &mdash; <?= htmlspecialchars($tier['tagline']) ?></p>
         <div class="price-grid">
-          <?php foreach ($tier['plans'] as $plan):
-            [$down, $up, $price] = $plan;
-            $featured = !empty($plan[3]);
+          <?php foreach (($tier['plans'] ?? []) as $plan):
+            $down     = $plan['down']     ?? 0;
+            $up       = $plan['up']       ?? 0;
+            $price    = $plan['price']    ?? 0;
+            $featured = !empty($plan['featured']);
           ?>
             <div class="price-card<?= $featured ? ' featured' : '' ?>">
-              <div class="price-speed"><?= $down ?> <small>Mbps</small></div>
-              <div class="price-up"><?= $up ?> Mbps upload</div>
-              <div class="price-cost">R<?= number_format($price, 0, '.', ',') ?> <small>/ month</small></div>
+              <div class="price-speed"><?= htmlspecialchars((string)$down) ?> <small>Mbps</small></div>
+              <div class="price-up"><?= htmlspecialchars((string)$up) ?> Mbps upload</div>
+              <div class="price-cost">R<?= number_format((float)$price, 0, '.', ',') ?> <small>/ month</small></div>
               <ul class="price-features">
                 <li>Uncapped data</li>
                 <li>Unshaped &mdash; no throttling</li>
@@ -102,12 +64,12 @@ $tiers = [
 
     <div class="install-info">
       <div class="install-card">
-        <h4>24-Month Contract</h4>
-        <p><strong>Free</strong> wireless installation included.</p>
+        <h4><?= htmlspecialchars($install_24mo_label) ?></h4>
+        <p><?= $install_24mo_value ?></p>
       </div>
       <div class="install-card">
-        <h4>Month-to-Month</h4>
-        <p>Once-off installation fee of <strong>R2,799.00</strong>.</p>
+        <h4><?= htmlspecialchars($install_mtm_label) ?></h4>
+        <p><?= $install_mtm_value ?></p>
       </div>
       <div class="install-card">
         <h4>What you get</h4>

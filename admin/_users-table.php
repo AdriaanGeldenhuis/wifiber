@@ -2,7 +2,7 @@
 /**
  * Reusable list+create+edit+delete UI for users of a given role.
  *
- * Posts to itself with action=create | reset_password | delete.
+ * Posts to itself with action=create | update | reset_password | delete.
  * Output is the page body — caller is responsible for layout header/footer.
  */
 
@@ -15,17 +15,21 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
 
         if ($action === 'create') {
             $username = trim($_POST['username'] ?? '');
-            $name     = trim($_POST['name'] ?? '');
-            $email    = trim($_POST['email'] ?? '');
+            $name     = trim($_POST['name']     ?? '');
+            $email    = trim($_POST['email']    ?? '');
             $password = (string)($_POST['password'] ?? '');
-            $errors = [];
+            $errors   = [];
             if (strlen($username) < 3)                                       $errors[] = 'Username must be at least 3 characters.';
             if ($name === '')                                                $errors[] = 'Display name is required.';
             if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) $errors[] = 'Email is not valid.';
             if (strlen($password) < 8)                                       $errors[] = 'Password must be at least 8 characters.';
             if (!$errors) {
                 try {
-                    create_user($username, $password, $role, $name, $email);
+                    create_user($username, $password, $role, $name, $email, [
+                        'phone'   => $_POST['phone']   ?? '',
+                        'address' => $_POST['address'] ?? '',
+                        'package' => $_POST['package'] ?? '',
+                    ]);
                     flash('success', ucfirst($role) . " '{$username}' created.");
                 } catch (Throwable $e) {
                     flash('error', $e->getMessage());
@@ -33,6 +37,36 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
             } else {
                 flash('error', implode(' ', $errors));
             }
+            header('Location: ' . $self);
+            exit;
+        }
+
+        if ($action === 'update') {
+            $id    = (int)($_POST['id'] ?? 0);
+            $name  = trim($_POST['name']  ?? '');
+            $email = trim($_POST['email'] ?? '');
+            $phone = trim($_POST['phone'] ?? '');
+            $addr  = trim($_POST['address'] ?? '');
+            $pkg   = trim($_POST['package'] ?? '');
+            if ($name === '') {
+                flash('error', 'Display name is required.');
+                header('Location: ' . $self);
+                exit;
+            }
+            if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                flash('error', 'Email is not valid.');
+                header('Location: ' . $self);
+                exit;
+            }
+            $ok = update_user($id, function (array $u) use ($name, $email, $phone, $addr, $pkg) {
+                $u['name']    = $name;
+                $u['email']   = $email;
+                $u['phone']   = $phone;
+                $u['address'] = $addr;
+                $u['package'] = $pkg;
+                return $u;
+            });
+            flash($ok ? 'success' : 'error', $ok ? 'Account updated.' : 'User not found.');
             header('Location: ' . $self);
             exit;
         }
@@ -68,6 +102,7 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
     }
 
     $users = array_values(array_filter(load_users(), fn($u) => ($u['role'] ?? '') === $role));
+    $is_client_view = ($role === 'client');
     ?>
     <div class="portal-head">
       <h1><?= htmlspecialchars($heading) ?></h1>
@@ -79,49 +114,78 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
       <?php if (empty($users)): ?>
         <p class="muted">No <?= htmlspecialchars($role) ?>s yet.</p>
       <?php else: ?>
-        <table class="data-table">
-          <thead>
-            <tr>
-              <th>Username</th>
-              <th>Name</th>
-              <th>Email</th>
-              <th>Last login</th>
-              <th></th>
-            </tr>
-          </thead>
-          <tbody>
-            <?php foreach ($users as $u): ?>
-              <tr>
-                <td><strong><?= htmlspecialchars($u['username']) ?></strong></td>
-                <td><?= htmlspecialchars($u['name'] ?? '') ?></td>
-                <td><?= htmlspecialchars($u['email'] ?? '') ?></td>
-                <td class="muted"><?= htmlspecialchars($u['last_login'] ?? 'never') ?></td>
-                <td class="row-actions">
-                  <details>
-                    <summary>Reset pw</summary>
-                    <form method="post" class="inline-form">
-                      <?= csrf_field() ?>
-                      <input type="hidden" name="action" value="reset_password">
-                      <input type="hidden" name="id" value="<?= (int)$u['id'] ?>">
-                      <input type="password" name="password" placeholder="new password (8+ chars)" minlength="8" required>
-                      <button class="btn btn-ghost btn-sm" type="submit">Save</button>
-                    </form>
-                  </details>
-                  <?php if ((int)$u['id'] !== (int)$current_user['id']): ?>
-                    <form method="post" class="inline-form" onsubmit="return confirm('Delete <?= htmlspecialchars($u['username'], ENT_QUOTES) ?>?');">
-                      <?= csrf_field() ?>
-                      <input type="hidden" name="action" value="delete">
-                      <input type="hidden" name="id" value="<?= (int)$u['id'] ?>">
-                      <button class="btn btn-danger btn-sm" type="submit">Delete</button>
-                    </form>
-                  <?php else: ?>
-                    <span class="muted small">(you)</span>
-                  <?php endif; ?>
-                </td>
-              </tr>
-            <?php endforeach; ?>
-          </tbody>
-        </table>
+        <?php foreach ($users as $u): ?>
+          <details class="user-row">
+            <summary>
+              <strong><?= htmlspecialchars($u['username']) ?></strong>
+              <span class="muted">&middot; <?= htmlspecialchars($u['name'] ?? '') ?></span>
+              <?php if ($is_client_view && !empty($u['package'])): ?>
+                <span class="pkg-pill"><?= htmlspecialchars($u['package']) ?></span>
+              <?php endif; ?>
+              <span class="muted small" style="margin-left:auto;">
+                last login: <?= htmlspecialchars($u['last_login'] ?? 'never') ?>
+              </span>
+            </summary>
+
+            <div class="user-row-body">
+              <form method="post" class="form form-grid">
+                <?= csrf_field() ?>
+                <input type="hidden" name="action" value="update">
+                <input type="hidden" name="id" value="<?= (int)$u['id'] ?>">
+
+                <div class="field"><label>Display name</label>
+                  <input type="text" name="name" required maxlength="100" value="<?= htmlspecialchars($u['name'] ?? '', ENT_QUOTES) ?>">
+                </div>
+                <div class="field"><label>Email</label>
+                  <input type="email" name="email" maxlength="120" value="<?= htmlspecialchars($u['email'] ?? '', ENT_QUOTES) ?>">
+                </div>
+                <div class="field"><label>Phone</label>
+                  <input type="tel" name="phone" maxlength="40" value="<?= htmlspecialchars($u['phone'] ?? '', ENT_QUOTES) ?>">
+                </div>
+                <?php if ($is_client_view): ?>
+                  <div class="field"><label>Package</label>
+                    <input type="text" name="package" maxlength="80" value="<?= htmlspecialchars($u['package'] ?? '', ENT_QUOTES) ?>" placeholder="e.g. Home 10 Mbps">
+                  </div>
+                  <div class="field" style="grid-column:1/-1;"><label>Address</label>
+                    <input type="text" name="address" maxlength="200" value="<?= htmlspecialchars($u['address'] ?? '', ENT_QUOTES) ?>">
+                  </div>
+                <?php else: ?>
+                  <input type="hidden" name="package" value="<?= htmlspecialchars($u['package'] ?? '', ENT_QUOTES) ?>">
+                  <input type="hidden" name="address" value="<?= htmlspecialchars($u['address'] ?? '', ENT_QUOTES) ?>">
+                <?php endif; ?>
+                <div class="form-actions">
+                  <button type="submit" class="btn btn-primary btn-sm">Save changes</button>
+                </div>
+              </form>
+
+              <hr style="border:none;border-top:1px solid var(--border);margin:18px 0;">
+
+              <div class="user-row-extras">
+                <details>
+                  <summary>Reset password</summary>
+                  <form method="post" class="inline-form">
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="action" value="reset_password">
+                    <input type="hidden" name="id" value="<?= (int)$u['id'] ?>">
+                    <input type="password" name="password" placeholder="new password (8+ chars)" minlength="8" required>
+                    <button class="btn btn-ghost btn-sm" type="submit">Save new password</button>
+                  </form>
+                </details>
+
+                <?php if ((int)$u['id'] !== (int)$current_user['id']): ?>
+                  <form method="post" class="inline-form" onsubmit="return confirm('Delete <?= htmlspecialchars($u['username'], ENT_QUOTES) ?>? This cannot be undone.');">
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="action" value="delete">
+                    <input type="hidden" name="id" value="<?= (int)$u['id'] ?>">
+                    <button class="btn btn-danger btn-sm" type="submit">Delete account</button>
+                  </form>
+                <?php else: ?>
+                  <span class="muted small">(this is you)</span>
+                <?php endif; ?>
+              </div>
+            </div>
+          </details>
+        <?php endforeach; ?>
       <?php endif; ?>
     </div>
 
@@ -130,22 +194,29 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
       <form method="post" class="form form-grid" autocomplete="off">
         <?= csrf_field() ?>
         <input type="hidden" name="action" value="create">
-        <div class="field">
-          <label>Username</label>
+        <div class="field"><label>Username</label>
           <input type="text" name="username" required minlength="3" maxlength="60">
         </div>
-        <div class="field">
-          <label>Display name</label>
+        <div class="field"><label>Display name</label>
           <input type="text" name="name" required maxlength="100">
         </div>
-        <div class="field">
-          <label>Email <span class="muted">(optional)</span></label>
+        <div class="field"><label>Email <span class="muted">(optional)</span></label>
           <input type="email" name="email" maxlength="120">
         </div>
-        <div class="field">
-          <label>Password</label>
+        <div class="field"><label>Password</label>
           <input type="password" name="password" required minlength="8" autocomplete="new-password">
         </div>
+        <?php if ($is_client_view): ?>
+          <div class="field"><label>Phone</label>
+            <input type="tel" name="phone" maxlength="40">
+          </div>
+          <div class="field"><label>Package</label>
+            <input type="text" name="package" maxlength="80" placeholder="e.g. Home 10 Mbps">
+          </div>
+          <div class="field" style="grid-column:1/-1;"><label>Address</label>
+            <input type="text" name="address" maxlength="200">
+          </div>
+        <?php endif; ?>
         <div class="form-actions">
           <button type="submit" class="btn btn-primary">Create <?= htmlspecialchars($role) ?></button>
         </div>

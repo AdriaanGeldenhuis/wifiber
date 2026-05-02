@@ -281,6 +281,86 @@ code   { background: var(--bg-elev); padding: 2px 6px; border-radius: 4px; font-
   .portal-main { padding: 24px 16px; }
 }
 
+/* ---------- Slider editor rows ---------- */
+.slide-row {
+  display: grid;
+  grid-template-columns: 160px 1fr auto;
+  gap: 20px;
+  align-items: center;
+}
+.slide-thumb {
+  width: 100%;
+  height: 90px;
+  background-size: cover;
+  background-position: center;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-strong);
+  background-color: var(--bg-elev);
+}
+.slide-meta { min-width: 0; }
+.slide-meta h2 { font-size: 1.05rem; }
+.slide-actions {
+  display: flex;
+  gap: 6px;
+  flex-direction: column;
+  align-items: stretch;
+}
+.slide-actions .inline-form { gap: 4px; }
+@media (max-width: 700px) {
+  .slide-row { grid-template-columns: 1fr; }
+  .slide-actions { flex-direction: row; flex-wrap: wrap; }
+}
+
+/* ---------- User accordion rows ---------- */
+.user-row {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  margin-bottom: 10px;
+  background: var(--bg-elev);
+}
+.user-row > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px 18px;
+  cursor: pointer;
+  list-style: none;
+  flex-wrap: wrap;
+}
+.user-row > summary::-webkit-details-marker { display: none; }
+.user-row > summary::before {
+  content: '';
+  display: inline-block;
+  width: 0; height: 0;
+  border-left: 6px solid var(--text-muted);
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  transition: transform .15s;
+}
+.user-row[open] > summary::before { transform: rotate(90deg); }
+.user-row > summary:hover { background: rgba(255,255,255,.02); }
+.pkg-pill {
+  display: inline-block;
+  padding: 3px 10px;
+  background: var(--accent-soft);
+  color: var(--accent);
+  border: 1px solid rgba(5,218,253,.3);
+  border-radius: 999px;
+  font-size: .72rem;
+  font-weight: 600;
+  margin-left: 4px;
+}
+.user-row-body {
+  padding: 18px;
+  border-top: 1px solid var(--border);
+}
+.user-row-extras {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+
 /* portal link in public site header */
 .portal-link {
   color: var(--text-dim);

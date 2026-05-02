@@ -1,0 +1,16 @@
+{
+    "name": "WiFIBER",
+    "tagline": "Speed That Connects, Reliability That Lasts",
+    "phone": "0800 111 222",
+    "phone_link": "0800111222",
+    "email_admin": "admin@wifiber.co.za",
+    "email_accounts": "accounts@wifiber.co.za",
+    "email_support": "support@wifiber.co.za",
+    "address_line1": "180 Mullersteine",
+    "address_line2": "Vanderbijlpark, 1912",
+    "social": {
+        "facebook": "#",
+        "linkedin": "#",
+        "youtube": "#"
+    }
+}

@@ -18,10 +18,13 @@ $user = require_role('admin', '/admin/login.php');
 
 $portal = 'admin';
 $nav = [
-    ['key' => 'dashboard', 'label' => 'Dashboard', 'href' => '/admin/'],
-    ['key' => 'clients',   'label' => 'Clients',   'href' => '/admin/clients.php'],
-    ['key' => 'admins',    'label' => 'Admins',    'href' => '/admin/admins.php'],
-    ['key' => 'password',  'label' => 'My password', 'href' => '/admin/password.php'],
+    ['key' => 'dashboard', 'label' => 'Dashboard',     'href' => '/admin/'],
+    ['key' => 'slides',    'label' => 'Hero slider',   'href' => '/admin/slides.php'],
+    ['key' => 'pricing',   'label' => 'Pricing',       'href' => '/admin/pricing.php'],
+    ['key' => 'settings',  'label' => 'Site settings', 'href' => '/admin/settings.php'],
+    ['key' => 'clients',   'label' => 'Clients',       'href' => '/admin/clients.php'],
+    ['key' => 'admins',    'label' => 'Admins',        'href' => '/admin/admins.php'],
+    ['key' => 'password',  'label' => 'My password',   'href' => '/admin/password.php'],
 ];
 
 require __DIR__ . '/../auth/portal-header.php';
