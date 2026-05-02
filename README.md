@@ -50,6 +50,23 @@ git pull origin main
 
 That's it. PHP runs straight from the working tree &mdash; no build step.
 
-## Local editing
+## Editing the site yourself
 
-Anything in `includes/config.php` (phone number, emails, social links) can be edited without touching templates. Brand colours live at the top of `assets/css/style.css` as CSS custom properties (`--bg`, `--accent`, etc.).
+You don't need to know PHP to update the common stuff. Three files cover most edits:
+
+### 1. Phone, emails, address &mdash; `includes/config.php`
+Open this file and edit the values inside `$site = [ ... ]`.
+
+### 2. Homepage slider &mdash; `includes/slides.php`
+Each slide is one block in the array. Comments at the top of the file
+explain every field. To add a slide, copy a block. To remove one,
+delete its block. To reorder, cut/paste the blocks in the order you
+want.
+
+To swap a slider image:
+1. Save your new image (1920&times;1080 JPG/WEBP works best) into
+   `assets/images/slider/` &mdash; e.g. `slider-1.webp`.
+2. Make sure the `image` field in `slides.php` matches the filename.
+
+### 3. Brand colours &mdash; top of `assets/css/style.css`
+The CSS custom properties at the very top (`--bg`, `--accent`, etc.) drive the whole theme.

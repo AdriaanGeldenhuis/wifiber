@@ -2,25 +2,72 @@
 $page_title = 'WiFIBER';
 $page_desc  = 'Wireless internet for the Vaal Triangle. Fast, secure and seamless connectivity for home and business.';
 $page_slug  = '/';
+$slides     = require __DIR__ . '/includes/slides.php';
 require __DIR__ . '/includes/header.php';
 ?>
 
-<section class="hero">
-  <div class="container hero-grid">
-    <div class="hero-text">
-      <span class="eyebrow">Vaal Triangle WISP</span>
-      <h1>Speed That Connects.<br><span class="accent">Reliability That Lasts.</span></h1>
-      <p class="lead">
-        Whether for your home or business, we deliver fast, secure and seamless internet
-        you can trust &mdash; built on top-tier networking equipment with multiple backup systems.
-      </p>
-      <div class="hero-cta">
-        <a href="/coverage" class="btn btn-primary">View Coverage Map</a>
-        <a href="/pricing" class="btn btn-ghost">See Pricing</a>
+<section class="hero-slider" aria-roledescription="carousel" aria-label="WiFIBER highlights">
+  <div class="slides">
+    <?php foreach ($slides as $i => $s):
+      $img      = '/assets/images/slider/' . htmlspecialchars($s['image']);
+      $position = $s['position'] ?? 'left';
+    ?>
+      <div class="slide<?= $i === 0 ? ' is-active' : '' ?>"
+           data-slide="<?= $i ?>"
+           role="group"
+           aria-roledescription="slide"
+           aria-label="Slide <?= $i + 1 ?> of <?= count($slides) ?>"
+           style="background-image: url('<?= $img ?>');">
+        <div class="slide-overlay"></div>
+        <div class="container">
+          <div class="slide-content slide-<?= htmlspecialchars($position) ?>">
+            <?php if (!empty($s['eyebrow'])): ?>
+              <div class="status-pill">
+                <span class="status-dot"></span>
+                <span class="mono"><?= htmlspecialchars($s['eyebrow']) ?></span>
+              </div>
+            <?php endif; ?>
+            <h1>
+              <span class="hero-line"><?= $s['heading'] ?></span>
+              <?php if (!empty($s['heading_accent'])): ?>
+                <span class="hero-line accent"><?= $s['heading_accent'] ?></span>
+              <?php endif; ?>
+            </h1>
+            <p class="lead"><?= $s['subtext'] ?></p>
+            <div class="hero-cta">
+              <a href="<?= htmlspecialchars($s['cta_link']) ?>" class="btn btn-primary">
+                <?= htmlspecialchars($s['cta_label']) ?>
+                <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+              </a>
+              <a href="/pricing" class="btn btn-ghost">See Pricing</a>
+            </div>
+          </div>
+        </div>
       </div>
-    </div>
-    <div class="hero-art">
-      <img src="<?= asset('images/logo.webp') ?>" alt="WiFIBER" loading="eager" width="480" height="480">
+    <?php endforeach; ?>
+  </div>
+
+  <button class="slider-arrow slider-prev" aria-label="Previous slide">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M15 18l-6-6 6-6"/></svg>
+  </button>
+  <button class="slider-arrow slider-next" aria-label="Next slide">
+    <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M9 6l6 6-6 6"/></svg>
+  </button>
+
+  <div class="slider-dots" role="tablist">
+    <?php foreach ($slides as $i => $s): ?>
+      <button class="slider-dot<?= $i === 0 ? ' is-active' : '' ?>"
+              data-go="<?= $i ?>"
+              role="tab"
+              aria-selected="<?= $i === 0 ? 'true' : 'false' ?>"
+              aria-label="Go to slide <?= $i + 1 ?>"></button>
+    <?php endforeach; ?>
+  </div>
+
+  <div class="hero-ticker" aria-hidden="true">
+    <div class="ticker-track">
+      <span>UNCAPPED</span><span>&#8226;</span><span>UNSHAPED</span><span>&#8226;</span><span>1:1 CONTENTION</span><span>&#8226;</span><span>VAAL TRIANGLE</span><span>&#8226;</span><span>FREE INSTALL ON 24-MONTH</span><span>&#8226;</span><span>24/7 LOCAL SUPPORT</span><span>&#8226;</span>
+      <span>UNCAPPED</span><span>&#8226;</span><span>UNSHAPED</span><span>&#8226;</span><span>1:1 CONTENTION</span><span>&#8226;</span><span>VAAL TRIANGLE</span><span>&#8226;</span><span>FREE INSTALL ON 24-MONTH</span><span>&#8226;</span><span>24/7 LOCAL SUPPORT</span><span>&#8226;</span>
     </div>
   </div>
 </section>
@@ -30,7 +77,7 @@ require __DIR__ . '/includes/header.php';
     <div class="stat-strip">
       <div class="stat"><span class="num">1:1</span><span class="label">Lowest contention</span></div>
       <div class="stat"><span class="num">24/7</span><span class="label">Local support</span></div>
-      <div class="stat"><span class="num">100%</span><span class="label">Uncapped & unshaped</span></div>
+      <div class="stat"><span class="num">100%</span><span class="label">Uncapped &amp; unshaped</span></div>
       <div class="stat"><span class="num">0</span><span class="label">Hidden fees</span></div>
     </div>
   </div>
@@ -41,7 +88,7 @@ require __DIR__ . '/includes/header.php';
     <div class="section-head">
       <span class="eyebrow">Why WiFIBER</span>
       <h2>Built for the Vaal, by people who actually live here.</h2>
-      <p>Five reasons our customers stay connected with us &mdash; and why new ones keep switching.</p>
+      <p>Six reasons our customers stay connected with us &mdash; and why new ones keep switching.</p>
     </div>
     <div class="feature-grid">
       <div class="feature">

@@ -1,4 +1,69 @@
 (() => {
+  // ----- Hero slider -----
+  const slider = document.querySelector('.hero-slider');
+  if (slider) {
+    const slides   = [...slider.querySelectorAll('.slide')];
+    const dots     = [...slider.querySelectorAll('.slider-dot')];
+    const prevBtn  = slider.querySelector('.slider-prev');
+    const nextBtn  = slider.querySelector('.slider-next');
+    const SLIDE_MS = 6000;
+    let current    = 0;
+    let timer      = null;
+    let paused     = false;
+
+    slider.style.setProperty('--slide-duration', SLIDE_MS + 'ms');
+
+    const go = (idx) => {
+      idx = (idx + slides.length) % slides.length;
+      slides[current]?.classList.remove('is-active');
+      dots[current]?.classList.remove('is-active');
+      dots[current]?.setAttribute('aria-selected', 'false');
+      current = idx;
+      slides[current].classList.add('is-active');
+      dots[current]?.classList.add('is-active');
+      dots[current]?.setAttribute('aria-selected', 'true');
+      restart();
+    };
+
+    const next = () => go(current + 1);
+    const prev = () => go(current - 1);
+
+    const restart = () => {
+      clearInterval(timer);
+      if (!paused && slides.length > 1) timer = setInterval(next, SLIDE_MS);
+    };
+
+    nextBtn?.addEventListener('click', next);
+    prevBtn?.addEventListener('click', prev);
+    dots.forEach(d => d.addEventListener('click', () => go(parseInt(d.dataset.go, 10))));
+
+    slider.addEventListener('mouseenter', () => { paused = true;  clearInterval(timer); });
+    slider.addEventListener('mouseleave', () => { paused = false; restart(); });
+
+    // Pause when tab is not visible
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) { clearInterval(timer); }
+      else if (!paused)    { restart(); }
+    });
+
+    // Touch swipe
+    let touchStartX = 0;
+    slider.addEventListener('touchstart', e => { touchStartX = e.changedTouches[0].screenX; }, { passive: true });
+    slider.addEventListener('touchend',   e => {
+      const dx = e.changedTouches[0].screenX - touchStartX;
+      if (Math.abs(dx) > 40) (dx < 0 ? next : prev)();
+    }, { passive: true });
+
+    // Keyboard
+    slider.tabIndex = 0;
+    slider.addEventListener('keydown', e => {
+      if (e.key === 'ArrowRight') next();
+      if (e.key === 'ArrowLeft')  prev();
+    });
+
+    restart();
+  }
+
   // ----- Mobile nav toggle -----
   const toggle = document.querySelector('.nav-toggle');
   const nav    = document.getElementById('main-nav');
