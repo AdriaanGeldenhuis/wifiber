@@ -31,6 +31,7 @@ $page_slug  = $page_slug  ?? '/';
       <?= nav_link('/pricing', 'Pricing', $page_slug) ?>
       <?= nav_link('/coverage', 'Coverage Map', $page_slug) ?>
       <?= nav_link('/legal', 'Legal', $page_slug) ?>
+      <a href="/account/" class="portal-link">My Account</a>
       <a href="tel:<?= $site['phone_link'] ?>" class="btn btn-primary nav-cta"><?= htmlspecialchars($site['phone']) ?></a>
     </nav>
   </div>

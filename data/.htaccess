@@ -1,0 +1,10 @@
+# Block all direct web access to data files. Defense in depth — the
+# parent .htaccess already redirects /data/* but this protects in case
+# that's ever bypassed or the file structure changes.
+<IfModule mod_authz_core.c>
+  Require all denied
+</IfModule>
+<IfModule !mod_authz_core.c>
+  Order deny,allow
+  Deny from all
+</IfModule>

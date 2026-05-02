@@ -15,6 +15,12 @@ RewriteCond %{REQUEST_FILENAME} !-d
 RewriteCond %{DOCUMENT_ROOT}/$1.php -f
 RewriteRule ^([^/.]+)$ /$1.php [L]
 
+# /admin/foo -> /admin/foo.php (and similar for any nested folder)
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteCond %{DOCUMENT_ROOT}/$1/$2.php -f
+RewriteRule ^([^/.]+)/([^/.]+)$ /$1/$2.php [L]
+
 # --- Security ----------------------------------------------------------------
 # Block dotfiles (e.g. .git, .env)
 RedirectMatch 404 /\..*$
@@ -30,8 +36,10 @@ Options -Indexes
   Header set Referrer-Policy "strict-origin-when-cross-origin"
 </IfModule>
 
-# Block access to includes/ from the web
+# Block access to includes/, auth/, and data/ from the web
 RewriteRule ^includes/ - [F,L]
+RewriteRule ^auth/     - [F,L]
+RewriteRule ^data/     - [F,L]
 
 # --- Caching -----------------------------------------------------------------
 <IfModule mod_expires.c>
