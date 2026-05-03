@@ -54,6 +54,30 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Location: ' . $self);
         exit;
     }
+
+    if ($action === 'ping_now') {
+        $id = (int)($_POST['id'] ?? 0);
+        $d  = $id ? device_find($id) : null;
+        if (!$d) {
+            flash('error', 'Device not found.');
+        } elseif (trim((string)$d['mgmt_ip']) === '') {
+            flash('error', 'No management IP set on this device.');
+        } else {
+            $r = icmp_ping($d['mgmt_ip']);
+            device_record_poll_result($id, (bool)$r['ok'], $r['rtt_ms']);
+            audit_log('device.ping', [
+                'target_type' => 'device', 'target_id' => $id,
+                'meta' => ['ok' => (bool)$r['ok'], 'rtt_ms' => $r['rtt_ms']],
+            ]);
+            if ($r['ok']) {
+                flash('success', sprintf('%s is reachable — %s', $d['name'], $r['rtt_ms'] !== null ? number_format($r['rtt_ms'], 2) . ' ms' : 'OK'));
+            } else {
+                flash('error', $d['name'] . ' is unreachable.');
+            }
+        }
+        header('Location: ' . $self);
+        exit;
+    }
 }
 
 $filters = [
@@ -162,7 +186,15 @@ $status_pill = function (string $status): string {
             <td><?= $status_pill($d['status']) ?></td>
             <td><small class="muted"><?= $d['last_seen_at'] ? htmlspecialchars($d['last_seen_at']) : 'never' ?></small></td>
             <td>
-              <details>
+              <?php if ($d['mgmt_ip']): ?>
+                <form method="post" class="inline-form" style="display:inline-block;margin-right:4px;">
+                  <?= csrf_field() ?>
+                  <input type="hidden" name="action" value="ping_now">
+                  <input type="hidden" name="id" value="<?= (int)$d['id'] ?>">
+                  <button type="submit" class="btn btn-ghost btn-sm" title="ICMP ping the management IP and record a health row">Ping</button>
+                </form>
+              <?php endif; ?>
+              <details style="display:inline-block;">
                 <summary class="btn btn-ghost btn-sm">Edit</summary>
                 <form method="post" class="form form-grid" style="margin-top:12px;">
                   <?= csrf_field() ?>

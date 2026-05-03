@@ -26,3 +26,4 @@ data/users.json
 data/throttle.json
 data/password-resets.json
 data/ticket-attachments/
+data/*.lock

@@ -30,6 +30,35 @@ Custom PHP/CSS/JS website for [wifiber.co.za](https://wifiber.co.za) &mdash; a w
     └── images/        # logos, partner logos, coverage map
 ```
 
+## Device polling
+
+The admin Devices page (`/admin/devices.php`) runs a "Ping" button that
+ICMP-pings a single device on demand. Background polling is handled by
+a CLI worker that should run from cron every few minutes:
+
+```cron
+*/5 * * * *  /usr/bin/php /usr/home/wifibfjedj/public_html/bin/poll-devices.php --quiet >> ~/poll-devices.log 2>&1
+```
+
+What it does on each run:
+- Pings every non-retired device with a `mgmt_ip` set, in parallel
+  (default 32 at a time, override with `--max-parallel=N`).
+- Inserts one `device_health` row per result (status, RTT).
+- Flips `devices.status` between `online` and `offline` only when the
+  last two samples agree, so a single dropped packet doesn't churn the
+  status.
+- Bumps `devices.last_seen_at` on each successful ping.
+- Prunes `device_health` rows older than 30 days (override with
+  `--retention=DAYS`).
+
+A `flock()`-based lock (`data/poll-devices.lock`) prevents overlapping
+runs if a single cycle takes longer than the cron interval.
+
+Vendor-specific polling (RouterOS API, AirOS SSH, SNMP) is not in this
+worker. ICMP is enough to drive online/offline status; the per-vendor
+adapters that pull CPU / memory / signal / client counts come in a
+later phase and will write to the same `device_health` table.
+
 ## Deploying to the server
 
 The site lives in `/usr/home/wifibfjedj/public_html` (a.k.a. `~/public_html`) on the production server.
