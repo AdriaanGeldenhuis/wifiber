@@ -39,10 +39,12 @@ function sector_normalise(array $r): array {
  */
 function sectors_all(?array $filters = null): array {
     $sql = "SELECT s.*,
-                   t.name AS tower_name,
-                   d.name AS ap_device_name,
+                   t.name   AS tower_name,
+                   d.name   AS ap_device_name,
                    d.vendor AS ap_device_vendor,
                    d.model  AS ap_device_model,
+                   d.status AS ap_device_status,
+                   d.last_seen_at AS ap_last_seen_at,
                    (SELECT COUNT(*) FROM users u
                      WHERE u.sector_id = s.id AND u.role = 'client') AS customer_count
               FROM sectors s

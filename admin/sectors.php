@@ -148,8 +148,16 @@ $device_label = function (?int $id) use ($all_devices): string {
             <td><strong><?= htmlspecialchars($s['name']) ?></strong></td>
             <td><?= htmlspecialchars($s['tower_name'] ?? $tower_label((int)$s['tower_id'])) ?></td>
             <td>
-              <?php if ($s['ap_device_id']): ?>
-                <?= htmlspecialchars($s['ap_device_name'] ?? ('#' . $s['ap_device_id'])) ?>
+              <?php if ($s['ap_device_id']):
+                $apc = ['online'=>'#0c8','offline'=>'#d44','unknown'=>'#888','retired'=>'#555'];
+                $apb = $apc[$s['ap_device_status'] ?? 'unknown'] ?? '#888';
+              ?>
+                <a href="/admin/device-view.php?id=<?= (int)$s['ap_device_id'] ?>" style="color:inherit;">
+                  <?= htmlspecialchars($s['ap_device_name'] ?? ('#' . $s['ap_device_id'])) ?>
+                </a>
+                <span style="display:inline-block;background:<?= $apb ?>;color:#fff;padding:1px 5px;border-radius:6px;font-size:10px;margin-left:4px;">
+                  <?= htmlspecialchars($s['ap_device_status'] ?? 'unknown') ?>
+                </span>
                 <?php if (!empty($s['ap_device_vendor']) || !empty($s['ap_device_model'])): ?>
                   <br><small class="muted"><?= htmlspecialchars(trim(($s['ap_device_vendor'] ?? '') . ' ' . ($s['ap_device_model'] ?? ''))) ?></small>
                 <?php endif; ?>
