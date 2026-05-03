@@ -52,5 +52,8 @@
 </footer>
 <script src="<?= asset('js/main.js') ?>" defer></script>
 <script src="<?= asset('js/portal.js') ?>" defer></script>
+<?php if (($site['analytics']['provider'] ?? 'none') !== 'none'): ?>
+  <script src="<?= asset('js/analytics.php') ?>" defer></script>
+<?php endif; ?>
 </body>
 </html>

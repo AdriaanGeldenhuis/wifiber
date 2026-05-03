@@ -1,0 +1,10 @@
+User-agent: *
+Allow: /
+Disallow: /admin/
+Disallow: /account/
+Disallow: /auth/
+Disallow: /bin/
+Disallow: /data/
+Disallow: /includes/
+
+Sitemap: https://wifiber.co.za/sitemap.xml
