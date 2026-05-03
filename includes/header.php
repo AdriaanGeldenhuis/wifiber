@@ -1,8 +1,10 @@
 <?php
 require_once __DIR__ . '/config.php';
-$page_title = $page_title ?? $site['name'];
-$page_desc  = $page_desc  ?? $site['tagline'];
-$page_slug  = $page_slug  ?? '/';
+require_once __DIR__ . '/../auth/incidents.php';
+$page_title    = $page_title ?? $site['name'];
+$page_desc     = $page_desc  ?? $site['tagline'];
+$page_slug     = $page_slug  ?? '/';
+$active_alert  = incidents_active_top();
 ?><!DOCTYPE html>
 <html lang="en">
 <head>
@@ -17,6 +19,14 @@ $page_slug  = $page_slug  ?? '/';
 <link rel="stylesheet" href="<?= asset('css/style.css') ?>">
 </head>
 <body class="page-<?= htmlspecialchars(trim($page_slug, '/')) ?: 'home' ?>">
+<?php if ($active_alert): ?>
+  <a href="/status" class="incident-banner <?= htmlspecialchars(incident_severity_class((string)$active_alert['severity'])) ?>">
+    <span class="incident-banner-dot"></span>
+    <strong><?= htmlspecialchars(INCIDENT_STATUS_LABELS[$active_alert['status']] ?? $active_alert['status']) ?>:</strong>
+    <span class="incident-banner-title"><?= htmlspecialchars($active_alert['title']) ?></span>
+    <span class="incident-banner-link">View status &rarr;</span>
+  </a>
+<?php endif; ?>
 <header class="site-header">
   <div class="container header-inner">
     <a href="/" class="logo" aria-label="<?= htmlspecialchars($site['name']) ?> home">

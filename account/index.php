@@ -2,12 +2,31 @@
 $page_title = 'My account';
 $active_key = 'dashboard';
 require __DIR__ . '/_layout.php';
+require_once __DIR__ . '/../auth/incidents.php';
+
+$active_incidents = incidents_active_all();
 ?>
 
 <div class="portal-head">
   <h1>Welcome, <?= htmlspecialchars($user['name']) ?>.</h1>
   <p class="portal-sub">This is your WiFIBER account portal.</p>
 </div>
+
+<?php if (!empty($active_incidents)): ?>
+  <div class="alert alert-error" style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;">
+    <div>
+      <strong>Service issue:</strong>
+      <?= htmlspecialchars($active_incidents[0]['title']) ?>
+      <span class="muted small">
+        — <?= htmlspecialchars(INCIDENT_STATUS_LABELS[$active_incidents[0]['status']] ?? $active_incidents[0]['status']) ?>
+        <?php if (!empty($active_incidents[0]['affected'])): ?>
+          &middot; <?= htmlspecialchars($active_incidents[0]['affected']) ?>
+        <?php endif; ?>
+      </span>
+    </div>
+    <a href="/status" class="btn btn-ghost btn-sm">View status &rarr;</a>
+  </div>
+<?php endif; ?>
 
 <div class="card-grid">
   <div class="portal-card">

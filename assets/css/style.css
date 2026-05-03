@@ -748,3 +748,109 @@ p { margin: 0 0 1em; color: var(--text-dim); }
 /* ---------- Utility ---------- */
 .text-center { text-align: center; }
 .mt-0 { margin-top: 0 !important; }
+
+/* ---------- Incident banner (site-wide) ---------- */
+.incident-banner {
+  display: flex; align-items: center; gap: 12px;
+  padding: 10px 20px;
+  background: rgba(255, 84, 112, .14);
+  color: var(--text);
+  border-bottom: 1px solid rgba(255, 84, 112, .35);
+  font-size: .9rem;
+  text-decoration: none;
+}
+.incident-banner:hover { background: rgba(255, 84, 112, .22); }
+.incident-banner.sev-info     { background: rgba(5,218,253,.10); border-bottom-color: rgba(5,218,253,.35); }
+.incident-banner.sev-info:hover     { background: rgba(5,218,253,.18); }
+.incident-banner.sev-minor    { background: rgba(255,184,77,.10); border-bottom-color: rgba(255,184,77,.35); color: var(--text); }
+.incident-banner.sev-minor:hover    { background: rgba(255,184,77,.18); }
+.incident-banner.sev-major    { background: rgba(255,140,77,.14); border-bottom-color: rgba(255,140,77,.4); }
+.incident-banner.sev-major:hover    { background: rgba(255,140,77,.22); }
+.incident-banner.sev-critical { background: rgba(255,84,112,.18); border-bottom-color: rgba(255,84,112,.5); }
+.incident-banner.sev-critical:hover { background: rgba(255,84,112,.28); }
+
+.incident-banner-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: currentColor;
+  box-shadow: 0 0 0 0 currentColor;
+  animation: incident-pulse 1.6s ease-out infinite;
+  flex-shrink: 0;
+}
+.incident-banner.sev-info .incident-banner-dot     { color: #5cd8ff; }
+.incident-banner.sev-minor .incident-banner-dot    { color: #ffb84d; }
+.incident-banner.sev-major .incident-banner-dot    { color: #ff8c4d; }
+.incident-banner.sev-critical .incident-banner-dot { color: #ff5470; }
+@keyframes incident-pulse {
+  0%   { box-shadow: 0 0 0 0 currentColor; opacity: 1; }
+  70%  { box-shadow: 0 0 0 8px transparent; opacity: .8; }
+  100% { box-shadow: 0 0 0 0 transparent; opacity: 1; }
+}
+.incident-banner-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.incident-banner-link  { color: var(--accent); font-weight: 500; flex-shrink: 0; }
+
+/* ---------- /status page ---------- */
+.status-page { padding: 80px 0 80px; max-width: 860px; }
+.status-hero { text-align: center; margin-bottom: 40px; }
+.status-hero h1 { margin-bottom: 14px; }
+.status-summary {
+  display: inline-flex; align-items: center; gap: 10px;
+  padding: 10px 18px; border-radius: 999px;
+  font-weight: 500;
+}
+.status-summary-ok  { background: rgba(74,222,128,.12); color: var(--success); border: 1px solid rgba(74,222,128,.3); }
+.status-summary-bad { background: rgba(255,84,112,.12); color: var(--danger);  border: 1px solid rgba(255,84,112,.3); }
+.status-summary .status-dot {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: currentColor; box-shadow: 0 0 0 currentColor;
+  animation: incident-pulse 1.6s ease-out infinite;
+}
+.status-page h2 { margin: 36px 0 16px; }
+
+.incident-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--border);
+  border-radius: 8px;
+  padding: 22px 24px;
+  margin-bottom: 18px;
+}
+.incident-card.sev-info     { border-left-color: #5cd8ff; }
+.incident-card.sev-minor    { border-left-color: #ffb84d; }
+.incident-card.sev-major    { border-left-color: #ff8c4d; }
+.incident-card.sev-critical { border-left-color: #ff5470; }
+.incident-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 6px; }
+.incident-head h3 { margin: 0; font-size: 1.15rem; flex: 1; min-width: 0; }
+.incident-meta { color: var(--text-dim); font-size: .88rem; margin-bottom: 14px; }
+.incident-timeline { display: flex; flex-direction: column; gap: 14px; padding-left: 14px; border-left: 2px solid var(--border); }
+.incident-update { padding-bottom: 4px; }
+.incident-update-meta { display: flex; gap: 10px; align-items: baseline; margin-bottom: 4px; }
+.incident-update-body { color: var(--text); margin: 0; line-height: 1.55; }
+
+.incident-history { list-style: none; padding: 0; margin: 0; }
+.incident-history li {
+  display: flex; align-items: center; gap: 12px; flex-wrap: wrap;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.incident-history li:last-child { border-bottom: none; }
+.incident-history-date  { color: var(--text-dim); font-family: ui-monospace, monospace; font-size: .85rem; min-width: 90px; }
+.incident-history-title { color: var(--text); }
+
+/* status-pill / sev-* used on /status — mirror portal styles for the public page */
+.status-pill {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: .72rem;
+  font-weight: 600;
+  letter-spacing: .04em;
+  border: 1px solid var(--border);
+}
+.status-pill.status-investigating { color: #ff8c4d; border-color: rgba(255,140,77,.4);  background: rgba(255,140,77,.08); }
+.status-pill.status-identified    { color: #ffb84d; border-color: rgba(255,184,77,.4);  background: rgba(255,184,77,.08); }
+.status-pill.status-monitoring    { color: var(--accent); border-color: rgba(5,218,253,.4); background: rgba(5,218,253,.08); }
+.status-pill.status-resolved      { color: var(--success); border-color: rgba(74,222,128,.4); background: rgba(74,222,128,.08); }
+.status-pill.sev-info     { color: #5cd8ff; border-color: rgba(92,216,255,.4);  background: rgba(92,216,255,.08); }
+.status-pill.sev-minor    { color: #ffb84d; border-color: rgba(255,184,77,.4);  background: rgba(255,184,77,.08); }
+.status-pill.sev-major    { color: #ff8c4d; border-color: rgba(255,140,77,.4);  background: rgba(255,140,77,.08); }
+.status-pill.sev-critical { color: var(--danger); border-color: rgba(255,84,112,.4); background: rgba(255,84,112,.08); }

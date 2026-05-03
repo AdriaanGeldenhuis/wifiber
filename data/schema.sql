@@ -124,3 +124,36 @@ CREATE TABLE IF NOT EXISTS invoice_items (
   CONSTRAINT fk_invoice_items_inv
     FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS incidents (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  title        VARCHAR(200) NOT NULL,
+  body         TEXT         NOT NULL,
+  affected     VARCHAR(255) NOT NULL DEFAULT '',
+  severity     ENUM('info','minor','major','critical') NOT NULL DEFAULT 'minor',
+  status       ENUM('investigating','identified','monitoring','resolved') NOT NULL DEFAULT 'investigating',
+  started_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resolved_at  DATETIME     DEFAULT NULL,
+  created_by   INT UNSIGNED DEFAULT NULL,
+  created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_status_started (status, started_at),
+  CONSTRAINT fk_incident_creator
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS incident_updates (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  incident_id  INT UNSIGNED NOT NULL,
+  status       ENUM('investigating','identified','monitoring','resolved') NOT NULL,
+  body         TEXT         NOT NULL,
+  created_by   INT UNSIGNED DEFAULT NULL,
+  created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_incident_created (incident_id, created_at),
+  CONSTRAINT fk_incident_update_inc
+    FOREIGN KEY (incident_id) REFERENCES incidents(id) ON DELETE CASCADE,
+  CONSTRAINT fk_incident_update_creator
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

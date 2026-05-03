@@ -19,6 +19,7 @@ $user = require_role('admin', '/admin/login.php');
 $portal = 'admin';
 $nav = [
     ['key' => 'dashboard', 'label' => 'Dashboard',      'href' => '/admin/'],
+    ['key' => 'incidents', 'label' => 'Service status', 'href' => '/admin/incidents.php'],
     ['key' => 'tickets',   'label' => 'Support tickets', 'href' => '/admin/tickets.php'],
     ['key' => 'invoices',  'label' => 'Invoices',       'href' => '/admin/invoices.php'],
     ['key' => 'slides',    'label' => 'Hero slider',    'href' => '/admin/slides.php'],
