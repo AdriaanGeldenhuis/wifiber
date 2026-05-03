@@ -131,6 +131,7 @@ const USER_COLUMNS = [
     'role','customer_type','status','service_start','billing_day','payment_method',
     'phone','address','lat','lng','alt_contact_name','alt_contact_phone',
     'package','product_id','site_id','equipment_mac','equipment_ip','equipment_serial','equipment_model',
+    'uisp_client_id',
     'notes',
     'password_hash','totp_secret','totp_enabled','totp_recovery_codes',
     'totp_enabled_at','last_login',
