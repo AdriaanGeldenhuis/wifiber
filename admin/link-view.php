@@ -20,6 +20,28 @@ require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/wireless.php';
 require_once __DIR__ . '/../auth/devices.php';
 require_once __DIR__ . '/../auth/sectors.php';
+require_once __DIR__ . '/../auth/diagnostics.php';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'speedtest') {
+    require_csrf();
+    $link_id = (int)($_POST['link_id'] ?? 0);
+    $target  = trim((string)($_POST['target_ip'] ?? ''));
+    if ($link_id > 0 && $target !== '') {
+        $job = diagnostic_job_enqueue('iperf3', 'link', $link_id, (int)$user['id'], [
+            'target_ip'  => $target,
+            'duration_s' => 10,
+        ]);
+        audit_log('diagnostic.queued', [
+            'target_type' => 'wireless_link', 'target_id' => $link_id,
+            'meta' => ['job_id' => $job, 'kind' => 'iperf3'],
+        ]);
+        flash('success', "Speed-test queued (job #$job). Refresh in ~30s.");
+    } else {
+        flash('error', 'target_ip required.');
+    }
+    header('Location: /admin/link-view.php?id=' . $link_id);
+    exit;
+}
 
 $id = (int)($_GET['id'] ?? 0);
 $link = $id ? wireless_link_find($id) : null;
@@ -466,6 +488,36 @@ $cinr_gauge = function (?int $snr) {
       <small class="muted">No cable diagnostics yet.</small>
     <?php endif; ?>
   </div>
+</div>
+
+<?php
+$speedtests = link_speedtests_recent($id, 12);
+?>
+<div class="portal-card">
+  <h3 class="lv-label">Speed tests</h3>
+  <?php if ($speedtests): ?>
+    <div class="lv-row"><span><b>Latest</b></span>
+      <span><?= number_format((float)($speedtests[0]['mbps_down'] ?? 0), 1) ?> Mbps · <?= htmlspecialchars($speedtests[0]['polled_at']) ?></span>
+    </div>
+    <small class="muted">Last <?= count($speedtests) ?>:
+      <?php foreach ($speedtests as $st): ?>
+        <code><?= number_format((float)($st['mbps_down'] ?? 0), 0) ?></code>
+      <?php endforeach; ?>
+      Mbps
+    </small>
+  <?php else: ?>
+    <small class="muted">No speed tests on file. Run one below.</small>
+  <?php endif; ?>
+  <form method="post" style="margin-top:10px;display:flex;gap:8px;align-items:end;">
+    <?= csrf_field() ?>
+    <input type="hidden" name="action" value="speedtest">
+    <input type="hidden" name="link_id" value="<?= (int)$link['id'] ?>">
+    <div class="field" style="margin:0;"><label>iperf3 target IP</label>
+      <input type="text" name="target_ip" placeholder="e.g. PoP iperf server"
+             style="width:200px;" required></div>
+    <button class="btn btn-primary btn-sm" type="submit">Run 10s test</button>
+    <small class="muted">Requires iperf3 on the CPE + reachable target host.</small>
+  </form>
 </div>
 
 <div style="margin-top:18px;display:flex;gap:8px;align-items:center;justify-content:space-between;">
