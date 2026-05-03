@@ -157,79 +157,104 @@ $map_data = [
       crossorigin="anonymous">
 
 <style>
-  .map-page { display:grid; grid-template-columns: 1fr 320px; gap:14px; align-items:stretch; }
-  #map { height: 78vh; border-radius: 8px; }
-  .map-side { display:flex; flex-direction:column; gap:14px; }
-  .map-side .portal-card { padding:14px; }
-  .map-toolbar { display:flex; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
-  .map-toolbar .btn { font-size:12px; }
-  .map-legend { display:flex; flex-wrap:wrap; gap:10px; font-size:12px; color:var(--muted, #aaa); }
-  .map-legend i { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; vertical-align:middle; border:1.5px solid #fff; }
-  form.map-popup { display:flex; flex-direction:column; gap:6px; min-width:220px; }
+  /* The map page goes edge-to-edge inside portal-main. portal.css gives
+     portal-main 40px of padding and caps portal-inner at 960px wide;
+     blow both out so the map can use the whole viewport next to the
+     fixed sidebar. */
+  body:has(.map-fs) .portal-main  { padding: 0 !important; overflow: hidden; }
+  body:has(.map-fs) .portal-inner { max-width: none !important; width: 100%; }
+
+  .map-fs {
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+  }
+
+  .map-bar {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+    padding: 8px 14px;
+    background: rgba(255,255,255,0.04);
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    flex-shrink: 0;
+    font-size: 12px;
+    color: var(--muted, #aaa);
+  }
+  .map-bar .group { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+  .map-bar .sep   { width:1px; height:22px; background:rgba(255,255,255,.1); }
+  .map-bar h1     { font-size:14px; margin:0; color:var(--text,#fff); }
+  .map-bar .btn   { font-size:12px; }
+  .map-bar .inline-check { display:inline-flex; align-items:center; gap:4px; margin:0; }
+  .map-counts    { display:flex; gap:10px; }
+  .map-counts strong { color:var(--text,#fff); margin-left:3px; }
+  .map-legend    { display:flex; flex-wrap:wrap; gap:8px; }
+  .map-legend i  { display:inline-block; width:9px; height:9px; border-radius:50%;
+                   margin-right:3px; vertical-align:middle; border:1.5px solid #fff; }
+  .map-legend .pipe { border-left:1px solid #555; padding-left:8px; }
+
+  #map { flex:1; min-height:300px; }
+
+  /* Popup forms */
+  form.map-popup       { display:flex; flex-direction:column; gap:6px; min-width:220px; }
   form.map-popup label { display:flex; flex-direction:column; gap:2px; font-size:12px; color:var(--muted, #aaa); }
   .map-popup input, .map-popup select { width:100%; padding:4px 6px; box-sizing:border-box; }
   .map-popup .row { display:flex; gap:6px; }
   .map-popup .row > * { flex:1; }
   .map-mode-active { box-shadow:0 0 0 2px var(--accent, #0cf) inset; }
-  @media (max-width: 900px) { .map-page { grid-template-columns: 1fr; } #map { height: 60vh; } }
 </style>
 
-<div class="portal-head">
-  <h1>Network map</h1>
-  <p class="portal-sub">
-    Towers, PTP/PTMP links and clients on one map.
-    Drag a marker to fix its position — saves automatically.
-    Tile data: OpenStreetMap / Esri World Imagery.
-  </p>
-</div>
+<div class="map-fs">
+  <div class="map-bar">
+    <h1>Network map</h1>
 
-<div class="map-toolbar">
-  <button id="mode-pan"        class="btn btn-ghost btn-sm map-mode-active" data-mode="pan">Pan / select</button>
-  <button id="mode-add-site"   class="btn btn-ghost btn-sm" data-mode="add_site">+ Add site (click on map)</button>
-  <button id="mode-add-link"   class="btn btn-ghost btn-sm" data-mode="add_link">+ Add link (click two sites)</button>
-  <span class="map-legend" style="margin-left:auto;">
-    <span><i style="background:#08e;"></i>tower</span>
-    <span><i style="background:#0c8;"></i>AP</span>
-    <span><i style="background:#f80;"></i>PTP</span>
-    <span><i style="background:#80f;"></i>PoP</span>
-    <span style="border-left:1px solid #555;padding-left:10px;"><i style="background:#0c8;"></i>active</span>
-    <span><i style="background:#08e;"></i>lead</span>
-    <span><i style="background:#fa0;"></i>suspended</span>
-    <span><i style="background:#888;"></i>disconnected</span>
-  </span>
-</div>
+    <div class="sep"></div>
 
-<div class="map-page">
+    <div class="group">
+      <button id="mode-pan"      class="btn btn-ghost btn-sm map-mode-active" data-mode="pan">Pan</button>
+      <button id="mode-add-site" class="btn btn-ghost btn-sm" data-mode="add_site">+ Site</button>
+      <button id="mode-add-link" class="btn btn-ghost btn-sm" data-mode="add_link">+ Link</button>
+    </div>
+
+    <div class="sep"></div>
+
+    <div class="group">
+      <label class="inline-check"><input type="checkbox" id="toggle-sites"    checked> Sites</label>
+      <label class="inline-check"><input type="checkbox" id="toggle-links"    checked> Links</label>
+      <label class="inline-check"><input type="checkbox" id="toggle-clients"  checked> Clients</label>
+      <label class="inline-check"><input type="checkbox" id="toggle-coverage">       Rings</label>
+    </div>
+
+    <div class="sep"></div>
+
+    <div class="map-counts">
+      <span>Sites <strong id="count-sites"><?= count($sites) ?></strong></span>
+      <span>Links <strong id="count-links"><?= count($links) ?></strong></span>
+      <span>Clients <strong id="count-clients"><?= count($clients) ?></strong></span>
+      <span>Unplaced <strong id="count-unplaced"><?= count(array_filter($clients, fn($c) => $c['lat'] === null || $c['lng'] === null)) ?></strong></span>
+    </div>
+
+    <div class="sep"></div>
+
+    <div class="group">
+      <button id="geocode-all-btn" type="button" class="btn btn-ghost btn-sm">Geocode unplaced</button>
+      <span id="geocode-status"></span>
+    </div>
+
+    <div class="map-legend" style="margin-left:auto;">
+      <span><i style="background:#08e;"></i>tower</span>
+      <span><i style="background:#0c8;"></i>AP</span>
+      <span><i style="background:#f80;"></i>PTP</span>
+      <span><i style="background:#80f;"></i>PoP</span>
+      <span class="pipe"><i style="background:#0c8;"></i>active</span>
+      <span><i style="background:#08e;"></i>lead</span>
+      <span><i style="background:#fa0;"></i>suspended</span>
+      <span><i style="background:#888;"></i>disconnected</span>
+    </div>
+  </div>
+
   <div id="map"></div>
-
-  <aside class="map-side">
-    <div class="portal-card">
-      <h3 style="margin-top:0;">Layers</h3>
-      <label class="inline-check"><input type="checkbox" id="toggle-sites"   checked> Sites</label><br>
-      <label class="inline-check"><input type="checkbox" id="toggle-links"   checked> Links</label><br>
-      <label class="inline-check"><input type="checkbox" id="toggle-clients" checked> Clients</label><br>
-      <label class="inline-check"><input type="checkbox" id="toggle-coverage"> Coverage rings</label>
-    </div>
-
-    <div class="portal-card">
-      <h3 style="margin-top:0;">Geocode unplaced clients</h3>
-      <p class="muted small">Calls OpenStreetMap Nominatim for each client that has an address but no GPS. Slow (≤ 1/sec).</p>
-      <button id="geocode-all-btn" type="button" class="btn btn-ghost btn-sm">Geocode all unplaced</button>
-      <div id="geocode-status" class="muted small" style="margin-top:8px;"></div>
-    </div>
-
-    <div class="portal-card">
-      <h3 style="margin-top:0;">Counts</h3>
-      <ul class="kv">
-        <li><span>Sites</span>   <strong id="count-sites"><?= count($sites) ?></strong></li>
-        <li><span>Links</span>   <strong id="count-links"><?= count($links) ?></strong></li>
-        <li><span>Clients</span> <strong id="count-clients"><?= count($clients) ?></strong></li>
-        <li><span>Unplaced clients</span>
-          <strong id="count-unplaced"><?= count(array_filter($clients, fn($c) => $c['lat'] === null || $c['lng'] === null)) ?></strong>
-        </li>
-      </ul>
-    </div>
-  </aside>
 </div>
 
 <script type="application/json" id="map-data"><?= json_encode($map_data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?></script>
