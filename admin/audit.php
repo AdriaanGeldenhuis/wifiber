@@ -2,14 +2,32 @@
 $page_title = 'Audit log';
 $active_key = 'audit';
 require __DIR__ . '/_layout.php';
+require_once __DIR__ . '/../auth/csv.php';
 
 $action_filter = trim((string)($_GET['action'] ?? ''));
 $user_filter   = (int)($_GET['user_id'] ?? 0);
 $limit         = (int)($_GET['limit'] ?? 200);
 if ($limit < 25)   $limit = 25;
-if ($limit > 1000) $limit = 1000;
+if ($limit > 5000) $limit = 5000;
 
-$rows = audit_recent($limit, $action_filter ?: null, $user_filter ?: null);
+// Date range. Defaults to last 30 days; both bounds are optional.
+$from_filter = trim((string)($_GET['from'] ?? ''));
+$to_filter   = trim((string)($_GET['to']   ?? ''));
+$valid_date  = fn($s) => $s !== '' && preg_match('/^\d{4}-\d{2}-\d{2}$/', $s);
+$from_iso = $valid_date($from_filter) ? $from_filter : null;
+$to_iso   = $valid_date($to_filter)   ? $to_filter   : null;
+
+// CSV export — same filter set, capped at 50 000 rows.
+if (($_GET['export'] ?? '') === 'csv') {
+    $export_rows = audit_recent(50000, $action_filter ?: null, $user_filter ?: null, $from_iso, $to_iso);
+    audit_log('audit.export', ['target_type' => 'audit_log', 'meta' => ['rows' => count($export_rows)]]);
+    csv_download('audit-log', $export_rows, [
+        'created_at', 'username', 'user_id', 'action',
+        'target_type', 'target_id', 'meta', 'ip_address',
+    ]);
+}
+
+$rows = audit_recent($limit, $action_filter ?: null, $user_filter ?: null, $from_iso, $to_iso);
 
 // Build a list of distinct actions seen recently for the filter dropdown.
 $actions_seen = pdo()->query(
@@ -51,9 +69,17 @@ $users_seen = pdo()->query(
       </select>
     </div>
     <div class="field">
+      <label>From</label>
+      <input type="date" name="from" value="<?= htmlspecialchars($from_filter, ENT_QUOTES) ?>">
+    </div>
+    <div class="field">
+      <label>To</label>
+      <input type="date" name="to" value="<?= htmlspecialchars($to_filter, ENT_QUOTES) ?>">
+    </div>
+    <div class="field">
       <label>Limit</label>
       <select name="limit">
-        <?php foreach ([100, 200, 500, 1000] as $n): ?>
+        <?php foreach ([100, 200, 500, 1000, 5000] as $n): ?>
           <option value="<?= $n ?>" <?= $limit === $n ? 'selected' : '' ?>><?= $n ?></option>
         <?php endforeach; ?>
       </select>
@@ -61,6 +87,17 @@ $users_seen = pdo()->query(
     <div class="form-actions">
       <button type="submit" class="btn btn-primary btn-sm">Filter</button>
       <a href="/admin/audit.php" class="btn btn-ghost btn-sm">Clear</a>
+      <?php
+        // Build the export URL with the same filters
+        $export_qs = http_build_query(array_filter([
+          'action'  => $action_filter,
+          'user_id' => $user_filter ?: null,
+          'from'    => $from_filter,
+          'to'      => $to_filter,
+          'export'  => 'csv',
+        ]));
+      ?>
+      <a href="/admin/audit.php?<?= htmlspecialchars($export_qs) ?>" class="btn btn-ghost btn-sm">Export CSV</a>
     </div>
   </form>
 </div>
@@ -82,8 +119,14 @@ $users_seen = pdo()->query(
 <div class="portal-card">
   <h2><?= count($rows) ?> entries <?= $action_filter ? '(filter: ' . htmlspecialchars($action_filter) . ')' : '' ?></h2>
   <?php if (empty($rows)): ?>
-    <p class="muted">Nothing yet.</p>
+    <div class="empty-state">
+      <div class="empty-icon">∅</div>
+      <h3>Nothing matches</h3>
+      <p>No audit entries for that filter combination. Try widening the date range or clearing the filters.</p>
+      <a class="btn btn-ghost" href="/admin/audit.php">Clear filters</a>
+    </div>
   <?php else: ?>
+    <div class="table-scroll">
     <table class="data-table">
       <thead>
         <tr><th>When</th><th>Who</th><th>Action</th><th>Target</th><th>Details</th><th>IP</th></tr>
@@ -121,6 +164,7 @@ $users_seen = pdo()->query(
         <?php endforeach; ?>
       </tbody>
     </table>
+    </div>
   <?php endif; ?>
 </div>
 

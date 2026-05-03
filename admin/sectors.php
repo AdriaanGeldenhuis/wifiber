@@ -131,14 +131,20 @@ $device_label = function (?int $id) use ($all_devices): string {
 <div class="portal-card">
   <h2>Sectors <span class="muted">(<?= count($sectors) ?>)</span></h2>
   <?php if (!$sectors): ?>
-    <p class="muted">No sectors match. Add one below to get started.</p>
+    <div class="empty-state">
+      <div class="empty-icon">⌖</div>
+      <h3>No sectors yet</h3>
+      <p>Each tower can host multiple sector APs pointed in different directions. Define one with the form below, or draw it visually on the network map.</p>
+      <a class="btn btn-primary" href="/admin/map.php">Open the map</a>
+    </div>
   <?php else: ?>
+    <div class="table-scroll">
     <table class="data-table">
       <thead>
         <tr>
           <th>Name</th><th>Tower</th><th>AP device</th>
           <th>Azimuth / beam</th><th>Band</th><th>Frequency</th><th>TX</th>
-          <th style="text-align:right;">Clients</th>
+          <th>Capacity</th>
           <th></th>
         </tr>
       </thead>
@@ -178,17 +184,27 @@ $device_label = function (?int $id) use ($all_devices): string {
               <?php endif; ?>
             </td>
             <td><?= $s['tx_power_dbm'] !== null ? (int)$s['tx_power_dbm'] . ' dBm' : '—' ?></td>
-            <td style="text-align:right;">
+            <td style="min-width:120px;">
               <?php
                 $cc  = (int)($s['customer_count'] ?? 0);
                 $max = $s['max_clients'];
+                $pct = ($max && $max > 0) ? min(100, round(($cc / $max) * 100)) : null;
+                $cap_class = '';
+                if ($pct !== null) {
+                  if      ($pct >= 100) $cap_class = ' cap-full';
+                  elseif  ($pct >= 80)  $cap_class = ' cap-warn';
+                }
               ?>
-              <strong<?= $cc === 0 ? ' class="muted"' : '' ?>><?= $cc ?></strong>
-              <?php if ($max !== null): ?>
-                <small class="muted"> / <?= (int)$max ?></small>
-              <?php endif; ?>
-              <?php if ($max !== null && $cc >= $max && $max > 0): ?>
-                <br><small style="color:#d44;">at capacity</small>
+              <div style="display:flex;justify-content:space-between;align-items:baseline;font-size:.85rem;">
+                <strong<?= $cc === 0 ? ' class="muted"' : '' ?>><?= $cc ?><?= $max !== null ? ' / ' . (int)$max : '' ?></strong>
+                <?php if ($pct !== null): ?>
+                  <small class="muted"><?= $pct ?>%</small>
+                <?php endif; ?>
+              </div>
+              <?php if ($pct !== null): ?>
+                <div class="cap-bar" title="<?= $cc ?> of <?= (int)$max ?> max clients">
+                  <span class="cap-bar-fill<?= $cap_class ?>" style="width: <?= $pct ?>%;"></span>
+                </div>
               <?php endif; ?>
             </td>
             <td>
@@ -265,6 +281,7 @@ $device_label = function (?int $id) use ($all_devices): string {
         <?php endforeach; ?>
       </tbody>
     </table>
+    </div>
   <?php endif; ?>
 </div>
 

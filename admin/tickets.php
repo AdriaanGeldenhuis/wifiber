@@ -11,6 +11,45 @@ if ($status_filter !== '' && !in_array($status_filter, TICKET_STATUSES, true)) {
     $status_filter = '';
 }
 
+// CSV export — same status filter as the list view.
+if (!$ticket && ($_GET['export'] ?? '') === 'csv') {
+    require_once __DIR__ . '/../auth/csv.php';
+    $rows = tickets_all($status_filter ?: null);
+    $shaped = array_map(fn($t) => [
+        'id'            => $t['id'],
+        'subject'       => $t['subject'],
+        'client_name'   => $t['client_name']  ?? '',
+        'client_email'  => $t['client_email'] ?? '',
+        'username'      => $t['username']     ?? '',
+        'status'        => $t['status'],
+        'message_count' => $t['message_count'] ?? 0,
+        'created_at'    => $t['created_at'],
+        'updated_at'    => $t['updated_at'],
+        'closed_at'     => $t['closed_at']    ?? '',
+    ], $rows);
+    audit_log('ticket.export', ['target_type' => 'ticket', 'meta' => ['rows' => count($shaped), 'filter' => $status_filter]]);
+    csv_download('tickets' . ($status_filter ? '-' . $status_filter : ''), $shaped);
+}
+
+// Lightweight poll endpoint — JS calls this every ~12s while a thread
+// is open, so a new client reply pulls the page in without manual
+// refresh. Returns the highest message id and the ticket status.
+if ($ticket && !empty($_GET['poll'])) {
+    while (ob_get_level() > 0) ob_end_clean();
+    header('Content-Type: application/json');
+    $msgs = ticket_messages((int)$ticket['id']);
+    $top  = 0;
+    foreach ($msgs as $m) if ((int)$m['id'] > $top) $top = (int)$m['id'];
+    echo json_encode([
+        'ok'         => true,
+        'latest_id'  => $top,
+        'count'      => count($msgs),
+        'status'     => $ticket['status'],
+        'updated_at' => $ticket['updated_at'],
+    ]);
+    exit;
+}
+
 $errors = [];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -143,8 +182,11 @@ $tickets = tickets_all($status_filter ?: null);
 <?php else: /* ----- list view ----- */ ?>
 
   <div class="portal-card">
-    <h2>All tickets</h2>
-    <p class="inline-form" style="margin-bottom:14px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;">
+      <h2 style="margin:0;">All tickets</h2>
+      <a href="/admin/tickets.php?<?= htmlspecialchars(http_build_query(array_filter(['status' => $status_filter, 'export' => 'csv']))) ?>" class="btn btn-ghost btn-sm">Export CSV</a>
+    </div>
+    <p class="inline-form" style="margin: 14px 0;">
       <span class="muted small">Filter:</span>
       <a href="/admin/tickets.php" class="btn btn-ghost btn-sm" <?= $status_filter === '' ? 'aria-current="page"' : '' ?>>All</a>
       <?php foreach (TICKET_STATUSES as $s): ?>
@@ -155,8 +197,18 @@ $tickets = tickets_all($status_filter ?: null);
     </p>
 
     <?php if (empty($tickets)): ?>
-      <p class="muted">No tickets <?= $status_filter ? 'with this status' : 'yet' ?>.</p>
+      <div class="empty-state">
+        <div class="empty-icon">✉</div>
+        <h3>No tickets <?= $status_filter ? 'with this status' : 'yet' ?></h3>
+        <p><?= $status_filter
+              ? 'Try a different filter, or clear it to see every ticket.'
+              : 'When a customer opens a support ticket from the client portal it shows up here.' ?></p>
+        <?php if ($status_filter): ?>
+          <a class="btn btn-primary" href="/admin/tickets.php">Show all tickets</a>
+        <?php endif; ?>
+      </div>
     <?php else: ?>
+      <div class="table-scroll">
       <table class="data-table">
         <thead>
           <tr><th>#</th><th>Subject</th><th>Client</th><th>Status</th><th>Messages</th><th>Last update</th></tr>
@@ -174,9 +226,44 @@ $tickets = tickets_all($status_filter ?: null);
           <?php endforeach; ?>
         </tbody>
       </table>
+      </div>
     <?php endif; ?>
   </div>
 
 <?php endif; ?>
 
+<?php if ($ticket): ?>
+<script>
+// Live-update the open ticket thread. Polls every 12s and reloads when
+// either a new message appears or the ticket's status changes.
+(function () {
+  var TID = <?= (int)$ticket['id'] ?>;
+  var KNOWN = (function () {
+    var els = document.querySelectorAll('.ticket-msg');
+    var max = 0;
+    // We don't render message ids, so use the count + the page load time
+    // as a baseline. The poll endpoint returns the *current* count and
+    // top id, so on first poll we just record them.
+    return { count: els.length, top: -1 };
+  })();
+  var STATUS = <?= json_encode($ticket['status']) ?>;
+  var url = '/admin/tickets.php?id=' + TID + '&poll=1';
+  setInterval(async function () {
+    try {
+      var r = await fetch(url, { credentials: 'same-origin' });
+      var j = await r.json();
+      if (!j || !j.ok) return;
+      if (KNOWN.top === -1) { KNOWN.top = j.latest_id; KNOWN.count = j.count; return; }
+      if (j.latest_id > KNOWN.top || j.count > KNOWN.count) {
+        window.toast && window.toast('New reply on this ticket — refreshing…', 'info', 2500);
+        setTimeout(function () { location.reload(); }, 800);
+      } else if (j.status !== STATUS) {
+        STATUS = j.status;
+        window.toast && window.toast('Status changed to ' + j.status, 'info', 3000);
+      }
+    } catch (e) {}
+  }, 12000);
+})();
+</script>
+<?php endif; ?>
 <?php require __DIR__ . '/../auth/portal-footer.php'; ?>

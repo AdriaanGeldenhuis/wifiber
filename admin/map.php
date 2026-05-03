@@ -15,6 +15,28 @@ require_once __DIR__ . '/../auth/devices.php';
 require_once __DIR__ . '/../auth/sectors.php';
 require_once __DIR__ . '/../auth/outages.php';
 
+// Lightweight poll endpoint — JS calls this every ~30s to refresh
+// device statuses and outage state without reloading the whole map.
+if (($_GET['poll'] ?? '') === '1') {
+    while (ob_get_level() > 0) ob_end_clean();
+    header('Content-Type: application/json');
+    $devs = pdo()->query("SELECT id, status, last_seen_at FROM devices")->fetchAll();
+    $devs_out = [];
+    foreach ($devs as $d) {
+        $devs_out[(int)$d['id']] = ['status' => $d['status'], 'last_seen_at' => $d['last_seen_at']];
+    }
+    $active = outages_all(['status' => 'active'], 500);
+    $outage_ids = array_map(fn($o) => (int)$o['scope_id'], array_filter($active, fn($o) => $o['scope'] === 'sector' && $o['scope_id']));
+    echo json_encode([
+        'ok'              => true,
+        'devices'         => $devs_out,
+        'outage_sector_ids' => array_values(array_unique($outage_ids)),
+        'outage_count'    => count($active),
+        'ts'              => date('c'),
+    ]);
+    exit;
+}
+
 $is_ajax = !empty($_GET['ajax']);
 $reply   = function (array $payload) use ($is_ajax) {
     // _layout.php has already started buffering and emitted the page
@@ -28,6 +50,43 @@ $reply   = function (array $payload) use ($is_ajax) {
     header('Content-Type: application/json');
     echo json_encode($payload);
     exit;
+};
+
+// Shape a sector row for the JS the same way the bootstrap payload
+// does, so the client can drop it straight into its index after a
+// create/update without a full reload.
+$sector_shape = function (array $s, ?array $ap_device): array {
+    return [
+        'id'                => (int)$s['id'],
+        'tower_id'          => (int)$s['tower_id'],
+        'ap_device_id'      => $s['ap_device_id'],
+        'ap_device_name'    => $ap_device['name'] ?? null,
+        'name'              => $s['name'],
+        'azimuth_deg'       => $s['azimuth_deg'],
+        'beamwidth_deg'     => $s['beamwidth_deg'],
+        'band'              => $s['band'],
+        'frequency_mhz'     => $s['frequency_mhz'],
+        'channel_width_mhz' => $s['channel_width_mhz'],
+        'tx_power_dbm'      => $s['tx_power_dbm'],
+        'max_clients'       => $s['max_clients'],
+        'customer_count'    => isset($s['customer_count']) ? (int)$s['customer_count'] : null,
+        'notes'             => $s['notes'] ?? null,
+    ];
+};
+$device_shape = function (array $d): array {
+    return [
+        'id'           => (int)$d['id'],
+        'site_id'      => $d['site_id'],
+        'name'         => $d['name'],
+        'vendor'       => $d['vendor'],
+        'model'        => $d['model'],
+        'role'         => $d['role'],
+        'mac'          => $d['mac'] ?? '',
+        'mgmt_ip'      => $d['mgmt_ip'],
+        'status'       => $d['status'],
+        'notes'        => $d['notes'] ?? null,
+        'last_seen_at' => $d['last_seen_at'],
+    ];
 };
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -118,6 +177,66 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'display_name' => $hit['display_name'],
                     'message' => 'Located: ' . $hit['display_name'],
                 ]);
+                break;
+            }
+
+            case 'add_sector':
+            case 'update_sector': {
+                $id    = $action === 'update_sector' ? (int)($_POST['id'] ?? 0) : null;
+                $newid = sector_save($_POST, $id);
+                audit_log('sector.' . ($id ? 'update' : 'create'), [
+                    'target_type' => 'sector', 'target_id' => $newid,
+                ]);
+                $row = sector_find($newid);
+                $ap  = (!empty($row['ap_device_id'])) ? device_find((int)$row['ap_device_id']) : null;
+                if ($row) {
+                    // sector_find() doesn't include customer_count, so back-fill
+                    // it so the JS can refresh the capacity bar in place.
+                    $cnt = pdo()->prepare("SELECT COUNT(*) FROM users WHERE role='client' AND sector_id = ?");
+                    $cnt->execute([$newid]);
+                    $row['customer_count'] = (int)$cnt->fetchColumn();
+                }
+                $reply([
+                    'ok'      => true,
+                    'id'      => $newid,
+                    'sector'  => $row ? $sector_shape($row, $ap) : null,
+                    'message' => $id ? 'Sector updated.' : 'Sector added.',
+                ]);
+                break;
+            }
+
+            case 'delete_sector': {
+                $id = (int)($_POST['id'] ?? 0);
+                if ($id <= 0) $reply(['ok' => false, 'error' => 'No sector id.']);
+                sector_delete($id);
+                audit_log('sector.delete', ['target_type' => 'sector', 'target_id' => $id]);
+                $reply(['ok' => true, 'message' => 'Sector removed.']);
+                break;
+            }
+
+            case 'add_device':
+            case 'update_device': {
+                $id    = $action === 'update_device' ? (int)($_POST['id'] ?? 0) : null;
+                $newid = device_save($_POST, $id);
+                audit_log('device.' . ($id ? 'update' : 'create'), [
+                    'target_type' => 'device', 'target_id' => $newid,
+                ]);
+                $row = device_find($newid);
+                $reply([
+                    'ok'      => true,
+                    'id'      => $newid,
+                    'device'  => $row ? $device_shape($row) : null,
+                    'message' => $id ? 'Device updated.' : 'Device added.',
+                ]);
+                break;
+            }
+
+            case 'delete_device': {
+                $id = (int)($_POST['id'] ?? 0);
+                if ($id <= 0) $reply(['ok' => false, 'error' => 'No device id.']);
+                device_delete($id);
+                audit_log('device.delete', ['target_type' => 'device', 'target_id' => $id]);
+                $reply(['ok' => true, 'message' => 'Device removed.']);
                 break;
             }
 
@@ -213,31 +332,10 @@ $map_data = [
         'sector_label'   => !empty($c['sector_id']) ? ($sector_label_by_id[(int)$c['sector_id']] ?? null) : null,
         'network_status' => !empty($c['sector_id']) ? ($sector_ap_status_by_id[(int)$c['sector_id']] ?? null) : null,
     ], $clients),
-    'devices' => array_map(fn($d) => [
-        'id'           => (int)$d['id'],
-        'site_id'      => $d['site_id'],
-        'name'         => $d['name'],
-        'vendor'       => $d['vendor'],
-        'model'        => $d['model'],
-        'role'         => $d['role'],
-        'mgmt_ip'      => $d['mgmt_ip'],
-        'status'       => $d['status'],
-        'last_seen_at' => $d['last_seen_at'],
-    ], $devices),
-    'sectors' => array_map(fn($s) => [
-        'id'                => (int)$s['id'],
-        'tower_id'          => (int)$s['tower_id'],
-        'ap_device_id'      => $s['ap_device_id'],
-        'ap_device_name'    => $s['ap_device_name'] ?? null,
-        'name'              => $s['name'],
-        'azimuth_deg'       => $s['azimuth_deg'],
-        'beamwidth_deg'     => $s['beamwidth_deg'],
-        'band'              => $s['band'],
-        'frequency_mhz'     => $s['frequency_mhz'],
-        'channel_width_mhz' => $s['channel_width_mhz'],
-        'tx_power_dbm'      => $s['tx_power_dbm'],
-        'max_clients'       => $s['max_clients'],
-    ], $sectors),
+    'devices' => array_map($device_shape, $devices),
+    'sectors' => array_map(fn($s) => $sector_shape($s, [
+        'name' => $s['ap_device_name'] ?? null,
+    ]), $sectors),
     'outages' => [
         'sector_ids'    => $outage_sector_ids,
         'tower_ids'     => $outage_tower_ids,
@@ -264,41 +362,424 @@ $map_data = [
     display: flex;
     flex-direction: column;
     height: 100vh;
+    background: var(--bg);
   }
 
+  /* ---------- Toolbar ---------- */
   .map-bar {
     display: flex;
     align-items: center;
-    gap: 14px;
+    gap: 16px;
     flex-wrap: wrap;
-    padding: 8px 14px;
-    background: rgba(255,255,255,0.04);
-    border-bottom: 1px solid rgba(255,255,255,0.08);
+    padding: 10px 18px;
+    background: linear-gradient(180deg, rgba(5,218,253,0.04) 0%, var(--bg-elev) 100%);
+    border-bottom: 1px solid var(--border);
     flex-shrink: 0;
     font-size: 12px;
-    color: var(--muted, #aaa);
+    color: var(--text-dim);
   }
-  .map-bar .group { display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
-  .map-bar .sep   { width:1px; height:22px; background:rgba(255,255,255,.1); }
-  .map-bar h1     { font-size:14px; margin:0; color:var(--text,#fff); }
-  .map-bar .btn   { font-size:12px; }
-  .map-bar .inline-check { display:inline-flex; align-items:center; gap:4px; margin:0; }
-  .map-counts    { display:flex; gap:10px; }
-  .map-counts strong { color:var(--text,#fff); margin-left:3px; }
-  .map-legend    { display:flex; flex-wrap:wrap; gap:8px; }
-  .map-legend i  { display:inline-block; width:9px; height:9px; border-radius:50%;
-                   margin-right:3px; vertical-align:middle; border:1.5px solid #fff; }
-  .map-legend .pipe { border-left:1px solid #555; padding-left:8px; }
+  .map-bar h1 {
+    font-family: 'Space Grotesk', 'Inter', sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    margin: 0;
+    color: var(--text);
+  }
+  .map-bar .group { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+  .map-bar .sep {
+    width: 1px;
+    height: 22px;
+    background: var(--border-strong);
+    opacity: .6;
+  }
+  .map-bar .btn {
+    font-size: 12px;
+    padding: 6px 12px;
+    border-radius: 999px;
+  }
+  .map-bar .inline-check {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    padding: 4px 8px;
+    border-radius: 999px;
+    cursor: pointer;
+    transition: background .15s, color .15s;
+    color: var(--text-dim);
+  }
+  .map-bar .inline-check:hover { background: rgba(255,255,255,.04); color: var(--text); }
+  .map-bar .inline-check input { accent-color: var(--accent); cursor: pointer; }
+  .map-bar .inline-check:has(input:checked) { color: var(--text); }
 
-  #map { flex:1; min-height:300px; }
+  /* Mode buttons get a filled accent state when active. */
+  .map-mode-active {
+    background: var(--accent) !important;
+    color: #001218 !important;
+    border-color: var(--accent) !important;
+    box-shadow: 0 0 0 4px var(--accent-soft);
+  }
 
-  /* Popup forms */
-  form.map-popup       { display:flex; flex-direction:column; gap:6px; min-width:220px; }
-  form.map-popup label { display:flex; flex-direction:column; gap:2px; font-size:12px; color:var(--muted, #aaa); }
-  .map-popup input, .map-popup select { width:100%; padding:4px 6px; box-sizing:border-box; }
-  .map-popup .row { display:flex; gap:6px; }
-  .map-popup .row > * { flex:1; }
-  .map-mode-active { box-shadow:0 0 0 2px var(--accent, #0cf) inset; }
+  /* Counts as small rounded chips. */
+  .map-counts {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    align-items: center;
+  }
+  .map-counts > span {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 5px;
+    padding: 3px 10px;
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    font-size: 11px;
+    color: var(--text-dim);
+    text-transform: uppercase;
+    letter-spacing: .06em;
+  }
+  .map-counts strong {
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 12px;
+    letter-spacing: 0;
+  }
+  .map-counts a { color: inherit; }
+
+  .map-legend {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    align-items: center;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .map-legend span { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
+  .map-legend i {
+    display: inline-block;
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    border: 1.5px solid var(--text);
+  }
+  .map-legend .pipe {
+    border-left: 1px solid var(--border-strong);
+    padding-left: 10px;
+    margin-left: 2px;
+  }
+
+  #map { flex: 1; min-height: 300px; background: #0a0d12; }
+
+  /* ---------- Mode hint ---------- */
+  .map-hint {
+    display: none;
+    padding: 8px 18px;
+    background: rgba(5,218,253,0.08);
+    border-bottom: 1px solid rgba(5,218,253,0.25);
+    color: var(--accent);
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: .02em;
+    flex-shrink: 0;
+    animation: map-hint-pulse 2.4s ease-in-out infinite;
+  }
+  .map-hint::before {
+    content: '●';
+    margin-right: 8px;
+    font-size: 8px;
+    vertical-align: middle;
+  }
+  @keyframes map-hint-pulse {
+    0%, 100% { background: rgba(5,218,253,0.06); }
+    50%      { background: rgba(5,218,253,0.14); }
+  }
+
+  /* ---------- Leaflet popup theming ---------- */
+  /* Override Leaflet's default white popup so it matches the portal. */
+  .leaflet-popup-content-wrapper {
+    background: var(--bg-card);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    box-shadow: 0 8px 24px rgba(0,0,0,.5), 0 0 0 1px rgba(5,218,253,.05);
+    padding: 4px;
+  }
+  .leaflet-popup-content {
+    margin: 12px 14px;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 13px;
+    line-height: 1.5;
+    color: var(--text);
+  }
+  .leaflet-popup-tip {
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    box-shadow: none;
+  }
+  .leaflet-popup-close-button {
+    color: var(--text-muted) !important;
+    font-size: 22px !important;
+    padding: 6px 10px 0 0 !important;
+    transition: color .15s;
+  }
+  .leaflet-popup-close-button:hover { color: var(--accent) !important; }
+
+  /* ---------- Popup typography ---------- */
+  .map-popup strong {
+    color: var(--text);
+    font-family: 'Space Grotesk', 'Inter', sans-serif;
+    font-size: 14px;
+    letter-spacing: -.005em;
+  }
+  .map-popup small { color: var(--text-muted); font-size: 11px; }
+  .map-popup .muted { color: var(--text-muted); }
+  .map-popup p { margin: 6px 0 0; color: var(--text-dim); font-size: 12px; }
+
+  /* ---------- Popup forms ---------- */
+  form.map-popup {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 240px;
+  }
+  form.map-popup label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--text-muted);
+  }
+  .map-popup input,
+  .map-popup select,
+  .map-popup textarea {
+    width: 100%;
+    padding: 7px 10px;
+    box-sizing: border-box;
+    background: var(--bg-elev);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+    transition: border-color .15s, box-shadow .15s;
+  }
+  .map-popup input:focus,
+  .map-popup select:focus,
+  .map-popup textarea:focus {
+    outline: none;
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .map-popup select {
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 12 12'><path fill='none' stroke='%23a5b0bd' stroke-width='1.5' d='M2 4l4 4 4-4'/></svg>");
+    background-repeat: no-repeat;
+    background-position: right 10px center;
+    padding-right: 28px;
+  }
+  .map-popup .row { display: flex; gap: 8px; }
+  .map-popup .row > * { flex: 1; min-width: 0; }
+  .map-popup form.map-popup > button[type="submit"] {
+    margin-top: 4px;
+    padding: 9px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: .03em;
+  }
+
+  /* ---------- Popup data list (devices / sectors at a tower) ---------- */
+  .map-popup .pp-section {
+    margin-top: 10px;
+    padding-top: 10px;
+    border-top: 1px solid var(--border);
+  }
+  .map-popup .pp-section-head {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+  .map-popup .pp-section-head strong {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .12em;
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+  .map-popup .pp-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .map-popup .pp-list li {
+    padding: 6px 8px;
+    background: rgba(255,255,255,.02);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    font-size: 12px;
+    transition: background .15s, border-color .15s;
+  }
+  .map-popup .pp-list li:hover { background: rgba(5,218,253,.05); border-color: rgba(5,218,253,.2); }
+  .map-popup .pp-list .pp-row {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .map-popup .pp-list .pp-name { color: var(--text); font-weight: 500; flex: 1; min-width: 0; }
+  .map-popup .pp-list .pp-name a { color: inherit; }
+  .map-popup .pp-list .pp-meta { font-size: 10.5px; color: var(--text-muted); margin-top: 3px; line-height: 1.4; }
+
+  /* Status pills inside popup lists. */
+  .map-popup .pp-pill {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    text-transform: uppercase;
+    color: #fff;
+  }
+
+  /* Inline action buttons (edit / delete / add) — small pills. */
+  .map-popup .pp-act {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 9px;
+    border-radius: 999px;
+    border: 1px solid var(--border-strong);
+    background: transparent;
+    font-size: 10.5px;
+    font-weight: 500;
+    color: var(--text-dim);
+    cursor: pointer;
+    text-decoration: none;
+    transition: background .15s, color .15s, border-color .15s;
+    white-space: nowrap;
+  }
+  .map-popup .pp-act:hover { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+  .map-popup .pp-act.pp-act-danger { color: #e88; }
+  .map-popup .pp-act.pp-act-danger:hover { background: rgba(255,84,112,.12); color: var(--danger); border-color: rgba(255,84,112,.4); }
+  .map-popup .pp-act.pp-act-primary {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: rgba(5,218,253,.35);
+  }
+  .map-popup .pp-act.pp-act-primary:hover { background: var(--accent); color: #001218; border-color: var(--accent); }
+
+  /* Sector / device dot prefix in lists. */
+  .map-popup .pp-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+
+  /* Tower popup top action row (Edit / Delete / + Sector). */
+  .map-popup .pp-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 10px;
+    flex-wrap: wrap;
+  }
+  .map-popup .pp-actions .btn { font-size: 11px; padding: 6px 12px; }
+
+  /* Outage banner inside sector popup. */
+  .map-popup .pp-outage {
+    margin: 8px 0;
+    padding: 8px 10px;
+    background: rgba(220,68,68,.12);
+    border-left: 3px solid var(--danger);
+    border-radius: var(--radius-sm);
+    font-size: 11px;
+    line-height: 1.45;
+  }
+  .map-popup .pp-outage strong { color: var(--danger); font-size: 12px; }
+
+  /* Key-value lines in sector / device popup details. */
+  .map-popup .pp-kv {
+    display: grid;
+    grid-template-columns: max-content 1fr;
+    gap: 4px 12px;
+    margin-top: 8px;
+    font-size: 12px;
+  }
+  .map-popup .pp-kv dt { color: var(--text-muted); }
+  .map-popup .pp-kv dd { margin: 0; color: var(--text); }
+
+  /* ---------- Sector preview cone label ---------- */
+  .wf-sector-label-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: var(--accent);
+    color: #001218;
+    padding: 3px 10px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .04em;
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(5,218,253,.4);
+    font-family: 'Space Grotesk', 'Inter', sans-serif;
+  }
+  .wf-sector-label-pill::before {
+    content: '';
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: #001218;
+  }
+
+  /* ---------- Sector cone + marker hover ---------- */
+  .leaflet-interactive { transition: filter .12s; }
+  path.leaflet-interactive:hover { filter: brightness(1.25) drop-shadow(0 0 6px rgba(5,218,253,.5)); cursor: pointer; }
+  .wf-marker { transition: transform .15s; }
+  .wf-marker:hover { transform: scale(1.18); cursor: pointer; }
+
+  /* ---------- Geocode status text ---------- */
+  #geocode-status {
+    font-size: 11px;
+    color: var(--text-muted);
+    font-style: italic;
+  }
+
+  /* ---------- Layer-control widget restyle ---------- */
+  .leaflet-control-layers {
+    background: var(--bg-card) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius-sm) !important;
+    color: var(--text) !important;
+    box-shadow: 0 4px 12px rgba(0,0,0,.4) !important;
+  }
+  .leaflet-control-layers-expanded { padding: 8px 12px !important; }
+  .leaflet-control-layers label { color: var(--text-dim); font-size: 12px; padding: 2px 0; }
+  .leaflet-control-layers-separator { border-top-color: var(--border) !important; }
+
+  /* ---------- Zoom buttons ---------- */
+  .leaflet-bar a {
+    background: var(--bg-card) !important;
+    color: var(--text) !important;
+    border-color: var(--border) !important;
+    transition: background .15s, color .15s;
+  }
+  .leaflet-bar a:hover { background: var(--accent-soft) !important; color: var(--accent) !important; }
+
+  /* ---------- Mobile / narrow toolbar ---------- */
+  @media (max-width: 900px) {
+    .map-bar { padding: 8px 12px; gap: 10px; }
+    .map-legend { display: none; }
+    .map-counts { font-size: 10px; }
+  }
 </style>
 
 <div class="map-fs">
@@ -357,6 +838,7 @@ $map_data = [
     </div>
   </div>
 
+  <div id="map-hint" class="map-hint"></div>
   <div id="map"></div>
 </div>
 

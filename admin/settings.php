@@ -10,9 +10,52 @@ $errors = [];
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_csrf();
 
+    // Logo upload — saved under /assets/uploads/branding/ with a stable
+    // filename so the public site doesn't need to know which extension
+    // the admin chose. Existing logo URL is preserved when no upload.
+    $brand_logo_url   = trim((string)($_POST['brand_logo_url'] ?? ($data['brand']['logo_url'] ?? '')));
+    if (!empty($_FILES['brand_logo_file']['tmp_name']) && is_uploaded_file($_FILES['brand_logo_file']['tmp_name'])) {
+        $f    = $_FILES['brand_logo_file'];
+        $size = (int)$f['size'];
+        if ($size <= 0 || $size > 2 * 1024 * 1024) {
+            $errors[] = 'Logo must be under 2 MB.';
+        } else {
+            $mime = function_exists('mime_content_type') ? @mime_content_type($f['tmp_name']) : '';
+            $ext_by_mime = [
+                'image/png' => 'png', 'image/jpeg' => 'jpg', 'image/webp' => 'webp', 'image/svg+xml' => 'svg',
+            ];
+            $ext = $ext_by_mime[$mime] ?? null;
+            if (!$ext) {
+                $errors[] = 'Logo must be PNG, JPG, WEBP or SVG.';
+            } else {
+                $dir = __DIR__ . '/../assets/uploads/branding';
+                if (!is_dir($dir)) @mkdir($dir, 0755, true);
+                $dest_name = 'logo-' . date('YmdHis') . '.' . $ext;
+                $dest_path = $dir . '/' . $dest_name;
+                if (@move_uploaded_file($f['tmp_name'], $dest_path)) {
+                    @chmod($dest_path, 0644);
+                    $brand_logo_url = '/assets/uploads/branding/' . $dest_name;
+                } else {
+                    $errors[] = 'Could not save the uploaded logo.';
+                }
+            }
+        }
+    }
+
+    // Brand colour — store as #RRGGBB, used as --accent override.
+    $brand_colour = strtolower(trim((string)($_POST['brand_colour'] ?? '')));
+    if ($brand_colour !== '' && !preg_match('/^#[0-9a-f]{6}$/', $brand_colour)) {
+        $errors[] = 'Brand colour must be a #RRGGBB hex value.';
+        $brand_colour = '';
+    }
+
     $new = [
         'name'           => trim($_POST['name']           ?? ''),
         'tagline'        => trim($_POST['tagline']        ?? ''),
+        'brand'          => [
+            'logo_url' => $brand_logo_url,
+            'colour'   => $brand_colour ?: ($data['brand']['colour'] ?? ''),
+        ],
         'phone'          => trim($_POST['phone']          ?? ''),
         'phone_link'     => preg_replace('/[^0-9+]/', '', $_POST['phone_link'] ?? ''),
         'email_admin'    => trim($_POST['email_admin']    ?? ''),
@@ -100,8 +143,14 @@ $social = $data['social'] ?? [];
   </ul></div>
 <?php endif; ?>
 
-<form method="post" class="form">
+<form method="post" class="form" enctype="multipart/form-data">
   <?= csrf_field() ?>
+
+  <?php
+    $brand        = $data['brand'] ?? [];
+    $brand_logo   = $brand['logo_url'] ?? '';
+    $brand_colour = $brand['colour']   ?? '';
+  ?>
 
   <div class="portal-card">
     <h2>Brand</h2>
@@ -114,7 +163,42 @@ $social = $data['social'] ?? [];
         <label>Tagline</label>
         <input type="text" name="tagline" required maxlength="120" value="<?= $v('tagline') ?>">
       </div>
+      <div class="field" style="grid-column:1/-1;">
+        <label>Logo</label>
+        <?php if ($brand_logo): ?>
+          <div style="display:flex;align-items:center;gap:14px;margin-bottom:8px;padding:10px 14px;background:var(--bg-elev);border:1px solid var(--border);border-radius:var(--radius-sm);">
+            <img src="<?= htmlspecialchars($brand_logo) ?>" alt="Current logo" style="height:48px;width:auto;background:#0008;padding:4px;border-radius:6px;">
+            <small class="muted"><?= htmlspecialchars($brand_logo) ?></small>
+          </div>
+        <?php endif; ?>
+        <input type="file" name="brand_logo_file" accept="image/png,image/jpeg,image/webp,image/svg+xml">
+        <small class="muted">PNG, JPG, WEBP or SVG. Max 2 MB.</small>
+      </div>
+      <div class="field">
+        <label>Or paste a logo URL</label>
+        <input type="text" name="brand_logo_url" maxlength="500" value="<?= htmlspecialchars($brand_logo, ENT_QUOTES) ?>" placeholder="/assets/images/logo.webp">
+      </div>
+      <div class="field">
+        <label>Brand colour <small class="muted">(accent on portals)</small></label>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <input type="color" name="brand_colour" value="<?= htmlspecialchars($brand_colour ?: '#05dafd', ENT_QUOTES) ?>" style="height:40px;width:60px;padding:2px;cursor:pointer;">
+          <input type="text" id="brand_colour_text" pattern="^#[0-9a-fA-F]{6}$" maxlength="7" value="<?= htmlspecialchars($brand_colour ?: '#05dafd', ENT_QUOTES) ?>" style="flex:1;font-family:ui-monospace,monospace;" placeholder="#05dafd">
+        </div>
+        <small class="muted">Sets <code>--accent</code> for the admin and client portals.</small>
+      </div>
     </div>
+    <script>
+    // Two-way bind the colour swatch to the hex text field.
+    (function () {
+      var c = document.querySelector('input[name="brand_colour"]');
+      var t = document.getElementById('brand_colour_text');
+      if (!c || !t) return;
+      c.addEventListener('input', function () { t.value = c.value; });
+      t.addEventListener('input',  function () {
+        if (/^#[0-9a-fA-F]{6}$/.test(t.value)) c.value = t.value;
+      });
+    })();
+    </script>
   </div>
 
   <div class="portal-card">

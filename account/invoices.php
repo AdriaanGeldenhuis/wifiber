@@ -65,14 +65,36 @@ $billing = invoice_billing_settings();
   <?php if ($invoice['status'] === 'unpaid' && $billing['bank_account_number']): ?>
     <div class="portal-card">
       <h2>How to pay</h2>
+      <?php $pay_ref = invoice_payment_reference($invoice, $billing); ?>
       <ul class="kv">
         <li><span>Account holder</span><strong><?= htmlspecialchars($billing['bank_account_holder']) ?></strong></li>
         <li><span>Bank</span><strong><?= htmlspecialchars($billing['bank_name']) ?></strong></li>
-        <li><span>Account number</span><strong><?= htmlspecialchars($billing['bank_account_number']) ?></strong></li>
+        <li><span>Account number</span>
+          <strong>
+            <?= htmlspecialchars($billing['bank_account_number']) ?>
+            <button type="button" class="copy-btn" data-copy="<?= htmlspecialchars($billing['bank_account_number'], ENT_QUOTES) ?>" title="Copy account number">Copy</button>
+          </strong>
+        </li>
         <?php if ($billing['bank_branch_code']): ?>
-          <li><span>Branch code</span><strong><?= htmlspecialchars($billing['bank_branch_code']) ?></strong></li>
+          <li><span>Branch code</span>
+            <strong>
+              <?= htmlspecialchars($billing['bank_branch_code']) ?>
+              <button type="button" class="copy-btn" data-copy="<?= htmlspecialchars($billing['bank_branch_code'], ENT_QUOTES) ?>" title="Copy branch code">Copy</button>
+            </strong>
+          </li>
         <?php endif; ?>
-        <li><span>Reference</span><strong><?= htmlspecialchars(invoice_payment_reference($invoice, $billing)) ?></strong></li>
+        <li><span>Reference</span>
+          <strong>
+            <?= htmlspecialchars($pay_ref) ?>
+            <button type="button" class="copy-btn" data-copy="<?= htmlspecialchars($pay_ref, ENT_QUOTES) ?>" title="Copy reference">Copy</button>
+          </strong>
+        </li>
+        <li><span>Amount</span>
+          <strong>
+            <?= htmlspecialchars(money((float)$invoice['total'])) ?>
+            <button type="button" class="copy-btn" data-copy="<?= htmlspecialchars(number_format((float)$invoice['total'], 2, '.', ''), ENT_QUOTES) ?>" title="Copy amount">Copy</button>
+          </strong>
+        </li>
       </ul>
       <?php if ($billing['payment_instructions']): ?>
         <p class="muted small" style="margin-top:14px;"><?= nl2br(htmlspecialchars($billing['payment_instructions'])) ?></p>
@@ -85,8 +107,13 @@ $billing = invoice_billing_settings();
   <div class="portal-card">
     <h2>My invoices</h2>
     <?php if (empty($mine)): ?>
-      <p class="muted">No invoices yet.</p>
+      <div class="empty-state">
+        <div class="empty-icon">₂</div>
+        <h3>No invoices yet</h3>
+        <p>Once your service starts billing, your invoices will appear here. You'll also get an email each month.</p>
+      </div>
     <?php else: ?>
+      <div class="table-scroll">
       <table class="data-table">
         <thead>
           <tr><th>Number</th><th>Issued</th><th>Due</th><th>Total</th><th>Status</th></tr>
@@ -105,6 +132,7 @@ $billing = invoice_billing_settings();
           <?php endforeach; ?>
         </tbody>
       </table>
+      </div>
     <?php endif; ?>
   </div>
 

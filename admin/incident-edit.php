@@ -104,9 +104,19 @@ $updates = $incident ? incident_updates_for((int)$incident['id']) : [];
         <label>Title</label>
         <input type="text" name="title" required maxlength="200" value="<?= htmlspecialchars($form['title'], ENT_QUOTES) ?>" placeholder="e.g. Outage in Vanderbijlpark">
       </div>
-      <div class="field" style="grid-column:1/-1;">
+      <div class="field" style="grid-column:1/-1;" data-md-editor>
         <label><?= $is_new ? 'First update / description' : 'Original description' ?></label>
-        <textarea name="body" required rows="4" maxlength="4000"><?= htmlspecialchars($form['body']) ?></textarea>
+        <div class="md-toolbar">
+          <button type="button" data-md="bold"   title="Bold (Ctrl-B)"><strong>B</strong></button>
+          <button type="button" data-md="italic" title="Italic (Ctrl-I)"><em>I</em></button>
+          <button type="button" data-md="link"   title="Link (Ctrl-K)">⎘</button>
+          <button type="button" data-md="ul"     title="Bulleted list">•</button>
+          <button type="button" data-md="code"   title="Inline code">&lt;/&gt;</button>
+          <button type="button" data-md="preview" class="md-preview-toggle" title="Toggle preview">Preview</button>
+        </div>
+        <textarea name="body" required rows="6" maxlength="4000" data-md-target><?= htmlspecialchars($form['body']) ?></textarea>
+        <div class="md-preview" hidden></div>
+        <small class="muted">Markdown supported: **bold**, *italic*, [link](url), - bullets, `code`.</small>
       </div>
       <div class="field" style="grid-column:1/-1;">
         <label>Affected areas <span class="muted">(comma-separated)</span></label>
@@ -183,7 +193,18 @@ $updates = $incident ? incident_updates_for((int)$incident['id']) : [];
       </div>
       <div class="field">
         <label>Update message</label>
-        <textarea name="update_body" required rows="3" maxlength="4000" placeholder="What did you find? What's the next step?"></textarea>
+        <div data-md-editor>
+          <div class="md-toolbar">
+            <button type="button" data-md="bold"><strong>B</strong></button>
+            <button type="button" data-md="italic"><em>I</em></button>
+            <button type="button" data-md="link">⎘</button>
+            <button type="button" data-md="ul">•</button>
+            <button type="button" data-md="code">&lt;/&gt;</button>
+            <button type="button" data-md="preview" class="md-preview-toggle">Preview</button>
+          </div>
+          <textarea name="update_body" required rows="4" maxlength="4000" placeholder="What did you find? What's the next step?" data-md-target></textarea>
+          <div class="md-preview" hidden></div>
+        </div>
       </div>
       <div class="form-actions">
         <button type="submit" class="btn btn-primary">Post update</button>
@@ -192,4 +213,131 @@ $updates = $incident ? incident_updates_for((int)$incident['id']) : [];
   </div>
 <?php endif; ?>
 
+<style>
+.md-toolbar {
+  display: flex; gap: 4px;
+  padding: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-bottom: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+}
+.md-toolbar button {
+  padding: 4px 10px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  color: var(--text-dim);
+  font-size: .85rem;
+  cursor: pointer;
+  font-family: inherit;
+  transition: background .12s, color .12s;
+}
+.md-toolbar button:hover { background: var(--accent-soft); color: var(--accent); }
+.md-toolbar .md-preview-toggle { margin-left: auto; }
+.md-toolbar .md-preview-toggle.is-on { background: var(--accent); color: #001218; }
+[data-md-editor] textarea { border-top-left-radius: 0; border-top-right-radius: 0; }
+.md-preview {
+  padding: 12px 14px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-top: none;
+  border-radius: 0 0 var(--radius-sm) var(--radius-sm);
+  min-height: 80px;
+  color: var(--text);
+  font-size: .92rem;
+}
+.md-preview a { color: var(--accent); }
+.md-preview code { background: var(--bg); padding: 1px 6px; border-radius: 4px; font-size: .9em; }
+.md-preview ul { padding-left: 20px; }
+</style>
+<script>
+// Tiny markdown renderer + toolbar — enough for incident write-ups
+// (bold / italic / link / list / inline code). Avoids pulling in
+// marked.js from a CDN to keep the CSP narrow and the page light.
+(function () {
+  function mdRender(src) {
+    var esc = function (s) {
+      return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    };
+    var lines = String(src || '').split(/\r?\n/);
+    var out = [], inList = false;
+    lines.forEach(function (raw) {
+      var line = esc(raw);
+      // Inline: **bold**, *italic*, `code`, [text](url)
+      line = line.replace(/`([^`]+)`/g, '<code>$1</code>');
+      line = line.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      line = line.replace(/\*([^*]+)\*/g, '<em>$1</em>');
+      line = line.replace(/\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener">$1</a>');
+      // Lists
+      if (/^\s*[-*]\s+/.test(raw)) {
+        if (!inList) { out.push('<ul>'); inList = true; }
+        out.push('<li>' + line.replace(/^\s*[-*]\s+/, '') + '</li>');
+        return;
+      }
+      if (inList) { out.push('</ul>'); inList = false; }
+      if (raw.trim() === '') { out.push(''); }
+      else                    { out.push('<p>' + line + '</p>'); }
+    });
+    if (inList) out.push('</ul>');
+    return out.join('\n');
+  }
+
+  function wrapSel(ta, before, after, placeholder) {
+    var s = ta.selectionStart, e = ta.selectionEnd;
+    var sel = ta.value.slice(s, e) || (placeholder || '');
+    var nv = ta.value.slice(0, s) + before + sel + after + ta.value.slice(e);
+    ta.value = nv;
+    ta.focus();
+    ta.selectionStart = s + before.length;
+    ta.selectionEnd   = s + before.length + sel.length;
+    ta.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+
+  document.querySelectorAll('[data-md-editor]').forEach(function (ed) {
+    var ta = ed.querySelector('[data-md-target]');
+    if (!ta) return;
+    var preview = ed.querySelector('.md-preview');
+    ed.addEventListener('click', function (e) {
+      var b = e.target.closest('[data-md]'); if (!b) return;
+      e.preventDefault();
+      switch (b.dataset.md) {
+        case 'bold':    wrapSel(ta, '**', '**', 'bold text'); break;
+        case 'italic':  wrapSel(ta, '*',  '*',  'italic text'); break;
+        case 'link':    wrapSel(ta, '[',  '](https://)', 'link text'); break;
+        case 'code':    wrapSel(ta, '`',  '`',  'code'); break;
+        case 'ul': {
+          var s = ta.selectionStart;
+          var lineStart = ta.value.lastIndexOf('\n', s - 1) + 1;
+          ta.value = ta.value.slice(0, lineStart) + '- ' + ta.value.slice(lineStart);
+          ta.focus();
+          ta.selectionStart = ta.selectionEnd = s + 2;
+          break;
+        }
+        case 'preview': {
+          var on = !preview.hasAttribute('hidden') === false;
+          if (preview.hasAttribute('hidden')) {
+            preview.innerHTML = mdRender(ta.value);
+            preview.removeAttribute('hidden');
+            ta.style.display = 'none';
+            b.classList.add('is-on');
+          } else {
+            preview.setAttribute('hidden', '');
+            ta.style.display = '';
+            b.classList.remove('is-on');
+          }
+          break;
+        }
+      }
+    });
+    ta.addEventListener('keydown', function (e) {
+      if (!(e.ctrlKey || e.metaKey)) return;
+      if (e.key === 'b') { e.preventDefault(); wrapSel(ta, '**', '**', 'bold text'); }
+      if (e.key === 'i') { e.preventDefault(); wrapSel(ta, '*',  '*',  'italic text'); }
+      if (e.key === 'k') { e.preventDefault(); wrapSel(ta, '[',  '](https://)', 'link text'); }
+    });
+  });
+})();
+</script>
 <?php require __DIR__ . '/../auth/portal-footer.php'; ?>

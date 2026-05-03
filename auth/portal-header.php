@@ -23,31 +23,68 @@ $nav        = $nav ?? [];
 $active_key = $active_key ?? '';
 $user       = $user ?? null;
 $is_admin   = $portal === 'admin';
+
+// Brand override (set in /admin/settings.php). Falls back to defaults
+// so a fresh install renders without site.json present.
+$_site_settings = function_exists('load_site_settings') ? load_site_settings() : [];
+$_brand         = $_site_settings['brand'] ?? [];
+$_brand_logo    = !empty($_brand['logo_url']) ? (string)$_brand['logo_url'] : '/assets/images/header-logo-2x.webp';
+$_brand_colour  = !empty($_brand['colour'])   ? strtolower((string)$_brand['colour']) : '';
+// Derive the soft / glow tints from the chosen colour so the rest of
+// the accent palette stays consistent with the override. Format the
+// hex into "r, g, b" so we can build rgba() at runtime.
+$_brand_rgb = '';
+if ($_brand_colour && preg_match('/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/', $_brand_colour, $m)) {
+    $_brand_rgb = hexdec($m[1]) . ', ' . hexdec($m[2]) . ', ' . hexdec($m[3]);
+}
 ?><!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <meta name="robots" content="noindex,nofollow">
+<meta name="csrf-token" content="<?= htmlspecialchars(csrf_token()) ?>">
 <title><?= htmlspecialchars($page_title) ?> &middot; <?= $is_admin ? 'WiFIBER Admin' : 'WiFIBER Account' ?></title>
 <link rel="icon" type="image/webp" href="/assets/images/logo-300.webp">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=Space+Grotesk:wght@500;700&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="/assets/css/portal.css">
+<?php if ($_brand_rgb): ?>
+<style>
+  /* Brand override from data/site.json — keeps the dark theme but
+     swaps the cyan accent for the configured colour. */
+  :root {
+    --accent:        <?= htmlspecialchars($_brand_colour) ?>;
+    --accent-soft:   rgba(<?= $_brand_rgb ?>, 0.12);
+    --accent-glow:   rgba(<?= $_brand_rgb ?>, 0.35);
+  }
+</style>
+<?php endif; ?>
 </head>
 <body class="portal portal-<?= htmlspecialchars($portal) ?>">
 <?php if ($user && !empty($nav)): ?>
 <aside class="portal-side">
-  <a href="/" class="portal-brand" title="Back to wifiber.co.za">
-    <img src="/assets/images/header-logo-2x.webp" alt="WiFIBER">
+  <a href="/" class="portal-brand" title="Back to home">
+    <img src="<?= htmlspecialchars($_brand_logo) ?>" alt="<?= htmlspecialchars($_site_settings['name'] ?? 'Brand') ?>">
     <span><?= $is_admin ? 'Admin' : 'Account' ?></span>
   </a>
   <nav class="portal-nav" aria-label="Portal navigation">
-    <?php foreach ($nav as $item):
-      $cls = $item['key'] === $active_key ? ' is-active' : '';
-    ?>
-      <a href="<?= htmlspecialchars($item['href']) ?>" class="portal-nav-item<?= $cls ?>"><?= htmlspecialchars($item['label']) ?></a>
+    <?php foreach ($nav as $entry): ?>
+      <?php if (isset($entry['group'])): ?>
+        <div class="portal-nav-group">
+          <div class="portal-nav-group-label"><?= htmlspecialchars($entry['group']) ?></div>
+          <?php foreach ($entry['items'] as $item):
+            $cls = $item['key'] === $active_key ? ' is-active' : '';
+          ?>
+            <a href="<?= htmlspecialchars($item['href']) ?>" class="portal-nav-item<?= $cls ?>"><?= htmlspecialchars($item['label']) ?></a>
+          <?php endforeach; ?>
+        </div>
+      <?php else:
+        $cls = $entry['key'] === $active_key ? ' is-active' : '';
+      ?>
+        <a href="<?= htmlspecialchars($entry['href']) ?>" class="portal-nav-item<?= $cls ?>"><?= htmlspecialchars($entry['label']) ?></a>
+      <?php endif; ?>
     <?php endforeach; ?>
   </nav>
   <div class="portal-user">

@@ -9,6 +9,24 @@ $ticket   = $selected > 0 ? ticket_find($selected) : null;
 // Clients can only see their own tickets.
 if ($ticket && (int)$ticket['user_id'] !== (int)$user['id']) $ticket = null;
 
+// Lightweight poll endpoint — JS calls this every ~12s while a thread
+// is open so a staff reply pulls in without manual refresh.
+if ($ticket && !empty($_GET['poll'])) {
+    while (ob_get_level() > 0) ob_end_clean();
+    header('Content-Type: application/json');
+    $msgs = ticket_messages((int)$ticket['id']);
+    $top  = 0;
+    foreach ($msgs as $m) if ((int)$m['id'] > $top) $top = (int)$m['id'];
+    echo json_encode([
+        'ok'         => true,
+        'latest_id'  => $top,
+        'count'      => count($msgs),
+        'status'     => $ticket['status'],
+        'updated_at' => $ticket['updated_at'],
+    ]);
+    exit;
+}
+
 $errors = [];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -132,8 +150,13 @@ $mine = tickets_for_user((int)$user['id']);
   <div class="portal-card">
     <h2>My tickets</h2>
     <?php if (empty($mine)): ?>
-      <p class="muted">You haven't opened a ticket yet. Use the form below to start one.</p>
+      <div class="empty-state">
+        <div class="empty-icon">✉</div>
+        <h3>No tickets yet</h3>
+        <p>If something needs attention — an outage, a billing question, a new install — open a ticket below and our team will pick it up.</p>
+      </div>
     <?php else: ?>
+      <div class="table-scroll">
       <table class="data-table">
         <thead>
           <tr><th>#</th><th>Subject</th><th>Status</th><th>Messages</th><th>Last update</th></tr>
@@ -150,6 +173,7 @@ $mine = tickets_for_user((int)$user['id']);
           <?php endforeach; ?>
         </tbody>
       </table>
+      </div>
     <?php endif; ?>
   </div>
 
@@ -181,4 +205,30 @@ $mine = tickets_for_user((int)$user['id']);
 
 <?php endif; ?>
 
+<?php if ($ticket): ?>
+<script>
+// Live-update the open ticket thread (client side mirror of admin/tickets.php).
+(function () {
+  var TID = <?= (int)$ticket['id'] ?>;
+  var KNOWN = { count: -1, top: -1 };
+  var STATUS = <?= json_encode($ticket['status']) ?>;
+  var url = '/account/tickets.php?id=' + TID + '&poll=1';
+  setInterval(async function () {
+    try {
+      var r = await fetch(url, { credentials: 'same-origin' });
+      var j = await r.json();
+      if (!j || !j.ok) return;
+      if (KNOWN.top === -1) { KNOWN.top = j.latest_id; KNOWN.count = j.count; return; }
+      if (j.latest_id > KNOWN.top || j.count > KNOWN.count) {
+        window.toast && window.toast('Reply received — refreshing…', 'info', 2500);
+        setTimeout(function () { location.reload(); }, 800);
+      } else if (j.status !== STATUS) {
+        STATUS = j.status;
+        window.toast && window.toast('Status changed to ' + j.status, 'info', 3000);
+      }
+    } catch (e) {}
+  }, 12000);
+})();
+</script>
+<?php endif; ?>
 <?php require __DIR__ . '/../auth/portal-footer.php'; ?>

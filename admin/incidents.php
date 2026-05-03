@@ -54,8 +54,16 @@ $active = incidents_active_all();
 
 <div class="portal-card">
   <?php if (empty($rows)): ?>
-    <p class="muted">No incidents <?= $status_filter ? 'with this status' : 'on record' ?>.</p>
+    <div class="empty-state">
+      <div class="empty-icon">!</div>
+      <h3>No incidents <?= $status_filter ? 'with this status' : 'on record' ?></h3>
+      <p><?= $status_filter
+            ? 'Try a different filter, or clear it to see every incident.'
+            : 'Use this when you need to publicly communicate something — maintenance, an upstream issue, a regional outage. Customers see it on the status page.' ?></p>
+      <a class="btn btn-primary" href="/admin/incident-edit.php">+ New incident</a>
+    </div>
   <?php else: ?>
+    <div class="table-scroll">
     <table class="data-table">
       <thead>
         <tr><th>Title</th><th>Severity</th><th>Status</th><th>Affected</th><th>Started</th><th>Resolved</th><th></th></tr>
@@ -81,6 +89,7 @@ $active = incidents_active_all();
         <?php endforeach; ?>
       </tbody>
     </table>
+    </div>
   <?php endif; ?>
 </div>
 

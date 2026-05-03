@@ -46,6 +46,58 @@ $stmt = $pdo->prepare(
 );
 $stmt->execute([(int)$user['id']]);
 $latest_invoice = $stmt->fetch() ?: null;
+
+/* ---------- Service quality (last 7 days) ----------
+ * Pull health stats for the AP that drives this customer's sector.
+ * Three numbers we surface:
+ *   - uptime_pct: % of polls online
+ *   - last_seen:  most recent online moment for the AP
+ *   - signal_dbm: most recent reading for this customer's link, if any */
+$service = null;
+if (!empty($user['sector_id'])) {
+    $stmt = $pdo->prepare(
+        "SELECT ap_device_id FROM sectors WHERE id = ? LIMIT 1"
+    );
+    $stmt->execute([(int)$user['sector_id']]);
+    $ap_id = (int)($stmt->fetchColumn() ?: 0);
+    if ($ap_id > 0) {
+        $stmt = $pdo->prepare(
+            "SELECT
+               SUM(CASE WHEN status='online'  THEN 1 ELSE 0 END) AS up,
+               SUM(CASE WHEN status='offline' THEN 1 ELSE 0 END) AS down,
+               COUNT(*) AS total,
+               MAX(CASE WHEN status='online' THEN polled_at ELSE NULL END) AS last_up,
+               AVG(rtt_ms) AS avg_rtt
+             FROM device_health
+             WHERE device_id = ? AND polled_at >= (NOW() - INTERVAL 7 DAY)"
+        );
+        $stmt->execute([$ap_id]);
+        $h = $stmt->fetch() ?: [];
+        $total = (int)($h['total'] ?? 0);
+        if ($total > 0) {
+            $up = (int)($h['up'] ?? 0);
+            $service = [
+                'uptime_pct' => round(($up / $total) * 100, 1),
+                'last_up'    => $h['last_up'] ?? null,
+                'avg_rtt'    => $h['avg_rtt'] !== null ? round((float)$h['avg_rtt'], 1) : null,
+                'total'      => $total,
+            ];
+            // If wireless_links has a reading for this customer, surface it.
+            $stmt = $pdo->prepare(
+                "SELECT signal_dbm, snr_db, ccq_pct, last_evaluated_at
+                   FROM wireless_links
+                  WHERE customer_id = ?
+                  ORDER BY last_evaluated_at DESC LIMIT 1"
+            );
+            $stmt->execute([(int)$user['id']]);
+            if ($wl = $stmt->fetch()) {
+                $service['signal_dbm'] = $wl['signal_dbm'];
+                $service['snr_db']     = $wl['snr_db'];
+                $service['ccq_pct']    = $wl['ccq_pct'];
+            }
+        }
+    }
+}
 ?>
 
 <div class="portal-head">
@@ -129,6 +181,44 @@ $latest_invoice = $stmt->fetch() ?: null;
     </div>
   <?php endif; ?>
 </div>
+
+<?php if ($service): ?>
+<div class="portal-card">
+  <h2>Service quality <span class="muted small">(last 7 days)</span></h2>
+  <div class="card-grid" style="margin-top:8px;">
+    <div class="portal-card" style="margin:0;">
+      <span class="card-label">Uptime</span>
+      <div class="card-num" style="color:<?= $service['uptime_pct'] >= 99 ? '#0c8' : ($service['uptime_pct'] >= 95 ? '#fbbf24' : '#d44') ?>;">
+        <?= htmlspecialchars((string)$service['uptime_pct']) ?>%
+      </div>
+      <p class="card-sub muted">across <?= (int)$service['total'] ?> health checks</p>
+    </div>
+    <?php if (!empty($service['avg_rtt'])): ?>
+    <div class="portal-card" style="margin:0;">
+      <span class="card-label">Avg latency</span>
+      <div class="card-num"><?= htmlspecialchars((string)$service['avg_rtt']) ?> <small class="muted">ms</small></div>
+      <p class="card-sub muted">round-trip from our gear</p>
+    </div>
+    <?php endif; ?>
+    <?php if (!empty($service['signal_dbm'])):
+      $s = (int)$service['signal_dbm'];
+      $sig_class = $s >= -65 ? '#0c8' : ($s >= -75 ? '#fbbf24' : '#d44');
+    ?>
+    <div class="portal-card" style="margin:0;">
+      <span class="card-label">Signal</span>
+      <div class="card-num" style="color:<?= $sig_class ?>;"><?= $s ?> <small class="muted">dBm</small></div>
+      <?php if (!empty($service['snr_db'])): ?>
+        <p class="card-sub muted">SNR <?= (int)$service['snr_db'] ?> dB</p>
+      <?php endif; ?>
+    </div>
+    <?php endif; ?>
+  </div>
+  <p class="muted small" style="margin-top:8px;">
+    Last seen online: <?= htmlspecialchars($service['last_up'] ?? '—') ?>.
+    Anything not looking right? <a href="/account/tickets.php">Open a ticket</a>.
+  </p>
+</div>
+<?php endif; ?>
 
 <div class="portal-card">
   <h2>Your details</h2>
