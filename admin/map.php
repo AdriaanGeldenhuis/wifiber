@@ -14,6 +14,9 @@ require_once __DIR__ . '/../auth/sites.php';
 
 $is_ajax = !empty($_GET['ajax']);
 $reply   = function (array $payload) use ($is_ajax) {
+    // _layout.php has already started buffering and emitted the page
+    // chrome — discard it so the response body is clean JSON.
+    while (ob_get_level() > 0) ob_end_clean();
     if (!$is_ajax) {
         flash($payload['ok'] ? 'success' : 'error', (string)($payload['message'] ?? $payload['error'] ?? 'OK'));
         header('Location: /admin/map.php');
@@ -162,8 +165,9 @@ $map_data = [
   .map-toolbar .btn { font-size:12px; }
   .map-legend { display:flex; flex-wrap:wrap; gap:10px; font-size:12px; color:var(--muted, #aaa); }
   .map-legend i { display:inline-block; width:10px; height:10px; border-radius:50%; margin-right:4px; vertical-align:middle; border:1.5px solid #fff; }
-  .map-popup form { display:flex; flex-direction:column; gap:6px; min-width:220px; }
-  .map-popup input, .map-popup select { width:100%; padding:4px 6px; }
+  form.map-popup { display:flex; flex-direction:column; gap:6px; min-width:220px; }
+  form.map-popup label { display:flex; flex-direction:column; gap:2px; font-size:12px; color:var(--muted, #aaa); }
+  .map-popup input, .map-popup select { width:100%; padding:4px 6px; box-sizing:border-box; }
   .map-popup .row { display:flex; gap:6px; }
   .map-popup .row > * { flex:1; }
   .map-mode-active { box-shadow:0 0 0 2px var(--accent, #0cf) inset; }
