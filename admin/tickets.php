@@ -11,6 +11,25 @@ if ($status_filter !== '' && !in_array($status_filter, TICKET_STATUSES, true)) {
     $status_filter = '';
 }
 
+// Lightweight poll endpoint — JS calls this every ~12s while a thread
+// is open, so a new client reply pulls the page in without manual
+// refresh. Returns the highest message id and the ticket status.
+if ($ticket && !empty($_GET['poll'])) {
+    while (ob_get_level() > 0) ob_end_clean();
+    header('Content-Type: application/json');
+    $msgs = ticket_messages((int)$ticket['id']);
+    $top  = 0;
+    foreach ($msgs as $m) if ((int)$m['id'] > $top) $top = (int)$m['id'];
+    echo json_encode([
+        'ok'         => true,
+        'latest_id'  => $top,
+        'count'      => count($msgs),
+        'status'     => $ticket['status'],
+        'updated_at' => $ticket['updated_at'],
+    ]);
+    exit;
+}
+
 $errors = [];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
@@ -190,4 +209,38 @@ $tickets = tickets_all($status_filter ?: null);
 
 <?php endif; ?>
 
+<?php if ($ticket): ?>
+<script>
+// Live-update the open ticket thread. Polls every 12s and reloads when
+// either a new message appears or the ticket's status changes.
+(function () {
+  var TID = <?= (int)$ticket['id'] ?>;
+  var KNOWN = (function () {
+    var els = document.querySelectorAll('.ticket-msg');
+    var max = 0;
+    // We don't render message ids, so use the count + the page load time
+    // as a baseline. The poll endpoint returns the *current* count and
+    // top id, so on first poll we just record them.
+    return { count: els.length, top: -1 };
+  })();
+  var STATUS = <?= json_encode($ticket['status']) ?>;
+  var url = '/admin/tickets.php?id=' + TID + '&poll=1';
+  setInterval(async function () {
+    try {
+      var r = await fetch(url, { credentials: 'same-origin' });
+      var j = await r.json();
+      if (!j || !j.ok) return;
+      if (KNOWN.top === -1) { KNOWN.top = j.latest_id; KNOWN.count = j.count; return; }
+      if (j.latest_id > KNOWN.top || j.count > KNOWN.count) {
+        window.toast && window.toast('New reply on this ticket — refreshing…', 'info', 2500);
+        setTimeout(function () { location.reload(); }, 800);
+      } else if (j.status !== STATUS) {
+        STATUS = j.status;
+        window.toast && window.toast('Status changed to ' + j.status, 'info', 3000);
+      }
+    } catch (e) {}
+  }, 12000);
+})();
+</script>
+<?php endif; ?>
 <?php require __DIR__ . '/../auth/portal-footer.php'; ?>
