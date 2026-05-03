@@ -11,8 +11,14 @@
 $page_title = 'Dashboard';
 $active_key = 'dashboard';
 require __DIR__ . '/_layout.php';
+require_once __DIR__ . '/../auth/outages.php';
 
 $pdo = pdo();
+
+/* -------------------------------------------------- active outages */
+$active_outages = outages_all(['status' => 'active'], 20);
+$active_outage_affected = 0;
+foreach ($active_outages as $o) $active_outage_affected += (int)$o['affected_count'];
 
 /* -------------------------------------------------- network counts */
 
@@ -107,6 +113,29 @@ $last_seen_label = function (?string $when): string {
   <h1>NOC dashboard</h1>
   <p class="portal-sub">Welcome, <?= htmlspecialchars($user['name']) ?>. Network health, topology and money in one place.</p>
 </div>
+
+<?php if ($active_outages): ?>
+<div class="portal-card" style="border-left: 3px solid #d44;">
+  <h2>Active outages
+    <span class="muted">(<?= count($active_outages) ?> &middot; <?= $active_outage_affected ?> customer<?= $active_outage_affected === 1 ? '' : 's' ?> affected)</span>
+  </h2>
+  <table class="data-table">
+    <thead><tr><th>Scope</th><th>Where</th><th>Cause</th><th style="text-align:right;">Affected</th><th>Since</th></tr></thead>
+    <tbody>
+      <?php foreach ($active_outages as $o): ?>
+        <tr>
+          <td><span style="background:#d44;color:#fff;padding:1px 6px;border-radius:6px;font-size:10px;text-transform:uppercase;"><?= htmlspecialchars($o['scope']) ?></span></td>
+          <td><strong><?= htmlspecialchars($o['scope_label']) ?></strong></td>
+          <td><small><?= htmlspecialchars($o['cause'] ?? '—') ?></small></td>
+          <td style="text-align:right;"><?= $o['affected_count'] ?></td>
+          <td><small class="muted"><?= htmlspecialchars($o['started_at']) ?></small></td>
+        </tr>
+      <?php endforeach; ?>
+    </tbody>
+  </table>
+  <p style="margin: 8px 0 0;"><a href="/admin/outages.php" class="card-link">Manage outages &rarr;</a></p>
+</div>
+<?php endif; ?>
 
 <h2 style="margin: 24px 0 8px;">Devices</h2>
 <div class="card-grid">

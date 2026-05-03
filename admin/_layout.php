@@ -20,6 +20,7 @@ $portal = 'admin';
 $nav = [
     ['key' => 'dashboard', 'label' => 'Dashboard',      'href' => '/admin/'],
     ['key' => 'incidents', 'label' => 'Service status', 'href' => '/admin/incidents.php'],
+    ['key' => 'outages',   'label' => 'Outages',        'href' => '/admin/outages.php'],
     ['key' => 'tickets',   'label' => 'Support tickets', 'href' => '/admin/tickets.php'],
     ['key' => 'invoices',  'label' => 'Invoices',       'href' => '/admin/invoices.php'],
     ['key' => 'coverage',  'label' => 'Coverage',       'href' => '/admin/coverage.php'],

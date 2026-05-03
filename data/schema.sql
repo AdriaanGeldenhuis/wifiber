@@ -355,6 +355,25 @@ CREATE TABLE IF NOT EXISTS sectors (
     FOREIGN KEY (ap_device_id) REFERENCES devices(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS outages (
+  id              INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  scope           ENUM('device','sector','tower','core') NOT NULL,
+  scope_id        INT UNSIGNED  DEFAULT NULL,
+  scope_label     VARCHAR(160)  NOT NULL DEFAULT '',
+  status          ENUM('active','resolved') NOT NULL DEFAULT 'active',
+  affected_count  SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  cause           VARCHAR(255)  DEFAULT NULL,
+  notes           TEXT          DEFAULT NULL,
+  started_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resolved_at     DATETIME      DEFAULT NULL,
+  created_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_outage_status_started (status, started_at),
+  KEY idx_outage_scope (scope, scope_id),
+  KEY idx_outage_resolved (resolved_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS wireless_links (
   id                 INT UNSIGNED  NOT NULL AUTO_INCREMENT,
   ap_device_id       INT UNSIGNED  NOT NULL,

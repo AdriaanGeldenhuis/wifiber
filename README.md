@@ -59,6 +59,22 @@ worker. ICMP is enough to drive online/offline status; the per-vendor
 adapters that pull CPU / memory / signal / client counts come in a
 later phase and will write to the same `device_health` table.
 
+## Outage detection
+
+A separate worker scans every sector that has an AP device and either
+opens a new outage (AP offline) or resolves an existing one (AP back
+online). It runs cheaply, so a 1-minute interval is fine:
+
+```cron
+* * * * *  /usr/bin/php /usr/home/wifibfjedj/public_html/bin/detect-outages.php --quiet >> ~/detect-outages.log 2>&1
+```
+
+Active outages surface on the NOC dashboard (`/admin/`) and on the
+dedicated `/admin/outages.php` page. Resolved history is kept
+indefinitely for reporting. Customer notifications, tower-level
+rollup and sector cone tinting on the map are deferred to later
+phases.
+
 ## Deploying to the server
 
 The site lives in `/usr/home/wifibfjedj/public_html` (a.k.a. `~/public_html`) on the production server.
