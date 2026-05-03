@@ -57,16 +57,30 @@
   const DEVICE_COLOR  = { online: '#0c8', offline: '#d44', unknown: '#888', retired: '#555' };
   const BAND_COLOR    = { '2.4GHz': '#f80', '5GHz': '#08e', '6GHz': '#80f', '60GHz': '#f0a', 'other': '#888' };
 
-  function dotIcon(color, size) {
+  // Optional `badgeColor` paints a small notification badge on the
+  // top-right corner of the dot — used to flag e.g. a customer marker
+  // whose sector AP is offline without disturbing the existing
+  // billing-status colour scheme.
+  function dotIcon(color, size, badgeColor) {
     const s = size || 14;
+    const badge = badgeColor
+      ? '<span style="position:absolute;top:-2px;right:-2px;width:7px;height:7px;border-radius:50%;background:'
+        + badgeColor + ';border:1.5px solid #fff;box-shadow:0 0 2px rgba(0,0,0,.6);"></span>'
+      : '';
     return L.divIcon({
       className: 'wf-marker',
-      html: '<span style="display:block;width:' + s + 'px;height:' + s + 'px;border-radius:50%;background:' + color
-          + ';border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.5);"></span>',
-      iconSize: [s + 4, s + 4],
-      iconAnchor: [(s + 4) / 2, (s + 4) / 2],
+      html: '<span style="position:relative;display:block;width:' + s + 'px;height:' + s
+          + 'px;border-radius:50%;background:' + color
+          + ';border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.5);">' + badge + '</span>',
+      iconSize: [s + 6, s + 6],
+      iconAnchor: [(s + 6) / 2, (s + 6) / 2],
     });
   }
+
+  // Customer marker badge — flags network-side problems even when the
+  // billing status is fine. retired/online/null all leave the marker
+  // alone (no badge).
+  const CLIENT_BADGE_COLOR = { offline: '#d44', unknown: '#aaa' };
 
   /* ---------- state ---------- */
   let mode = 'pan';            // 'pan' | 'add_site' | 'add_link'
@@ -309,9 +323,10 @@
   /* ---------- render clients ---------- */
   function renderClient(c) {
     if (c.lat == null || c.lng == null) return;
+    const badge = CLIENT_BADGE_COLOR[c.network_status] || null;
     const marker = L.marker([c.lat, c.lng], {
       draggable: true,
-      icon: dotIcon(STATUS_COLOR[c.status] || '#888', 11),
+      icon: dotIcon(STATUS_COLOR[c.status] || '#888', 11, badge),
     });
     marker.bindPopup(clientPopupHTML(c));
     marker.on('dragend', async (e) => {
@@ -339,6 +354,12 @@
             ? '<div style="margin-top:6px;font-size:12px;"><span class="muted">Sector:</span> '
               + '<a href="/admin/sectors.php?search=' + encodeURIComponent(c.sector_label.split(' · ')[0])
               + '" style="color:inherit;">' + escapeHtml(c.sector_label) + '</a></div>'
+            : '')
+      +   (c.network_status
+            ? '<div style="margin-top:2px;font-size:12px;"><span class="muted">AP:</span> '
+              + '<span style="background:' + (DEVICE_COLOR[c.network_status] || '#888')
+              + ';color:#fff;padding:0 6px;border-radius:6px;font-size:10px;">'
+              + escapeHtml(c.network_status) + '</span></div>'
             : '')
       +   '<div class="row" style="margin-top:8px;">'
       +     '<a class="btn btn-ghost btn-sm" href="/admin/client-edit.php?id=' + c.id + '">Open record</a>'

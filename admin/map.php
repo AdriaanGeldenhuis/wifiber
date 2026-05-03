@@ -143,6 +143,19 @@ foreach ($sectors as $sec) {
     $sector_label_by_id[(int)$sec['id']] = $label;
 }
 
+// Build sector-id → AP-device status so customer markers can surface a
+// "your sector AP is down" badge without the JS doing two lookups.
+$device_status_by_id = [];
+foreach ($devices as $d) {
+    $device_status_by_id[(int)$d['id']] = $d['status'];
+}
+$sector_ap_status_by_id = [];
+foreach ($sectors as $sec) {
+    if ($sec['ap_device_id'] !== null && isset($device_status_by_id[(int)$sec['ap_device_id']])) {
+        $sector_ap_status_by_id[(int)$sec['id']] = $device_status_by_id[(int)$sec['ap_device_id']];
+    }
+}
+
 $map_data = [
     'csrf'       => csrf_token(),
     'center'     => [-26.7100, 27.8300], // Vaal Triangle default
@@ -169,6 +182,7 @@ $map_data = [
         'lng'            => $c['lng']        !== null ? (float)$c['lng'] : null,
         'sector_id'      => !empty($c['sector_id']) ? (int)$c['sector_id'] : null,
         'sector_label'   => !empty($c['sector_id']) ? ($sector_label_by_id[(int)$c['sector_id']] ?? null) : null,
+        'network_status' => !empty($c['sector_id']) ? ($sector_ap_status_by_id[(int)$c['sector_id']] ?? null) : null,
     ], $clients),
     'devices' => array_map(fn($d) => [
         'id'           => (int)$d['id'],
@@ -301,6 +315,7 @@ $map_data = [
       <span><i style="background:#08e;"></i>lead</span>
       <span><i style="background:#fa0;"></i>suspended</span>
       <span><i style="background:#888;"></i>disconnected</span>
+      <span class="pipe"><i style="background:#d44;width:6px;height:6px;"></i>AP down</span>
     </div>
   </div>
 
