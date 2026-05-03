@@ -5,6 +5,47 @@ require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/incidents.php';
 
 $active_incidents = incidents_active_all();
+
+// Network info for this customer — joined-up "Tower · Sector".
+$pdo = pdo();
+$network_label = null;
+if (!empty($user['sector_id']) || !empty($user['site_id'])) {
+    if (!empty($user['sector_id'])) {
+        $stmt = $pdo->prepare(
+            "SELECT s.name AS sector_name, t.name AS tower_name
+               FROM sectors s LEFT JOIN sites t ON t.id = s.tower_id
+              WHERE s.id = ? LIMIT 1"
+        );
+        $stmt->execute([(int)$user['sector_id']]);
+        if ($r = $stmt->fetch()) {
+            $network_label = $r['sector_name'];
+            if ($r['tower_name']) $network_label .= ' · ' . $r['tower_name'];
+        }
+    }
+    if (!$network_label && !empty($user['site_id'])) {
+        $stmt = $pdo->prepare("SELECT name FROM sites WHERE id = ? LIMIT 1");
+        $stmt->execute([(int)$user['site_id']]);
+        if ($r = $stmt->fetch()) $network_label = $r['name'];
+    }
+}
+
+// Activity rollups — open tickets and unpaid invoices for this customer.
+$stmt = $pdo->prepare("SELECT COUNT(*) FROM tickets WHERE user_id = ? AND status IN ('open','in_progress')");
+$stmt->execute([(int)$user['id']]);
+$open_tickets_count = (int)$stmt->fetchColumn();
+
+$stmt = $pdo->prepare("SELECT COUNT(*) c, COALESCE(SUM(total),0) t FROM invoices WHERE user_id = ? AND status = 'unpaid'");
+$stmt->execute([(int)$user['id']]);
+$unpaid = $stmt->fetch();
+$unpaid_count = (int)($unpaid['c'] ?? 0);
+$unpaid_total = (float)($unpaid['t'] ?? 0);
+
+$stmt = $pdo->prepare(
+    "SELECT number, total, due_at, status FROM invoices
+      WHERE user_id = ? ORDER BY issued_at DESC, id DESC LIMIT 1"
+);
+$stmt->execute([(int)$user['id']]);
+$latest_invoice = $stmt->fetch() ?: null;
 ?>
 
 <div class="portal-head">
@@ -46,11 +87,47 @@ $active_incidents = incidents_active_all();
     <div class="card-num" style="font-size:1rem;line-height:1.4;color:var(--text);"><?= htmlspecialchars($user['address'] ?? '—') ?></div>
     <p class="card-sub"><a href="/account/profile.php">Edit address &rarr;</a></p>
   </div>
+  <?php if ($network_label): ?>
+    <div class="portal-card">
+      <span class="card-label">Connected via</span>
+      <div class="card-num" style="font-size:1rem;line-height:1.4;color:var(--text);"><?= htmlspecialchars($network_label) ?></div>
+      <p class="card-sub muted">Your local tower / sector.</p>
+    </div>
+  <?php endif; ?>
   <div class="portal-card">
     <span class="card-label">Member since</span>
     <div class="card-num" style="font-size:1.2rem;color:var(--text);"><?= htmlspecialchars(substr((string)($user['created_at'] ?? ''), 0, 10)) ?></div>
     <p class="card-sub muted">Last login: <?= htmlspecialchars($user['last_login'] ?? 'first time') ?></p>
   </div>
+</div>
+
+<div class="card-grid">
+  <div class="portal-card">
+    <span class="card-label">Unpaid invoices</span>
+    <div class="card-num" style="color:<?= $unpaid_count > 0 ? '#fbbf24' : 'var(--accent)' ?>;"><?= $unpaid_count ?></div>
+    <p class="card-sub muted">
+      <?php if ($unpaid_count > 0): ?>
+        R<?= number_format($unpaid_total, 2) ?> outstanding &middot;
+      <?php endif; ?>
+      <a href="/account/invoices.php">View invoices &rarr;</a>
+    </p>
+  </div>
+  <div class="portal-card">
+    <span class="card-label">Open tickets</span>
+    <div class="card-num" style="color:<?= $open_tickets_count > 0 ? 'var(--accent)' : 'var(--text-muted)' ?>;"><?= $open_tickets_count ?></div>
+    <p class="card-sub muted"><a href="/account/tickets.php">Open tickets &rarr;</a></p>
+  </div>
+  <?php if ($latest_invoice): ?>
+    <div class="portal-card">
+      <span class="card-label">Latest invoice</span>
+      <div class="card-num" style="font-size:1.4rem;color:var(--text);">R<?= number_format((float)$latest_invoice['total'], 2) ?></div>
+      <p class="card-sub muted">
+        <?= htmlspecialchars($latest_invoice['number'] ?: '—') ?>
+        &middot; due <?= htmlspecialchars($latest_invoice['due_at']) ?>
+        &middot; <?= htmlspecialchars($latest_invoice['status']) ?>
+      </p>
+    </div>
+  <?php endif; ?>
 </div>
 
 <div class="portal-card">
@@ -69,11 +146,6 @@ $active_incidents = incidents_active_all();
     <a href="/account/profile.php" class="btn btn-primary btn-sm">Edit profile</a>
     <a href="/account/password.php" class="btn btn-ghost btn-sm">Change password</a>
   </div>
-</div>
-
-<div class="portal-card">
-  <h2>Coming soon</h2>
-  <p class="muted">More account features will appear here as we add them &mdash; invoices, support tickets and the rest.</p>
 </div>
 
 <?php require __DIR__ . '/../auth/portal-footer.php'; ?>
