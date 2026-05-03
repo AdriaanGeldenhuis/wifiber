@@ -1,6 +1,11 @@
 # --- Pretty URLs: /pricing -> /pricing.php ----------------------------------
 RewriteEngine On
 
+# Make sure /account/ and /admin/ resolve to their index.php — some shared
+# hosts don't have index.php in the global DirectoryIndex, which causes a
+# bare directory request to 403 instead of running the PHP file.
+DirectoryIndex index.php index.html
+
 # Force HTTPS
 RewriteCond %{HTTPS} !=on
 RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
@@ -23,6 +28,11 @@ RewriteRule ^([^/.]+)/([^/.]+)$ /$1/$2.php [L]
 
 # /sitemap.xml -> /sitemap.php (auto-generated XML)
 RewriteRule ^sitemap\.xml$ /sitemap.php [L]
+
+# /favicon.ico -> the site logo. Browsers request this URL automatically
+# even when <link rel="icon"> points elsewhere, so without this rule every
+# page load logs a 404.
+RewriteRule ^favicon\.ico$ /assets/images/logo-300.webp [L]
 
 # --- Security ----------------------------------------------------------------
 # Block dotfiles (e.g. .git, .env)
