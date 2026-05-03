@@ -11,6 +11,7 @@ $page_title = 'Network map';
 $active_key = 'map';
 require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/sites.php';
+require_once __DIR__ . '/../auth/uisp_sync.php';
 
 $is_ajax = !empty($_GET['ajax']);
 $reply   = function (array $payload) use ($is_ajax) {
@@ -41,6 +42,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'target_type' => 'site', 'target_id' => $newid,
                 ]);
                 $reply(['ok' => true, 'id' => $newid, 'message' => $id ? 'Site updated.' : 'Site added.']);
+                break;
             }
 
             case 'move_site': {
@@ -50,6 +52,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 if ($id <= 0) $reply(['ok' => false, 'error' => 'No site id.']);
                 site_move($id, $lat, $lng);
                 $reply(['ok' => true]);
+                break;
             }
 
             case 'delete_site': {
@@ -58,12 +61,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 site_delete($id);
                 audit_log('site.delete', ['target_type' => 'site', 'target_id' => $id]);
                 $reply(['ok' => true, 'message' => 'Site removed.']);
+                break;
             }
 
             case 'add_link': {
                 $id = site_link_save($_POST);
                 audit_log('site_link.create', ['target_type' => 'site_link', 'target_id' => $id]);
                 $reply(['ok' => true, 'id' => $id, 'message' => 'Link added.']);
+                break;
             }
 
             case 'delete_link': {
@@ -72,6 +77,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 site_link_delete($id);
                 audit_log('site_link.delete', ['target_type' => 'site_link', 'target_id' => $id]);
                 $reply(['ok' => true, 'message' => 'Link removed.']);
+                break;
             }
 
             case 'move_client': {
@@ -88,6 +94,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     return $u;
                 });
                 $reply(['ok' => true]);
+                break;
             }
 
             case 'geocode_client': {
@@ -109,6 +116,66 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'display_name' => $hit['display_name'],
                     'message' => 'Located: ' . $hit['display_name'],
                 ]);
+                break;
+            }
+
+            case 'uisp_sync': {
+                $r = uisp_sync_all();
+                $reply([
+                    'ok'      => !empty($r['ok']),
+                    'message' => !empty($r['ok']) ? 'Sync OK.' : 'Sync failed: ' . implode(' | ', $r['errors'] ?? []),
+                    'counts'  => $r['counts'] ?? null,
+                    'errors'  => $r['errors'] ?? null,
+                ]);
+                break;
+            }
+
+            case 'link_site': {
+                $site_id = (int)($_POST['site_id'] ?? 0);
+                $uisp_id = trim((string)($_POST['uisp_id'] ?? ''));
+                if ($site_id <= 0 || $uisp_id === '') {
+                    $reply(['ok' => false, 'error' => 'Pick a site and a UISP id.']);
+                }
+                pdo()->prepare("UPDATE sites SET uisp_id = ? WHERE id = ?")->execute([$uisp_id, $site_id]);
+                audit_log('uisp.link_site', [
+                    'target_type' => 'site', 'target_id' => $site_id,
+                    'meta' => ['uisp_id' => $uisp_id],
+                ]);
+                $reply(['ok' => true, 'message' => 'Linked to UISP.']);
+                break;
+            }
+
+            case 'unlink_site': {
+                $site_id = (int)($_POST['site_id'] ?? 0);
+                if ($site_id <= 0) $reply(['ok' => false, 'error' => 'No site id.']);
+                pdo()->prepare("UPDATE sites SET uisp_id = NULL WHERE id = ?")->execute([$site_id]);
+                audit_log('uisp.unlink_site', ['target_type' => 'site', 'target_id' => $site_id]);
+                $reply(['ok' => true, 'message' => 'Unlinked.']);
+                break;
+            }
+
+            case 'link_client': {
+                $user_id = (int)($_POST['user_id'] ?? 0);
+                $uisp_id = trim((string)($_POST['uisp_id'] ?? ''));
+                if ($user_id <= 0 || $uisp_id === '') {
+                    $reply(['ok' => false, 'error' => 'Pick a client and a UISP id.']);
+                }
+                pdo()->prepare("UPDATE users SET uisp_client_id = ? WHERE id = ?")->execute([$uisp_id, $user_id]);
+                audit_log('uisp.link_client', [
+                    'target_type' => 'user', 'target_id' => $user_id,
+                    'meta' => ['uisp_client_id' => $uisp_id],
+                ]);
+                $reply(['ok' => true, 'message' => 'Linked to UISP.']);
+                break;
+            }
+
+            case 'unlink_client': {
+                $user_id = (int)($_POST['user_id'] ?? 0);
+                if ($user_id <= 0) $reply(['ok' => false, 'error' => 'No user id.']);
+                pdo()->prepare("UPDATE users SET uisp_client_id = NULL WHERE id = ?")->execute([$user_id]);
+                audit_log('uisp.unlink_client', ['target_type' => 'user', 'target_id' => $user_id]);
+                $reply(['ok' => true, 'message' => 'Unlinked.']);
+                break;
             }
 
             default:
@@ -119,9 +186,31 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
+// Auto-sync on page load if cache is older than the configured interval.
+// uisp_sync_all() is itself rate-limited (60s lock), so concurrent loads
+// don't pile up. Failures are non-fatal — we just flag $uisp_offline so
+// the map renders the cached snapshot with a banner.
+$uisp_offline = false;
+if (uisp_should_auto_sync()) {
+    try {
+        $r = uisp_sync_all();
+        if (empty($r['ok'])) $uisp_offline = true;
+    } catch (Throwable $e) {
+        error_log('UISP auto-sync threw: ' . $e->getMessage());
+        $uisp_offline = true;
+    }
+}
+
 $sites    = sites_all(false);
 $links    = site_links_all();
 $clients  = array_values(array_filter(load_users(), fn($u) => ($u['role'] ?? '') === 'client'));
+
+$uisp_cfg     = uisp_config();
+$uisp_enabled = uisp_is_configured();
+$uisp_sites_c   = $uisp_enabled ? uisp_sites_cached()      : [];
+$uisp_devices_c = $uisp_enabled ? uisp_devices_cached()    : [];
+$uisp_links_c   = $uisp_enabled ? uisp_data_links_cached() : [];
+$uisp_clients_c = $uisp_enabled ? uisp_clients_cached()    : [];
 
 $map_data = [
     'csrf'       => csrf_token(),
@@ -132,6 +221,7 @@ $map_data = [
         'lat' => $s['lat'], 'lng' => $s['lng'],
         'coverage_radius_m' => $s['coverage_radius_m'],
         'notes' => $s['notes'],
+        'uisp_id' => $s['uisp_id'] ?? null,
     ], $sites),
     'site_links' => array_map(fn($l) => [
         'id' => $l['id'], 'from_site_id' => $l['from_site_id'], 'to_site_id' => $l['to_site_id'],
@@ -139,15 +229,66 @@ $map_data = [
         'capacity_mbps' => $l['capacity_mbps'], 'frequency' => $l['frequency'],
     ], $links),
     'clients'    => array_map(fn($c) => [
-        'id'         => (int)$c['id'],
-        'username'   => $c['username'],
-        'name'       => $c['name'],
-        'account_no' => $c['account_no'] ?? null,
-        'status'     => $c['status']     ?? 'active',
-        'address'    => $c['address']    ?? '',
-        'lat'        => $c['lat']        !== null ? (float)$c['lat'] : null,
-        'lng'        => $c['lng']        !== null ? (float)$c['lng'] : null,
+        'id'             => (int)$c['id'],
+        'username'       => $c['username'],
+        'name'           => $c['name'],
+        'account_no'     => $c['account_no'] ?? null,
+        'status'         => $c['status']     ?? 'active',
+        'address'        => $c['address']    ?? '',
+        'lat'            => $c['lat']        !== null ? (float)$c['lat'] : null,
+        'lng'            => $c['lng']        !== null ? (float)$c['lng'] : null,
+        'uisp_client_id' => $c['uisp_client_id'] ?? null,
     ], $clients),
+    'uisp' => [
+        'enabled'      => $uisp_enabled,
+        'offline'      => $uisp_offline,
+        'last_sync_at' => $uisp_cfg['last_sync_at'] ?? null,
+        'sites' => array_map(fn($s) => [
+            'uisp_id' => $s['uisp_id'],
+            'name'    => $s['name'],
+            'address' => $s['address'],
+            'lat'     => $s['lat'] !== null ? (float)$s['lat'] : null,
+            'lng'     => $s['lng'] !== null ? (float)$s['lng'] : null,
+            'status'  => $s['status'],
+            'is_stale'=> (int)$s['is_stale'],
+        ], $uisp_sites_c),
+        'devices' => array_map(fn($d) => [
+            'uisp_id'      => $d['uisp_id'],
+            'uisp_site_id' => $d['uisp_site_id'],
+            'name'         => $d['name'],
+            'type'         => $d['type'],
+            'model'        => $d['model'],
+            'mac'          => $d['mac'],
+            'ip'           => $d['ip'],
+            'role'         => $d['role'],
+            'status'       => $d['status'],
+            'signal_dbm'   => $d['signal_dbm'] !== null ? (int)$d['signal_dbm'] : null,
+            'lat'          => $d['lat'] !== null ? (float)$d['lat'] : null,
+            'lng'          => $d['lng'] !== null ? (float)$d['lng'] : null,
+            'last_seen_at' => $d['last_seen_at'],
+            'is_stale'     => (int)$d['is_stale'],
+        ], $uisp_devices_c),
+        'data_links' => array_map(fn($l) => [
+            'uisp_id'             => $l['uisp_id'],
+            'from_device_uisp_id' => $l['from_device_uisp_id'],
+            'to_device_uisp_id'   => $l['to_device_uisp_id'],
+            'frequency'           => $l['frequency'],
+            'capacity_mbps'       => $l['capacity_mbps'] !== null ? (float)$l['capacity_mbps'] : null,
+            'status'              => $l['status'],
+            'is_stale'            => (int)$l['is_stale'],
+        ], $uisp_links_c),
+        'clients' => array_map(fn($c) => [
+            'uisp_id'      => $c['uisp_id'],
+            'name'         => $c['name'],
+            'email'        => $c['email'],
+            'account_no'   => $c['account_no'],
+            'address_full' => $c['address_full'],
+            'lat'          => $c['lat'] !== null ? (float)$c['lat'] : null,
+            'lng'          => $c['lng'] !== null ? (float)$c['lng'] : null,
+            'status'       => $c['status'],
+            'is_stale'     => (int)$c['is_stale'],
+        ], $uisp_clients_c),
+    ],
 ];
 ?>
 
@@ -203,9 +344,33 @@ $map_data = [
   .map-popup .row { display:flex; gap:6px; }
   .map-popup .row > * { flex:1; }
   .map-mode-active { box-shadow:0 0 0 2px var(--accent, #0cf) inset; }
+
+  /* UISP banner / status pill */
+  .map-uisp-banner {
+    padding: 6px 14px;
+    background: rgba(255, 80, 80, 0.18);
+    border-bottom: 1px solid rgba(255, 80, 80, 0.4);
+    color: #fff; font-size: 12px;
+    flex-shrink: 0;
+  }
+  .map-uisp-pill {
+    display:inline-flex; align-items:center; gap:5px;
+    padding:1px 6px; border-radius:8px; font-size:10px;
+    background: rgba(255,255,255,0.08); color: var(--text,#fff);
+  }
+  .map-uisp-pill.online    { background: rgba(0,200,128,0.25); }
+  .map-uisp-pill.offline   { background: rgba(220,80,80,0.30); }
+  .map-uisp-pill.unknown   { background: rgba(180,180,180,0.30); }
+  .map-uisp-pill.stale     { background: rgba(255,180,80,0.30); }
 </style>
 
 <div class="map-fs">
+  <?php if ($uisp_enabled && $uisp_offline): ?>
+    <div class="map-uisp-banner" id="uisp-offline-banner">
+      UISP is unreachable — showing the last cached snapshot.
+      <a href="/admin/uisp.php" style="color:#fff;text-decoration:underline;">Check connection</a>
+    </div>
+  <?php endif; ?>
   <div class="map-bar">
     <h1>Network map</h1>
 
@@ -226,6 +391,16 @@ $map_data = [
       <label class="inline-check"><input type="checkbox" id="toggle-coverage">       Rings</label>
     </div>
 
+    <?php if ($uisp_enabled): ?>
+      <div class="sep"></div>
+      <div class="group" title="UISP overlay layers">
+        <label class="inline-check"><input type="checkbox" id="toggle-uisp-sites"   checked> UISP sites</label>
+        <label class="inline-check"><input type="checkbox" id="toggle-uisp-devices" checked> Devices</label>
+        <label class="inline-check"><input type="checkbox" id="toggle-uisp-links"   checked> UISP links</label>
+        <label class="inline-check"><input type="checkbox" id="toggle-uisp-clients" checked> UISP clients</label>
+      </div>
+    <?php endif; ?>
+
     <div class="sep"></div>
 
     <div class="map-counts">
@@ -233,6 +408,9 @@ $map_data = [
       <span>Links <strong id="count-links"><?= count($links) ?></strong></span>
       <span>Clients <strong id="count-clients"><?= count($clients) ?></strong></span>
       <span>Unplaced <strong id="count-unplaced"><?= count(array_filter($clients, fn($c) => $c['lat'] === null || $c['lng'] === null)) ?></strong></span>
+      <?php if ($uisp_enabled): ?>
+        <span>UISP devices <strong id="count-uisp-devices"><?= count($uisp_devices_c) ?></strong></span>
+      <?php endif; ?>
     </div>
 
     <div class="sep"></div>
@@ -240,6 +418,13 @@ $map_data = [
     <div class="group">
       <button id="geocode-all-btn" type="button" class="btn btn-ghost btn-sm">Geocode unplaced</button>
       <span id="geocode-status"></span>
+      <?php if ($uisp_enabled): ?>
+        <button id="uisp-sync-btn" type="button" class="btn btn-ghost btn-sm" title="Refresh UISP cache">Sync UISP</button>
+        <span id="uisp-sync-status" class="muted"
+              <?php if (!empty($uisp_cfg['last_sync_at'])): ?>title="Last sync: <?= htmlspecialchars((string)$uisp_cfg['last_sync_at']) ?>"<?php endif; ?>></span>
+      <?php else: ?>
+        <a href="/admin/uisp.php" class="btn btn-ghost btn-sm">Connect UISP</a>
+      <?php endif; ?>
     </div>
 
     <div class="map-legend" style="margin-left:auto;">
