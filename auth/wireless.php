@@ -532,15 +532,19 @@ function device_credentials_unlock(array $row): ?array {
 
 /* ------------------------------------------------- change-job queue */
 
-function wireless_change_job_enqueue(string $scope, int $scope_id, int $requested_by, array $payload): int {
+function wireless_change_job_enqueue(string $scope, int $scope_id, int $requested_by, array $payload, ?string $scheduled_for = null): int {
     if (!in_array($scope, CHANGE_SCOPES, true)) {
         throw new InvalidArgumentException("Unknown change scope: $scope");
     }
     if ($scope_id <= 0) throw new InvalidArgumentException('scope_id required');
     pdo()->prepare(
-        "INSERT INTO wireless_change_jobs (scope, scope_id, requested_by, payload_json)
-         VALUES (?, ?, ?, ?)"
-    )->execute([$scope, $scope_id, $requested_by ?: null, json_encode($payload, JSON_UNESCAPED_SLASHES)]);
+        "INSERT INTO wireless_change_jobs (scope, scope_id, requested_by, payload_json, scheduled_for)
+         VALUES (?, ?, ?, ?, ?)"
+    )->execute([
+        $scope, $scope_id, $requested_by ?: null,
+        json_encode($payload, JSON_UNESCAPED_SLASHES),
+        $scheduled_for !== null && $scheduled_for !== '' ? $scheduled_for : null,
+    ]);
     return (int)pdo()->lastInsertId();
 }
 
@@ -556,6 +560,7 @@ function wireless_change_jobs_pending(int $limit = 20): array {
     $stmt = pdo()->prepare(
         "SELECT * FROM wireless_change_jobs
           WHERE status = 'queued'
+            AND (scheduled_for IS NULL OR scheduled_for <= NOW())
           ORDER BY created_at ASC, id ASC
           LIMIT $limit"
     );
@@ -606,6 +611,68 @@ function wireless_change_job_mark(int $id, string $status, array $patch = []): v
     $args[] = $id;
     pdo()->prepare("UPDATE wireless_change_jobs SET " . implode(', ', $sets) . " WHERE id = ?")
         ->execute($args);
+}
+
+/* ------------------------------------------------ maintenance windows */
+
+const MAINTENANCE_SCOPES = ['site','sector','device','tower','core'];
+
+function maintenance_window_save(array $data, ?int $id = null): int {
+    $scope = in_array($data['scope'] ?? '', MAINTENANCE_SCOPES, true) ? $data['scope'] : 'sector';
+    $scope_id = (int)($data['scope_id'] ?? 0);
+    if ($scope_id <= 0) throw new InvalidArgumentException('scope_id required');
+    $starts = (string)($data['starts_at'] ?? '');
+    $ends   = (string)($data['ends_at']   ?? '');
+    if ($starts === '' || $ends === '') throw new InvalidArgumentException('starts_at and ends_at required');
+    $args = [
+        $scope, $scope_id, $starts, $ends,
+        mb_substr((string)($data['reason'] ?? ''), 0, 255),
+        !empty($data['notify_customers']) ? 1 : 0,
+        !empty($data['created_by']) ? (int)$data['created_by'] : null,
+    ];
+    if ($id) {
+        $args[] = $id;
+        pdo()->prepare(
+            "UPDATE maintenance_windows
+                SET scope=?, scope_id=?, starts_at=?, ends_at=?, reason=?, notify_customers=?, created_by=?
+              WHERE id=?"
+        )->execute($args);
+        return $id;
+    }
+    pdo()->prepare(
+        "INSERT INTO maintenance_windows
+            (scope, scope_id, starts_at, ends_at, reason, notify_customers, created_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?)"
+    )->execute($args);
+    return (int)pdo()->lastInsertId();
+}
+
+function maintenance_window_delete(int $id): bool {
+    return pdo()->prepare("DELETE FROM maintenance_windows WHERE id = ?")->execute([$id]);
+}
+
+function maintenance_windows_active(string $scope, int $scope_id): array {
+    $stmt = pdo()->prepare(
+        "SELECT * FROM maintenance_windows
+          WHERE scope = ? AND scope_id = ?
+            AND starts_at <= NOW() AND ends_at >= NOW()
+          ORDER BY starts_at DESC"
+    );
+    $stmt->execute([$scope, $scope_id]);
+    return $stmt->fetchAll();
+}
+
+function maintenance_windows_all(int $limit = 50): array {
+    $limit = max(1, min(500, $limit));
+    $stmt = pdo()->prepare(
+        "SELECT mw.*, u.name AS creator_name
+           FROM maintenance_windows mw
+           LEFT JOIN users u ON u.id = mw.created_by
+          ORDER BY (ends_at < NOW()), starts_at DESC
+          LIMIT $limit"
+    );
+    $stmt->execute();
+    return $stmt->fetchAll();
 }
 
 function wireless_change_log_record(array $row): int {

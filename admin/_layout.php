@@ -23,9 +23,10 @@ $nav = [
         ['key' => 'reports',   'label' => 'Reports',   'href' => '/admin/reports.php'],
     ]],
     ['group' => 'Operations', 'items' => [
-        ['key' => 'incidents', 'label' => 'Service status',  'href' => '/admin/incidents.php'],
-        ['key' => 'outages',   'label' => 'Outages',         'href' => '/admin/outages.php'],
-        ['key' => 'tickets',   'label' => 'Support tickets', 'href' => '/admin/tickets.php'],
+        ['key' => 'incidents',   'label' => 'Service status',     'href' => '/admin/incidents.php'],
+        ['key' => 'outages',     'label' => 'Outages',            'href' => '/admin/outages.php'],
+        ['key' => 'maintenance', 'label' => 'Maintenance windows','href' => '/admin/maintenance.php'],
+        ['key' => 'tickets',     'label' => 'Support tickets',    'href' => '/admin/tickets.php'],
     ]],
     ['group' => 'Network', 'items' => [
         ['key' => 'coverage',     'label' => 'Coverage',         'href' => '/admin/coverage.php'],

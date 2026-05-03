@@ -89,8 +89,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             header('Location: ' . $self);
             exit;
         }
+        $sched = trim((string)($_POST['scheduled_for'] ?? ''));
+        if ($sched !== '') $sched = str_replace('T', ' ', $sched) . ':00';
         try {
-            $job_id = wireless_change_job_enqueue('sector', $id, (int)$user['id'], $payload);
+            $job_id = wireless_change_job_enqueue('sector', $id, (int)$user['id'], $payload, $sched ?: null);
             audit_log('sector.config_queued', [
                 'target_type' => 'sector', 'target_id' => $id,
                 'meta' => ['job_id' => $job_id, 'payload_keys' => array_keys($payload)],
@@ -256,6 +258,10 @@ $status_pill = function (string $s): string {
     </div>
     <div class="field"><label>New WPA key</label>
       <input type="password" name="wpa_key" autocomplete="new-password"></div>
+    <div class="field"><label>Schedule for (optional)</label>
+      <input type="datetime-local" name="scheduled_for">
+      <small class="muted">Empty = run as soon as the worker picks it up.</small>
+    </div>
     <?php if (!empty($user['totp_enabled'])): ?>
       <div class="field"><label>Two-factor code *</label>
         <input type="text" inputmode="numeric" pattern="\d{6}" maxlength="6" name="totp_code" required autocomplete="one-time-code">

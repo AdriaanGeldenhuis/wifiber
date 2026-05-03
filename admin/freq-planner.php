@@ -52,11 +52,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
 $sectors = sectors_all(null);
 
-// 5 GHz channels: 5180..5825 MHz in 20 MHz steps. Drop DFS-only
-// frequencies for sectors with dfs_enabled=0 (we ignore that nuance
-// here; planner is informational).
+$band = $_GET['band'] ?? '5GHz';
 $channels = [];
-for ($mhz = 5180; $mhz <= 5825; $mhz += 20) $channels[] = $mhz;
+switch ($band) {
+    case '2.4GHz':
+        // 2.4 GHz channels 1-13 in 5 MHz steps (centre frequencies).
+        for ($mhz = 2412; $mhz <= 2472; $mhz += 5) $channels[] = $mhz;
+        break;
+    case '6GHz':
+        // U-NII-5 + 6 + 7 + 8: 5945..7125 MHz in 20 MHz steps.
+        for ($mhz = 5945; $mhz <= 7125; $mhz += 20) $channels[] = $mhz;
+        break;
+    case '60GHz':
+        // 802.11ad/ay: 4 channels at 2.16 GHz each.
+        $channels = [58320, 60480, 62640, 64800];
+        break;
+    case '5GHz':
+    default:
+        // 5 GHz channels: 5180..5825 MHz in 20 MHz steps.
+        for ($mhz = 5180; $mhz <= 5825; $mhz += 20) $channels[] = $mhz;
+}
+// Filter sectors to the chosen band so the matrix isn't a sea of greys.
+$sectors = array_values(array_filter($sectors, fn ($s) => $s['band'] === $band));
 
 // Per-sector RF map: aggregate the worst RSSI seen on each channel
 // over the last 24h, from the AP device's rf_environment_samples.
@@ -128,6 +145,16 @@ $h = fn ($v) => htmlspecialchars((string)$v, ENT_QUOTES);
 </div>
 
 <div class="portal-card">
+  <h2>Band</h2>
+  <form method="get" class="form" style="display:flex;gap:6px;align-items:center;">
+    <?php foreach (['2.4GHz','5GHz','6GHz','60GHz'] as $b): ?>
+      <a href="?band=<?= urlencode($b) ?>"
+         class="btn btn-<?= $band === $b ? 'primary' : 'ghost' ?> btn-sm"><?= htmlspecialchars($b) ?></a>
+    <?php endforeach; ?>
+  </form>
+</div>
+
+<div class="portal-card">
   <h2>Legend</h2>
   <div class="fp-legend">
     <span style="background:rgb(34,197,94);">quiet</span>
@@ -143,7 +170,7 @@ $h = fn ($v) => htmlspecialchars((string)$v, ENT_QUOTES);
   </div>
 <?php else: ?>
 <div class="portal-card">
-  <h2>5 GHz channel utilisation (last 24h)</h2>
+  <h2><?= htmlspecialchars($band) ?> channel utilisation (last 24h)</h2>
   <div style="overflow-x:auto;">
   <table class="fp-grid">
     <thead>

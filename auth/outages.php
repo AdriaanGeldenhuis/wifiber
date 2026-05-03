@@ -45,20 +45,38 @@ function outage_create(string $scope, ?int $scope_id, string $label, int $affect
     if (!in_array($scope, OUTAGE_SCOPES, true)) {
         throw new InvalidArgumentException("Unknown outage scope: $scope");
     }
+    // Suppress notifications when a maintenance window covers this scope
+    // (planned pole-swap, scheduled freq move, etc.).
+    $suppress = false;
+    if ($scope_id) {
+        $mw = pdo()->prepare(
+            "SELECT id, notify_customers FROM maintenance_windows
+              WHERE scope = ? AND scope_id = ?
+                AND starts_at <= NOW() AND ends_at >= NOW()
+              LIMIT 1"
+        );
+        $mw->execute([$scope, $scope_id]);
+        $row = $mw->fetch();
+        if ($row && empty($row['notify_customers'])) {
+            $suppress = true;
+        }
+    }
     pdo()->prepare(
-        "INSERT INTO outages (scope, scope_id, scope_label, status, affected_count, cause, started_at)
-         VALUES (?, ?, ?, 'active', ?, ?, NOW())"
-    )->execute([$scope, $scope_id, $label, $affected, $cause]);
+        "INSERT INTO outages (scope, scope_id, scope_label, status, affected_count, cause, started_at, suppressed)
+         VALUES (?, ?, ?, 'active', ?, ?, NOW(), ?)"
+    )->execute([$scope, $scope_id, $label, $affected, $cause, $suppress ? 1 : 0]);
     $id = (int)pdo()->lastInsertId();
 
-    // Fire-and-forget customer notifications. Best-effort: failures are
-    // recorded as audit_log rows but don't block outage creation. Skip
-    // notifications for tower/core scope until we know who is affected.
-    if ($scope === 'sector' && $scope_id) {
+    if ($scope === 'sector' && $scope_id && !$suppress) {
         $sent = outage_notify_affected($id, $scope_id, $label, $cause);
         audit_log('outage.notify', [
             'target_type' => 'outage', 'target_id' => $id,
             'meta' => $sent,
+        ]);
+    } elseif ($suppress) {
+        audit_log('outage.suppressed', [
+            'target_type' => 'outage', 'target_id' => $id,
+            'meta' => ['reason' => 'maintenance_window_active'],
         ]);
     }
 
