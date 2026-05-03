@@ -234,6 +234,25 @@ code   { background: var(--bg-elev); padding: 2px 6px; border-radius: 4px; font-
 }
 .data-table th { color: var(--text-muted); font-weight: 500; text-transform: uppercase; letter-spacing: .08em; font-size: .72rem; }
 .data-table tr:hover td { background: rgba(255,255,255,.02); }
+
+/* On phones, scroll wide tables horizontally instead of breaking the
+   column layout. The wrapping <div class="table-scroll"> gives a
+   shaded gradient on the right edge so users know there's more. */
+.table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+  border-radius: var(--radius-sm);
+  background:
+    linear-gradient(90deg, var(--bg-card) 30%, transparent),
+    linear-gradient(90deg, transparent, var(--bg-card) 70%) 100% 0,
+    radial-gradient(farthest-side at 0 50%, rgba(0,0,0,.4), transparent),
+    radial-gradient(farthest-side at 100% 50%, rgba(0,0,0,.4), transparent) 100% 0;
+  background-repeat: no-repeat;
+  background-size: 40px 100%, 40px 100%, 14px 100%, 14px 100%;
+  background-attachment: local, local, scroll, scroll;
+}
+.table-scroll .data-table { min-width: 720px; }
 .row-actions { white-space: nowrap; display: flex; gap: 8px; align-items: center; }
 .row-actions details summary {
   cursor: pointer;
@@ -277,6 +296,206 @@ code   { background: var(--bg-elev); padding: 2px 6px; border-radius: 4px; font-
 .kv li span { color: var(--text-muted); }
 .kv li strong { color: var(--text); font-weight: 600; }
 
+/* ---------- Global focus ring ----------
+   Use focus-visible so mouse clicks don't paint rings, but keyboard
+   tabs and screen-reader focus do. Applies to anything interactive
+   that doesn't already have a custom focus rule above. */
+a:focus-visible,
+button:focus-visible,
+summary:focus-visible,
+[role="button"]:focus-visible,
+input[type="checkbox"]:focus-visible,
+input[type="radio"]:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: var(--radius-sm);
+}
+
+/* ---------- Status pills with icon prefix ----------
+   Adding a glyph next to the colour means colour-blind users still
+   parse the state at a glance. Pills already exist (.status-pill);
+   this just augments them with a small mono icon. */
+.status-pill::before {
+  display: inline-block;
+  margin-right: 5px;
+  font-family: ui-monospace, monospace;
+  font-size: .85em;
+  vertical-align: -1px;
+}
+.status-pill.status-paid::before,
+.status-pill.status-resolved::before,
+.status-pill.status-converted::before { content: '✓'; }
+.status-pill.status-overdue::before,
+.status-pill.status-cancelled::before { content: '✕'; }
+.status-pill.status-unpaid::before,
+.status-pill.status-open::before,
+.status-pill.status-investigating::before { content: '●'; }
+.status-pill.status-in_progress::before,
+.status-pill.status-monitoring::before,
+.status-pill.status-identified::before { content: '◐'; }
+.status-pill.status-closed::before { content: '◌'; }
+
+/* ---------- Empty state ----------
+   Used inside list pages where a table or grid would otherwise sit
+   empty. Centred, accent icon, optional CTA button below.  */
+.empty-state {
+  text-align: center;
+  padding: 48px 24px;
+  background: var(--bg-card);
+  border: 1px dashed var(--border-strong);
+  border-radius: var(--radius);
+  color: var(--text-dim);
+}
+.empty-state .empty-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 56px; height: 56px;
+  border-radius: 50%;
+  background: var(--accent-soft);
+  color: var(--accent);
+  margin-bottom: 16px;
+  font-size: 24px;
+}
+.empty-state h3 { color: var(--text); font-size: 1.1rem; margin: 0 0 6px; }
+.empty-state p  { margin: 0 auto 16px; max-width: 380px; }
+.empty-state .btn { margin-top: 4px; }
+
+/* ---------- Copy button ----------
+   Tiny utility button that lives next to <code> snippets. Pair the
+   button with a hidden source it should copy via [data-copy-target]. */
+.copy-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  margin-left: 6px;
+  font-size: .72rem;
+  font-weight: 500;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+  transition: background .15s, color .15s, border-color .15s;
+  font-family: inherit;
+  vertical-align: middle;
+}
+.copy-btn:hover { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+.copy-btn.is-copied { background: var(--success); color: #001a08; border-color: var(--success); }
+.copy-btn.is-copied::after { content: ' ✓'; }
+
+/* ---------- Submit-button spinner ----------
+   The general form-submit listener in portal.js adds .is-loading on
+   click; this draws a small spinner inside the button and disables
+   pointer events. */
+.btn.is-loading {
+  position: relative;
+  pointer-events: none;
+  color: transparent !important;
+}
+.btn.is-loading::after {
+  content: '';
+  position: absolute;
+  top: 50%; left: 50%;
+  width: 14px; height: 14px;
+  margin: -7px 0 0 -7px;
+  border: 2px solid currentColor;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: btn-spin .7s linear infinite;
+  color: var(--accent);
+}
+@keyframes btn-spin { to { transform: rotate(360deg); } }
+
+/* ---------- Toast notifications ----------
+   portal.js exposes a window.toast(msg, type='info') helper that
+   appends a toast element to <body>; these are the styles. */
+.toast-stack {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 9999;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  pointer-events: none;
+}
+.toast {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  color: var(--text);
+  padding: 10px 16px;
+  border-radius: var(--radius-sm);
+  font-size: .9rem;
+  box-shadow: 0 6px 20px rgba(0,0,0,.4);
+  pointer-events: auto;
+  animation: toast-in .25s ease-out;
+}
+.toast.toast-success { border-left-color: var(--success); }
+.toast.toast-error   { border-left-color: var(--danger); }
+.toast.toast-warn    { border-left-color: #fbbf24; }
+.toast.is-leaving    { animation: toast-out .2s ease-in forwards; }
+@keyframes toast-in  { from { transform: translateX(20px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+@keyframes toast-out { to   { transform: translateX(20px); opacity: 0; } }
+
+/* ---------- Bulk selection toolbar ----------
+   Shown when at least one row checkbox in a .data-table is checked. */
+.bulk-bar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: none;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 16px;
+  margin-bottom: 12px;
+  background: var(--bg-card);
+  border: 1px solid var(--accent);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 4px 14px rgba(5,218,253,.1);
+}
+.bulk-bar.is-visible { display: flex; }
+.bulk-bar .bulk-count { color: var(--accent); font-weight: 600; font-size: .9rem; }
+.bulk-bar .bulk-actions { display: flex; gap: 6px; margin-left: auto; flex-wrap: wrap; }
+.bulk-bar .bulk-actions .btn { padding: 6px 12px; font-size: .82rem; }
+
+/* Bulk-select checkboxes inside data tables. */
+.data-table th.col-bulk,
+.data-table td.col-bulk { width: 36px; padding-right: 0; }
+.data-table .row-check { accent-color: var(--accent); cursor: pointer; }
+.data-table tr.is-selected td { background: var(--accent-soft); }
+
+/* Sparkline used on dashboard cards. */
+.sparkline {
+  display: block;
+  width: 100%;
+  height: 36px;
+  margin-top: 6px;
+}
+.sparkline-line   { fill: none; stroke: var(--accent); stroke-width: 1.5; }
+.sparkline-fill   { fill: var(--accent-soft); }
+
+/* Capacity bar — used by sectors page + map sector popup. */
+.cap-bar {
+  position: relative;
+  height: 6px;
+  border-radius: 999px;
+  background: rgba(255,255,255,.06);
+  overflow: hidden;
+  margin-top: 4px;
+}
+.cap-bar-fill {
+  display: block;
+  height: 100%;
+  background: var(--accent);
+  border-radius: inherit;
+  transition: width .3s ease, background .3s ease;
+}
+.cap-bar-fill.cap-warn  { background: #fbbf24; }
+.cap-bar-fill.cap-full  { background: var(--danger); }
+
 /* ---------- Mobile ---------- */
 @media (max-width: 800px) {
   body { flex-direction: column; }
@@ -295,6 +514,18 @@ code   { background: var(--bg-elev); padding: 2px 6px; border-radius: 4px; font-
   .portal-user-role { display: none; }
   .portal-logout { margin: 0; }
   .portal-main { padding: 24px 16px; }
+
+  /* Squeeze data tables onto narrow viewports without breaking columns. */
+  .portal-card { padding: 18px; }
+  .data-table th, .data-table td { padding: 9px 10px; font-size: .82rem; }
+  .row-actions details summary { padding: 5px 10px; font-size: .76rem; }
+
+  /* Bulk bar wraps on phones and the action buttons go full width. */
+  .bulk-bar { flex-wrap: wrap; padding: 8px 12px; }
+  .bulk-bar .bulk-actions { width: 100%; margin: 0; }
+
+  .toast-stack { bottom: 12px; right: 12px; left: 12px; }
+  .toast { font-size: .85rem; }
 }
 
 /* ---------- Slider editor rows ---------- */
