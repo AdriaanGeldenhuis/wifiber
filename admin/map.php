@@ -30,6 +30,42 @@ $reply   = function (array $payload) use ($is_ajax) {
     exit;
 };
 
+// Shape a sector row for the JS the same way the bootstrap payload
+// does, so the client can drop it straight into its index after a
+// create/update without a full reload.
+$sector_shape = function (array $s, ?array $ap_device): array {
+    return [
+        'id'                => (int)$s['id'],
+        'tower_id'          => (int)$s['tower_id'],
+        'ap_device_id'      => $s['ap_device_id'],
+        'ap_device_name'    => $ap_device['name'] ?? null,
+        'name'              => $s['name'],
+        'azimuth_deg'       => $s['azimuth_deg'],
+        'beamwidth_deg'     => $s['beamwidth_deg'],
+        'band'              => $s['band'],
+        'frequency_mhz'     => $s['frequency_mhz'],
+        'channel_width_mhz' => $s['channel_width_mhz'],
+        'tx_power_dbm'      => $s['tx_power_dbm'],
+        'max_clients'       => $s['max_clients'],
+        'notes'             => $s['notes'] ?? null,
+    ];
+};
+$device_shape = function (array $d): array {
+    return [
+        'id'           => (int)$d['id'],
+        'site_id'      => $d['site_id'],
+        'name'         => $d['name'],
+        'vendor'       => $d['vendor'],
+        'model'        => $d['model'],
+        'role'         => $d['role'],
+        'mac'          => $d['mac'] ?? '',
+        'mgmt_ip'      => $d['mgmt_ip'],
+        'status'       => $d['status'],
+        'notes'        => $d['notes'] ?? null,
+        'last_seen_at' => $d['last_seen_at'],
+    ];
+};
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_csrf();
     $action = $_POST['action'] ?? '';
@@ -118,6 +154,59 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'display_name' => $hit['display_name'],
                     'message' => 'Located: ' . $hit['display_name'],
                 ]);
+                break;
+            }
+
+            case 'add_sector':
+            case 'update_sector': {
+                $id    = $action === 'update_sector' ? (int)($_POST['id'] ?? 0) : null;
+                $newid = sector_save($_POST, $id);
+                audit_log('sector.' . ($id ? 'update' : 'create'), [
+                    'target_type' => 'sector', 'target_id' => $newid,
+                ]);
+                $row = sector_find($newid);
+                $ap  = (!empty($row['ap_device_id'])) ? device_find((int)$row['ap_device_id']) : null;
+                $reply([
+                    'ok'      => true,
+                    'id'      => $newid,
+                    'sector'  => $row ? $sector_shape($row, $ap) : null,
+                    'message' => $id ? 'Sector updated.' : 'Sector added.',
+                ]);
+                break;
+            }
+
+            case 'delete_sector': {
+                $id = (int)($_POST['id'] ?? 0);
+                if ($id <= 0) $reply(['ok' => false, 'error' => 'No sector id.']);
+                sector_delete($id);
+                audit_log('sector.delete', ['target_type' => 'sector', 'target_id' => $id]);
+                $reply(['ok' => true, 'message' => 'Sector removed.']);
+                break;
+            }
+
+            case 'add_device':
+            case 'update_device': {
+                $id    = $action === 'update_device' ? (int)($_POST['id'] ?? 0) : null;
+                $newid = device_save($_POST, $id);
+                audit_log('device.' . ($id ? 'update' : 'create'), [
+                    'target_type' => 'device', 'target_id' => $newid,
+                ]);
+                $row = device_find($newid);
+                $reply([
+                    'ok'      => true,
+                    'id'      => $newid,
+                    'device'  => $row ? $device_shape($row) : null,
+                    'message' => $id ? 'Device updated.' : 'Device added.',
+                ]);
+                break;
+            }
+
+            case 'delete_device': {
+                $id = (int)($_POST['id'] ?? 0);
+                if ($id <= 0) $reply(['ok' => false, 'error' => 'No device id.']);
+                device_delete($id);
+                audit_log('device.delete', ['target_type' => 'device', 'target_id' => $id]);
+                $reply(['ok' => true, 'message' => 'Device removed.']);
                 break;
             }
 
@@ -213,31 +302,10 @@ $map_data = [
         'sector_label'   => !empty($c['sector_id']) ? ($sector_label_by_id[(int)$c['sector_id']] ?? null) : null,
         'network_status' => !empty($c['sector_id']) ? ($sector_ap_status_by_id[(int)$c['sector_id']] ?? null) : null,
     ], $clients),
-    'devices' => array_map(fn($d) => [
-        'id'           => (int)$d['id'],
-        'site_id'      => $d['site_id'],
-        'name'         => $d['name'],
-        'vendor'       => $d['vendor'],
-        'model'        => $d['model'],
-        'role'         => $d['role'],
-        'mgmt_ip'      => $d['mgmt_ip'],
-        'status'       => $d['status'],
-        'last_seen_at' => $d['last_seen_at'],
-    ], $devices),
-    'sectors' => array_map(fn($s) => [
-        'id'                => (int)$s['id'],
-        'tower_id'          => (int)$s['tower_id'],
-        'ap_device_id'      => $s['ap_device_id'],
-        'ap_device_name'    => $s['ap_device_name'] ?? null,
-        'name'              => $s['name'],
-        'azimuth_deg'       => $s['azimuth_deg'],
-        'beamwidth_deg'     => $s['beamwidth_deg'],
-        'band'              => $s['band'],
-        'frequency_mhz'     => $s['frequency_mhz'],
-        'channel_width_mhz' => $s['channel_width_mhz'],
-        'tx_power_dbm'      => $s['tx_power_dbm'],
-        'max_clients'       => $s['max_clients'],
-    ], $sectors),
+    'devices' => array_map($device_shape, $devices),
+    'sectors' => array_map(fn($s) => $sector_shape($s, [
+        'name' => $s['ap_device_name'] ?? null,
+    ]), $sectors),
     'outages' => [
         'sector_ids'    => $outage_sector_ids,
         'tower_ids'     => $outage_tower_ids,
@@ -299,6 +367,27 @@ $map_data = [
   .map-popup .row { display:flex; gap:6px; }
   .map-popup .row > * { flex:1; }
   .map-mode-active { box-shadow:0 0 0 2px var(--accent, #0cf) inset; }
+
+  /* Inline-mode hint that appears under the toolbar while a draw mode is active. */
+  .map-hint {
+    display: none;
+    padding: 6px 14px;
+    background: rgba(5,218,253,0.10);
+    border-bottom: 1px solid rgba(5,218,253,0.25);
+    color: var(--accent, #05DAFD);
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+  /* Sector cone interactivity — light hover lift so they feel clickable. */
+  .leaflet-interactive:hover { filter: brightness(1.15); cursor: pointer; }
+  /* Popup links inside our map popups — keep them subtle but legible. */
+  .map-popup a[data-edit-device], .map-popup a[data-delete-device],
+  .map-popup a[data-edit-sector], .map-popup a[data-delete-sector],
+  .map-popup a[data-add-device],  .map-popup a[data-add-sector],
+  .map-popup a[data-focus-sector] { text-decoration: none; }
+  .map-popup a[data-edit-device]:hover, .map-popup a[data-edit-sector]:hover,
+  .map-popup a[data-add-device]:hover,  .map-popup a[data-add-sector]:hover,
+  .map-popup a[data-focus-sector]:hover { text-decoration: underline; }
 </style>
 
 <div class="map-fs">
@@ -357,6 +446,7 @@ $map_data = [
     </div>
   </div>
 
+  <div id="map-hint" class="map-hint"></div>
   <div id="map"></div>
 </div>
 
