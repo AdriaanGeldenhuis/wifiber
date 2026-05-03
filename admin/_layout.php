@@ -36,6 +36,7 @@ $nav = [
         ['key' => 'sectors',      'label' => 'Sectors',          'href' => '/admin/sectors.php'],
         ['key' => 'links',        'label' => 'Wireless links',   'href' => '/admin/links.php'],
         ['key' => 'freq-planner', 'label' => 'Frequency planner','href' => '/admin/freq-planner.php'],
+        ['key' => 'topology',     'label' => 'Topology review',  'href' => '/admin/topology-review.php'],
     ]],
     ['group' => 'Customers & Billing', 'items' => [
         ['key' => 'clients',  'label' => 'Clients',            'href' => '/admin/clients.php'],
