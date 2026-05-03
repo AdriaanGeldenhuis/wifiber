@@ -7,6 +7,7 @@ $page_title = 'Edit client';
 $active_key = 'clients';
 require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/products.php';
+require_once __DIR__ . '/../auth/sites.php';
 
 $id     = (int)($_GET['id'] ?? 0);
 $client = $id ? find_user_by_id($id) : null;
@@ -20,6 +21,26 @@ $errors = [];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_csrf();
+
+    if (($_POST['action'] ?? '') === 'geocode') {
+        if (empty($client['address'])) {
+            flash('error', 'Add a street address first.');
+        } else {
+            $hit = geocode_address((string)$client['address']);
+            if ($hit) {
+                update_user($id, function (array $u) use ($hit) {
+                    $u['lat'] = $hit['lat'];
+                    $u['lng'] = $hit['lng'];
+                    return $u;
+                });
+                flash('success', 'Located: ' . $hit['display_name']);
+            } else {
+                flash('error', 'Nominatim found nothing for that address. Place the marker manually on the network map.');
+            }
+        }
+        header('Location: /admin/client-edit.php?id=' . $id);
+        exit;
+    }
 
     $name    = trim($_POST['name']    ?? '');
     $surname = trim($_POST['surname'] ?? '');
@@ -185,7 +206,15 @@ $v = fn($k, $d = '') => htmlspecialchars((string)($client[$k] ?? $d), ENT_QUOTES
         <input type="text" name="lng" maxlength="20" value="<?= $v('lng') ?>" placeholder="27.8300000">
       </div>
     </div>
-    <p class="muted small">Once Phase 3 (network map) is wired up these will fill in automatically from the address, with drag-to-correct on the map. For now you can paste them in from Google Maps.</p>
+    <p class="muted small">
+      Use <strong>Geocode from address</strong> to call OpenStreetMap Nominatim and fill in the GPS, then fine-tune the marker on the <a href="/admin/map.php">network map</a>.
+    </p>
+    <div class="form-actions" style="margin-top:6px;">
+      <button type="submit" name="action" value="geocode" class="btn btn-ghost btn-sm" formnovalidate>Geocode from address</button>
+      <?php if (!empty($client['lat']) && !empty($client['lng'])): ?>
+        <a href="/admin/map.php" class="btn btn-ghost btn-sm">Open on network map</a>
+      <?php endif; ?>
+    </div>
   </div>
 
   <div class="portal-card">

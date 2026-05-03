@@ -23,6 +23,7 @@ $nav = [
     ['key' => 'tickets',   'label' => 'Support tickets', 'href' => '/admin/tickets.php'],
     ['key' => 'invoices',  'label' => 'Invoices',       'href' => '/admin/invoices.php'],
     ['key' => 'coverage',  'label' => 'Coverage',       'href' => '/admin/coverage.php'],
+    ['key' => 'map',       'label' => 'Network map',    'href' => '/admin/map.php'],
     ['key' => 'slides',    'label' => 'Hero slider',    'href' => '/admin/slides.php'],
     ['key' => 'pricing',   'label' => 'Pricing (public)', 'href' => '/admin/pricing.php'],
     ['key' => 'products',  'label' => 'Products (billing)', 'href' => '/admin/products.php'],
