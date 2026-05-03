@@ -186,6 +186,7 @@ $status_pill = function (string $status): string {
             <td><?= $status_pill($d['status']) ?></td>
             <td><small class="muted"><?= $d['last_seen_at'] ? htmlspecialchars($d['last_seen_at']) : 'never' ?></small></td>
             <td>
+              <a href="/admin/device-view.php?id=<?= (int)$d['id'] ?>" class="btn btn-ghost btn-sm" style="margin-right:4px;">View</a>
               <?php if ($d['mgmt_ip']): ?>
                 <form method="post" class="inline-form" style="display:inline-block;margin-right:4px;">
                   <?= csrf_field() ?>
