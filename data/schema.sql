@@ -81,3 +81,46 @@ CREATE TABLE IF NOT EXISTS ticket_messages (
   CONSTRAINT fk_ticket_msg_author
     FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS invoices (
+  id                INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  number            VARCHAR(40)   NOT NULL DEFAULT '',
+  user_id           INT UNSIGNED  NOT NULL,
+  status            ENUM('unpaid','paid','cancelled') NOT NULL DEFAULT 'unpaid',
+  issued_at         DATE          NOT NULL,
+  due_at            DATE          NOT NULL,
+  paid_at           DATETIME      DEFAULT NULL,
+  period_start      DATE          DEFAULT NULL,
+  subtotal          DECIMAL(10,2) NOT NULL DEFAULT 0,
+  vat_rate          DECIMAL(5,2)  NOT NULL DEFAULT 0,
+  vat_amount        DECIMAL(10,2) NOT NULL DEFAULT 0,
+  total             DECIMAL(10,2) NOT NULL DEFAULT 0,
+  notes             TEXT          DEFAULT NULL,
+  last_reminder_at  DATETIME      DEFAULT NULL,
+  created_by        INT UNSIGNED  DEFAULT NULL,
+  created_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uniq_number (number),
+  UNIQUE KEY uniq_user_period (user_id, period_start),
+  KEY idx_user (user_id),
+  KEY idx_status_due (status, due_at),
+  CONSTRAINT fk_invoices_user
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_invoices_creator
+    FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS invoice_items (
+  id           INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  invoice_id   INT UNSIGNED  NOT NULL,
+  description  VARCHAR(200)  NOT NULL,
+  quantity     DECIMAL(10,2) NOT NULL DEFAULT 1,
+  unit_price   DECIMAL(10,2) NOT NULL DEFAULT 0,
+  line_total   DECIMAL(10,2) NOT NULL DEFAULT 0,
+  sort_order   INT           NOT NULL DEFAULT 0,
+  PRIMARY KEY (id),
+  KEY idx_invoice (invoice_id, sort_order),
+  CONSTRAINT fk_invoice_items_inv
+    FOREIGN KEY (invoice_id) REFERENCES invoices(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

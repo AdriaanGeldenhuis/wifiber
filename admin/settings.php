@@ -25,6 +25,17 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'linkedin' => trim($_POST['social_linkedin'] ?? '#'),
             'youtube'  => trim($_POST['social_youtube']  ?? '#'),
         ],
+        'billing' => [
+            'vat_rate'              => is_numeric($_POST['vat_rate'] ?? null) ? 0 + $_POST['vat_rate'] : 15,
+            'currency_symbol'       => trim($_POST['currency_symbol']       ?? 'R '),
+            'payment_terms_days'    => max(1, (int)($_POST['payment_terms_days']  ?? 7)),
+            'bank_name'             => trim($_POST['bank_name']             ?? ''),
+            'bank_account_holder'   => trim($_POST['bank_account_holder']   ?? ''),
+            'bank_account_number'   => trim($_POST['bank_account_number']   ?? ''),
+            'bank_branch_code'      => trim($_POST['bank_branch_code']      ?? ''),
+            'bank_reference_format' => trim($_POST['bank_reference_format'] ?? '{number}'),
+            'payment_instructions'  => trim($_POST['payment_instructions']  ?? ''),
+        ],
     ];
 
     if ($new['name']    === '') $errors[] = 'Site name cannot be empty.';
@@ -137,6 +148,54 @@ $social = $data['social'] ?? [];
       <div class="field">
         <label>YouTube</label>
         <input type="text" name="social_youtube" maxlength="200" value="<?= htmlspecialchars($social['youtube'] ?? '#', ENT_QUOTES) ?>">
+      </div>
+    </div>
+  </div>
+
+  <?php $billing = $data['billing'] ?? []; ?>
+  <div class="portal-card">
+    <h2>Billing</h2>
+    <p class="muted">Used on invoices and the monthly auto-billing cron. Treat the
+      <code>/pricing</code> prices as VAT-inclusive — the system back-calculates the
+      ex-VAT line price when generating subscription invoices.</p>
+    <div class="form form-grid">
+      <div class="field">
+        <label>VAT rate (%)</label>
+        <input type="number" step="0.01" min="0" max="100" name="vat_rate" value="<?= htmlspecialchars((string)($billing['vat_rate'] ?? 15), ENT_QUOTES) ?>">
+      </div>
+      <div class="field">
+        <label>Currency symbol</label>
+        <input type="text" name="currency_symbol" maxlength="6" value="<?= htmlspecialchars((string)($billing['currency_symbol'] ?? 'R '), ENT_QUOTES) ?>" placeholder="R ">
+      </div>
+      <div class="field">
+        <label>Payment terms (days)</label>
+        <input type="number" min="1" max="120" name="payment_terms_days" value="<?= htmlspecialchars((string)($billing['payment_terms_days'] ?? 7), ENT_QUOTES) ?>">
+      </div>
+      <div class="field">
+        <label>Bank name</label>
+        <input type="text" name="bank_name" maxlength="80" value="<?= htmlspecialchars((string)($billing['bank_name'] ?? ''), ENT_QUOTES) ?>">
+      </div>
+      <div class="field">
+        <label>Account holder</label>
+        <input type="text" name="bank_account_holder" maxlength="120" value="<?= htmlspecialchars((string)($billing['bank_account_holder'] ?? ''), ENT_QUOTES) ?>">
+      </div>
+      <div class="field">
+        <label>Account number</label>
+        <input type="text" name="bank_account_number" maxlength="40" value="<?= htmlspecialchars((string)($billing['bank_account_number'] ?? ''), ENT_QUOTES) ?>">
+      </div>
+      <div class="field">
+        <label>Branch code</label>
+        <input type="text" name="bank_branch_code" maxlength="20" value="<?= htmlspecialchars((string)($billing['bank_branch_code'] ?? ''), ENT_QUOTES) ?>">
+      </div>
+      <div class="field">
+        <label>Payment reference format</label>
+        <input type="text" name="bank_reference_format" maxlength="60" value="<?= htmlspecialchars((string)($billing['bank_reference_format'] ?? '{number}'), ENT_QUOTES) ?>" placeholder="{number}">
+        <small class="muted">Placeholders: <code>{number}</code>, <code>{username}</code>, <code>{id}</code>.</small>
+      </div>
+      <div class="field" style="grid-column:1/-1;">
+        <label>Extra payment instructions</label>
+        <textarea name="payment_instructions" rows="3" maxlength="600"><?= htmlspecialchars((string)($billing['payment_instructions'] ?? ''), ENT_QUOTES) ?></textarea>
+        <small class="muted">Shown at the bottom of the invoice email.</small>
       </div>
     </div>
   </div>

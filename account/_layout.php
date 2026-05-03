@@ -10,6 +10,7 @@ $portal = 'account';
 $nav = [
     ['key' => 'dashboard', 'label' => 'Dashboard',       'href' => '/account/'],
     ['key' => 'profile',   'label' => 'My profile',      'href' => '/account/profile.php'],
+    ['key' => 'invoices',  'label' => 'Invoices',        'href' => '/account/invoices.php'],
     ['key' => 'tickets',   'label' => 'Support tickets', 'href' => '/account/tickets.php'],
     ['key' => 'password',  'label' => 'Change password', 'href' => '/account/password.php'],
 ];
