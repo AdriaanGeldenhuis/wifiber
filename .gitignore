@@ -18,8 +18,10 @@ node_modules/
 .env
 .env.local
 includes/secrets.php
+data/db.local.php
 
 # Runtime data (created in production / local dev, never committed)
 data/users.json
 data/throttle.json
 data/password-resets.json
+data/ticket-attachments/

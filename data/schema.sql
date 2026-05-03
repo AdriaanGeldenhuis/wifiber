@@ -45,3 +45,39 @@ CREATE TABLE IF NOT EXISTS password_resets (
   CONSTRAINT fk_pwreset_user
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS tickets (
+  id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id     INT UNSIGNED NOT NULL,
+  subject     VARCHAR(200) NOT NULL,
+  status      ENUM('open','in_progress','closed') NOT NULL DEFAULT 'open',
+  created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  closed_at   DATETIME     DEFAULT NULL,
+  PRIMARY KEY (id),
+  KEY idx_user (user_id),
+  KEY idx_status (status),
+  KEY idx_updated (updated_at),
+  CONSTRAINT fk_tickets_user
+    FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS ticket_messages (
+  id              INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  ticket_id       INT UNSIGNED NOT NULL,
+  author_id       INT UNSIGNED DEFAULT NULL,
+  author_role     ENUM('admin','client') NOT NULL,
+  author_label    VARCHAR(100) NOT NULL DEFAULT '',
+  body            TEXT         NOT NULL,
+  attachment_path VARCHAR(255) DEFAULT NULL,
+  attachment_name VARCHAR(255) DEFAULT NULL,
+  attachment_size INT UNSIGNED DEFAULT NULL,
+  created_at      DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_ticket (ticket_id, created_at),
+  KEY idx_author (author_id),
+  CONSTRAINT fk_ticket_msg_ticket
+    FOREIGN KEY (ticket_id) REFERENCES tickets(id) ON DELETE CASCADE,
+  CONSTRAINT fk_ticket_msg_author
+    FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

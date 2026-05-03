@@ -63,7 +63,11 @@ function pdo(): PDO {
     static $pdo = null;
     if ($pdo !== null) return $pdo;
 
-    $cfg_file = DATA_DIR . '/db.php';
+    // data/db.local.php (gitignored) wins over data/db.php so a developer
+    // can point the same code at a local MariaDB without touching prod creds.
+    $cfg_file = is_file(DATA_DIR . '/db.local.php')
+        ? DATA_DIR . '/db.local.php'
+        : DATA_DIR . '/db.php';
     if (!is_file($cfg_file)) {
         http_response_code(500);
         die('Database is not configured. Copy data/db.php.example to data/db.php and fill in the credentials.');
