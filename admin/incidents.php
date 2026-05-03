@@ -70,7 +70,7 @@ $active = incidents_active_all();
             <td class="muted small"><?= htmlspecialchars(substr((string)$i['started_at'], 0, 16)) ?></td>
             <td class="muted small"><?= $i['resolved_at'] ? htmlspecialchars(substr((string)$i['resolved_at'], 0, 16)) : '—' ?></td>
             <td class="row-actions">
-              <form method="post" class="inline-form" onsubmit="return confirm('Delete incident &quot;<?= htmlspecialchars($i['title'], ENT_QUOTES) ?>&quot;? Updates will be removed too.');">
+              <form method="post" class="inline-form" data-confirm="Delete incident &quot;<?= htmlspecialchars($i['title'], ENT_QUOTES) ?>&quot;? Updates will be removed too.">
                 <?= csrf_field() ?>
                 <input type="hidden" name="action" value="delete">
                 <input type="hidden" name="id" value="<?= (int)$i['id'] ?>">

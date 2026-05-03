@@ -106,7 +106,7 @@ $rows = invoices_all($filter ?: null);
                   </form>
                 <?php endif; ?>
                 <?php if ($inv['status'] !== 'cancelled'): ?>
-                  <form method="post" class="inline-form" onsubmit="return confirm('Cancel this invoice?');">
+                  <form method="post" class="inline-form" data-confirm="Cancel this invoice?">
                     <?= csrf_field() ?>
                     <input type="hidden" name="action" value="set_status">
                     <input type="hidden" name="id" value="<?= (int)$inv['id'] ?>">
@@ -122,7 +122,7 @@ $rows = invoices_all($filter ?: null);
                     <button class="btn btn-ghost btn-sm" type="submit">Email to client</button>
                   </form>
                 <?php endif; ?>
-                <form method="post" class="inline-form" onsubmit="return confirm('Permanently delete this invoice? This cannot be undone.');">
+                <form method="post" class="inline-form" data-confirm="Permanently delete this invoice? This cannot be undone.">
                   <?= csrf_field() ?>
                   <input type="hidden" name="action" value="delete">
                   <input type="hidden" name="id" value="<?= (int)$inv['id'] ?>">

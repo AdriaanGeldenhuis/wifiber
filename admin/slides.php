@@ -164,7 +164,7 @@ $show_form    = isset($_GET['edit']) || isset($_GET['add']);
             <button name="dir" value="down" class="btn btn-ghost btn-sm" <?= $i === count($slides) - 1 ? 'disabled' : '' ?>>&darr;</button>
           </form>
           <a href="?edit=<?= $i ?>" class="btn btn-ghost btn-sm">Edit</a>
-          <form method="post" class="inline-form" onsubmit="return confirm('Delete this slide?');">
+          <form method="post" class="inline-form" data-confirm="Delete this slide?">
             <?= csrf_field() ?>
             <input type="hidden" name="action" value="delete">
             <input type="hidden" name="idx" value="<?= $i ?>">

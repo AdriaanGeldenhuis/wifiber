@@ -146,7 +146,7 @@ $leads = $tab === 'waitlist' ? waitlist_all() : [];
                   <?= csrf_field() ?>
                   <input type="hidden" name="action" value="set_status">
                   <input type="hidden" name="id" value="<?= (int)$l['id'] ?>">
-                  <select name="status" onchange="this.form.submit()">
+                  <select name="status" data-auto-submit>
                     <?php foreach (WAITLIST_STATUSES as $s): ?>
                       <option value="<?= htmlspecialchars($s) ?>" <?= $l['status'] === $s ? 'selected' : '' ?>>
                         <?= htmlspecialchars(WAITLIST_STATUS_LABELS[$s]) ?>
@@ -156,7 +156,7 @@ $leads = $tab === 'waitlist' ? waitlist_all() : [];
                 </form>
               </td>
               <td class="row-actions">
-                <form method="post" class="inline-form" onsubmit="return confirm('Delete this lead?');">
+                <form method="post" class="inline-form" data-confirm="Delete this lead?">
                   <?= csrf_field() ?>
                   <input type="hidden" name="action" value="delete_lead">
                   <input type="hidden" name="id" value="<?= (int)$l['id'] ?>">

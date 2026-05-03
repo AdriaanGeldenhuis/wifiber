@@ -51,5 +51,6 @@
   </div>
 </footer>
 <script src="<?= asset('js/main.js') ?>" defer></script>
+<script src="<?= asset('js/portal.js') ?>" defer></script>
 </body>
 </html>

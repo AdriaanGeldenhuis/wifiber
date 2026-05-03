@@ -21,6 +21,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $u['password_hash'] = password_hash($new, PASSWORD_DEFAULT);
             return $u;
         });
+        audit_log('password.change', ['target_type' => 'user', 'target_id' => (int)$user['id']]);
         flash('success', 'Password updated.');
         header('Location: /admin/password.php');
         exit;

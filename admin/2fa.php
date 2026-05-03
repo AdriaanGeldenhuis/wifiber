@@ -40,6 +40,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $flash_codes = $codes;
             $enabled = true;
             $user = find_user_by_id((int)$user['id']);
+            audit_log('2fa.enable', ['target_type' => 'user', 'target_id' => (int)$user['id']]);
         }
     }
 
@@ -54,6 +55,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $u['totp_recovery_codes'] = [];
                 return $u;
             });
+            audit_log('2fa.disable', ['target_type' => 'user', 'target_id' => (int)$user['id']]);
             flash('success', 'Two-factor disabled.');
             header('Location: /admin/2fa.php');
             exit;
@@ -67,6 +69,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $u['totp_recovery_codes'] = $hashes;
             return $u;
         });
+        audit_log('2fa.regen_codes', ['target_type' => 'user', 'target_id' => (int)$user['id']]);
         $flash_codes = $codes;
         $user = find_user_by_id((int)$user['id']);
     }

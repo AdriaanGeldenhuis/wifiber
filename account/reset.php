@@ -27,6 +27,13 @@ if ($valid && $_SERVER['REQUEST_METHOD'] === 'POST') {
                 return $row;
             });
             pw_reset_invalidate_for_user((int)$u['id']);
+            audit_log('password.reset', [
+                'user_id'     => (int)$u['id'],
+                'username'    => (string)$u['username'],
+                'target_type' => 'user',
+                'target_id'   => (int)$u['id'],
+                'meta'        => ['portal' => 'account'],
+            ]);
             flash('success', 'Password updated. Please sign in with your new password.');
             header('Location: /account/login.php');
             exit;

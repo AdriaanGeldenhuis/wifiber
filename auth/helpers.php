@@ -21,6 +21,10 @@ const LOCKOUT_SECS    = 900;   // 15 min
 const PW_RESET_TTL    = 3600;  // 1 hour
 const SESSION_NAME    = 'wfsess';
 
+const POST_RATE_LIMIT_MAX    = 30;   // POSTs per IP
+const POST_RATE_LIMIT_WINDOW = 60;   // seconds
+const SESSION_IDLE_TIMEOUT   = 3600; // 1 hour idle -> auto-logout
+
 /* --------------------------------------------------------------- session */
 
 function start_session(): void {
@@ -231,12 +235,25 @@ function create_user(string $username, string $password, string $role, string $n
         password_hash($password, PASSWORD_DEFAULT),
     ]);
     $id = (int)pdo()->lastInsertId();
+    audit_log('user.create', [
+        'target_type' => 'user',
+        'target_id'   => $id,
+        'meta'        => ['username' => $username, 'role' => $role, 'email' => $email],
+    ]);
     return find_user_by_id($id) ?? [];
 }
 
 function delete_user(int $id): bool {
-    $stmt = pdo()->prepare("DELETE FROM users WHERE id = ?");
-    return $stmt->execute([$id]);
+    $u  = find_user_by_id($id);
+    $ok = pdo()->prepare("DELETE FROM users WHERE id = ?")->execute([$id]);
+    if ($ok && $u) {
+        audit_log('user.delete', [
+            'target_type' => 'user',
+            'target_id'   => $id,
+            'meta'        => ['username' => $u['username'] ?? '', 'role' => $u['role'] ?? ''],
+        ]);
+    }
+    return $ok;
 }
 
 /* --------------------------------------------------------------- login */
@@ -279,9 +296,17 @@ function attempt_login(string $username, string $password, string $required_role
     $valid = $user && password_verify($password, $user['password_hash'] ?? '');
     if (!$valid || ($user['role'] ?? '') !== $required_role) {
         record_login_fail($ip);
+        audit_log('login.fail', ['meta' => ['username' => $username, 'role' => $required_role]]);
         return null;
     }
     reset_login_fails($ip);
+    audit_log('login.success', [
+        'user_id'     => (int)$user['id'],
+        'username'    => (string)$user['username'],
+        'target_type' => 'user',
+        'target_id'   => (int)$user['id'],
+        'meta'        => ['role' => $user['role']],
+    ]);
 
     // Re-hash if PHP's defaults have moved on
     if (password_needs_rehash($user['password_hash'], PASSWORD_DEFAULT)) {
@@ -292,10 +317,11 @@ function attempt_login(string $username, string $password, string $required_role
     }
 
     session_regenerate_id(true);
-    $_SESSION['user_id']      = (int)$user['id'];
-    $_SESSION['user_role']    = $user['role'];
-    $_SESSION['user_name']    = $user['name'];
-    $_SESSION['logged_in_at'] = time();
+    $_SESSION['user_id']        = (int)$user['id'];
+    $_SESSION['user_role']      = $user['role'];
+    $_SESSION['user_name']      = $user['name'];
+    $_SESSION['logged_in_at']   = time();
+    $_SESSION['last_activity']  = time();
 
     update_user((int)$user['id'], function (array $u) {
         $u['last_login'] = date('c');
@@ -306,6 +332,13 @@ function attempt_login(string $username, string $password, string $required_role
 }
 
 function logout(): void {
+    if (!empty($_SESSION['user_id'])) {
+        audit_log('logout', [
+            'user_id'     => (int)$_SESSION['user_id'],
+            'target_type' => 'user',
+            'target_id'   => (int)$_SESSION['user_id'],
+        ]);
+    }
     $_SESSION = [];
     if (ini_get('session.use_cookies')) {
         $p = session_get_cookie_params();
@@ -316,6 +349,13 @@ function logout(): void {
 
 function current_user(): ?array {
     if (empty($_SESSION['user_id'])) return null;
+    // Idle session timeout — kick the user out if they haven't done anything in an hour.
+    $last = (int)($_SESSION['last_activity'] ?? 0);
+    if ($last > 0 && time() - $last > SESSION_IDLE_TIMEOUT) {
+        logout();
+        return null;
+    }
+    $_SESSION['last_activity'] = time();
     return find_user_by_id((int)$_SESSION['user_id']);
 }
 
@@ -511,4 +551,112 @@ function send_password_reset_email(array $user, string $token, string $reset_pat
     return ['ok' => (bool)$sent, 'reason' => $sent ? 'sent' : 'mail() failed'];
 }
 
+/* ----------------------------------------------------------- audit log */
+/*
+ * Lightweight audit trail. Anything security- or money-relevant calls
+ * audit_log() with a verb (e.g. "user.create", "invoice.paid") plus
+ * optional structured context. The current user / IP are captured
+ * automatically.
+ */
+
+function audit_log(string $action, array $opts = []): void {
+    try {
+        $user_id  = $opts['user_id']  ?? ($_SESSION['user_id'] ?? null);
+        // Prefer an explicit username, then a DB lookup by id, then fall back to
+        // the session's display name only if nothing else is known. This keeps
+        // audit rows readable even when the call site only has the id.
+        $username = $opts['username'] ?? null;
+        if (!$username && $user_id !== null) {
+            $u = find_user_by_id((int)$user_id);
+            if ($u) $username = $u['username'];
+        }
+        if (!$username) $username = $_SESSION['user_name'] ?? null;
+        $stmt = pdo()->prepare(
+            "INSERT INTO audit_log
+                (user_id, username, action, target_type, target_id, meta, ip_address)
+             VALUES (?, ?, ?, ?, ?, ?, ?)"
+        );
+        $meta = $opts['meta'] ?? null;
+        $stmt->execute([
+            $user_id ? (int)$user_id : null,
+            $username ? mb_substr((string)$username, 0, 60) : null,
+            mb_substr($action, 0, 60),
+            isset($opts['target_type']) ? mb_substr((string)$opts['target_type'], 0, 40) : null,
+            isset($opts['target_id'])   ? (int)$opts['target_id'] : null,
+            ($meta && is_array($meta)) ? json_encode($meta, JSON_UNESCAPED_SLASHES) : null,
+            client_ip(),
+        ]);
+    } catch (Throwable $e) {
+        // Auditing must never break the parent action; log to error_log and move on.
+        error_log('audit_log failed: ' . $e->getMessage());
+    }
+}
+
+function audit_recent(int $limit = 200, ?string $action_like = null, ?int $user_id = null): array {
+    $sql  = "SELECT * FROM audit_log";
+    $args = [];
+    $where = [];
+    if ($action_like !== null && $action_like !== '') {
+        $where[] = "action LIKE ?";
+        $args[]  = '%' . $action_like . '%';
+    }
+    if ($user_id) {
+        $where[] = "user_id = ?";
+        $args[]  = $user_id;
+    }
+    if ($where) $sql .= " WHERE " . implode(' AND ', $where);
+    $limit = max(1, min(2000, $limit));
+    $sql .= " ORDER BY id DESC LIMIT $limit";
+    $stmt = pdo()->prepare($sql);
+    $stmt->execute($args);
+    return $stmt->fetchAll();
+}
+
+/* ------------------------------------------------------- rate limiting */
+/*
+ * Simple per-bucket counter with a fixed window. Used by
+ * enforce_global_post_rate_limit() (called below for every POST) to cap how
+ * many writes a single IP can do in a minute. Login throttling is separate
+ * (see is_locked_out / record_login_fail above).
+ */
+
+function rate_limit_check(string $bucket, int $max, int $window_secs): bool {
+    if ($max <= 0) return true;
+    $now = time();
+    try {
+        $sel = pdo()->prepare("SELECT counter, window_at FROM rate_limit WHERE bucket = ?");
+        $sel->execute([$bucket]);
+        $row = $sel->fetch();
+        if (!$row || ($now - (int)$row['window_at']) >= $window_secs) {
+            // Fresh window — reset.
+            pdo()->prepare(
+                "INSERT INTO rate_limit (bucket, counter, window_at) VALUES (?, 1, ?)
+                 ON DUPLICATE KEY UPDATE counter = 1, window_at = VALUES(window_at)"
+            )->execute([$bucket, $now]);
+            return true;
+        }
+        if ((int)$row['counter'] >= $max) return false;
+        pdo()->prepare("UPDATE rate_limit SET counter = counter + 1 WHERE bucket = ?")
+            ->execute([$bucket]);
+        return true;
+    } catch (Throwable $e) {
+        // If the rate-limit table is missing or DB is sad, fail open rather than
+        // locking everyone out. The error will surface elsewhere.
+        error_log('rate_limit_check failed: ' . $e->getMessage());
+        return true;
+    }
+}
+
+function enforce_global_post_rate_limit(): void {
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') return;
+    $ip = client_ip();
+    if (!rate_limit_check('post-ip:' . $ip, POST_RATE_LIMIT_MAX, POST_RATE_LIMIT_WINDOW)) {
+        audit_log('rate_limit.block', ['meta' => ['ip' => $ip, 'bucket' => 'post-ip']]);
+        http_response_code(429);
+        header('Retry-After: ' . POST_RATE_LIMIT_WINDOW);
+        die('Too many requests. Please slow down and try again in a minute.');
+    }
+}
+
 start_session();
+enforce_global_post_rate_limit();

@@ -32,6 +32,7 @@ $nav = [
     ['key' => 'admins',    'label' => 'Admins',         'href' => '/admin/admins.php'],
     ['key' => 'password',  'label' => 'My password',    'href' => '/admin/password.php'],
     ['key' => '2fa',       'label' => 'Two-factor (2FA)', 'href' => '/admin/2fa.php'],
+    ['key' => 'audit',     'label' => 'Audit log',      'href' => '/admin/audit.php'],
 ];
 
 require __DIR__ . '/../auth/portal-header.php';

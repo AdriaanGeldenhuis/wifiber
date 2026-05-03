@@ -171,3 +171,28 @@ CREATE TABLE IF NOT EXISTS coverage_waitlist (
   PRIMARY KEY (id),
   KEY idx_status_created (status, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS audit_log (
+  id           INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id      INT UNSIGNED DEFAULT NULL,
+  username     VARCHAR(60)  DEFAULT NULL,
+  action       VARCHAR(60)  NOT NULL,
+  target_type  VARCHAR(40)  DEFAULT NULL,
+  target_id    INT UNSIGNED DEFAULT NULL,
+  meta         JSON         DEFAULT NULL,
+  ip_address   VARCHAR(45)  DEFAULT NULL,
+  created_at   DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_created (created_at),
+  KEY idx_user (user_id),
+  KEY idx_action (action),
+  KEY idx_target (target_type, target_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS rate_limit (
+  bucket      VARCHAR(80)  NOT NULL,
+  counter     INT UNSIGNED NOT NULL DEFAULT 0,
+  window_at   INT UNSIGNED NOT NULL,
+  PRIMARY KEY (bucket),
+  KEY idx_window (window_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
