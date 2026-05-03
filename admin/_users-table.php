@@ -177,6 +177,25 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
 
     $users = array_values(array_filter(load_users(), fn($u) => ($u['role'] ?? '') === $role));
     $is_client_view = ($role === 'client');
+
+    // Free-text search across the most useful columns. Case-insensitive
+    // substring match — the dataset is small enough not to warrant SQL FTS.
+    $search = trim((string)($_GET['q'] ?? ''));
+    if ($search !== '') {
+        $needle = mb_strtolower($search);
+        $users = array_values(array_filter($users, function (array $u) use ($needle) {
+            $hay = mb_strtolower(implode(' ', [
+                $u['username']    ?? '',
+                $u['name']        ?? '',
+                $u['email']       ?? '',
+                $u['phone']       ?? '',
+                $u['account_no']  ?? '',
+                $u['address']     ?? '',
+                $u['package']     ?? '',
+            ]));
+            return strpos($hay, $needle) !== false;
+        }));
+    }
     ?>
     <div class="portal-head">
       <h1><?= htmlspecialchars($heading) ?></h1>
@@ -184,7 +203,17 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
     </div>
 
     <div class="portal-card">
-      <h2>Existing accounts</h2>
+      <form method="get" class="inline-form" style="margin:0;">
+        <input type="search" name="q" value="<?= htmlspecialchars($search, ENT_QUOTES) ?>" placeholder="Search by name, account, email, phone…" style="flex:1;min-width:200px;">
+        <button type="submit" class="btn btn-ghost btn-sm">Search</button>
+        <?php if ($search !== ''): ?>
+          <a href="?" class="btn btn-ghost btn-sm">Clear</a>
+        <?php endif; ?>
+      </form>
+    </div>
+
+    <div class="portal-card">
+      <h2>Existing accounts <span class="muted">(<?= count($users) ?><?= $search ? ' match' . (count($users) === 1 ? '' : 'es') : '' ?>)</span></h2>
       <?php if (empty($users)): ?>
         <div class="empty-state">
           <div class="empty-icon">+</div>
