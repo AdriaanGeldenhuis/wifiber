@@ -1003,4 +1003,54 @@
   boot.site_links.forEach(renderLink);
   boot.clients.forEach(renderClient);
   (boot.sectors || []).forEach(renderSector);
+
+  /* ---------- live refresh (device status + active outages) ----------
+     Every 30 seconds we hit /admin/map.php?poll=1 for a snapshot of
+     device.status by id and the current set of sector_ids in active
+     outage. Sector cones flip red/normal in place; the toolbar's
+     outage count badge updates. We don't refetch sites or links since
+     those don't change without an admin action. */
+  async function refreshLive() {
+    try {
+      const r = await fetch('/admin/map.php?poll=1', { credentials: 'same-origin' });
+      const j = await r.json();
+      if (!j || !j.ok) return;
+
+      // Update device status in the by-site index, so device popup
+      // pills stay current next time they open.
+      const newStatuses = j.devices || {};
+      devicesBySite.forEach((list) => {
+        list.forEach((d) => {
+          const upd = newStatuses[d.id];
+          if (upd) { d.status = upd.status; d.last_seen_at = upd.last_seen_at; }
+        });
+      });
+
+      // Diff outage set and re-render cones whose state flipped.
+      const newOutageIds = new Set(j.outage_sector_ids || []);
+      const flipped = [];
+      sectorIndex.forEach((entry, sid) => {
+        const wasOut = outageSectorIds.has(sid);
+        const nowOut = newOutageIds.has(sid);
+        if (wasOut !== nowOut) flipped.push(sid);
+      });
+      outageSectorIds.clear();
+      newOutageIds.forEach((id) => outageSectorIds.add(id));
+      flipped.forEach((sid) => {
+        const e = sectorIndex.get(sid);
+        if (!e) return;
+        removeSectorFromIndex(sid);
+        renderSector(e.data);
+      });
+
+      // Update the outage count chip in the toolbar.
+      const counts = document.getElementById('count-sectors');
+      if (counts && typeof j.outage_count === 'number') {
+        // not the sectors count; but if there's an outage chip, mark it
+        const outageBadge = document.querySelector('.map-counts a[href="/admin/outages.php"] strong');
+        if (outageBadge) outageBadge.textContent = String(j.outage_count);
+      }
+    } catch (e) { /* network burp — try again next tick */ }
+  }
+  setInterval(refreshLive, 30000);
 })();

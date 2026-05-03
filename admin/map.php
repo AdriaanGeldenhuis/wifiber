@@ -15,6 +15,28 @@ require_once __DIR__ . '/../auth/devices.php';
 require_once __DIR__ . '/../auth/sectors.php';
 require_once __DIR__ . '/../auth/outages.php';
 
+// Lightweight poll endpoint — JS calls this every ~30s to refresh
+// device statuses and outage state without reloading the whole map.
+if (($_GET['poll'] ?? '') === '1') {
+    while (ob_get_level() > 0) ob_end_clean();
+    header('Content-Type: application/json');
+    $devs = pdo()->query("SELECT id, status, last_seen_at FROM devices")->fetchAll();
+    $devs_out = [];
+    foreach ($devs as $d) {
+        $devs_out[(int)$d['id']] = ['status' => $d['status'], 'last_seen_at' => $d['last_seen_at']];
+    }
+    $active = outages_all(['status' => 'active'], 500);
+    $outage_ids = array_map(fn($o) => (int)$o['scope_id'], array_filter($active, fn($o) => $o['scope'] === 'sector' && $o['scope_id']));
+    echo json_encode([
+        'ok'              => true,
+        'devices'         => $devs_out,
+        'outage_sector_ids' => array_values(array_unique($outage_ids)),
+        'outage_count'    => count($active),
+        'ts'              => date('c'),
+    ]);
+    exit;
+}
+
 $is_ajax = !empty($_GET['ajax']);
 $reply   = function (array $payload) use ($is_ajax) {
     // _layout.php has already started buffering and emitted the page

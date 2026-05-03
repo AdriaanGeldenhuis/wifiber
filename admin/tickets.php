@@ -11,6 +11,26 @@ if ($status_filter !== '' && !in_array($status_filter, TICKET_STATUSES, true)) {
     $status_filter = '';
 }
 
+// CSV export — same status filter as the list view.
+if (!$ticket && ($_GET['export'] ?? '') === 'csv') {
+    require_once __DIR__ . '/../auth/csv.php';
+    $rows = tickets_all($status_filter ?: null);
+    $shaped = array_map(fn($t) => [
+        'id'            => $t['id'],
+        'subject'       => $t['subject'],
+        'client_name'   => $t['client_name']  ?? '',
+        'client_email'  => $t['client_email'] ?? '',
+        'username'      => $t['username']     ?? '',
+        'status'        => $t['status'],
+        'message_count' => $t['message_count'] ?? 0,
+        'created_at'    => $t['created_at'],
+        'updated_at'    => $t['updated_at'],
+        'closed_at'     => $t['closed_at']    ?? '',
+    ], $rows);
+    audit_log('ticket.export', ['target_type' => 'ticket', 'meta' => ['rows' => count($shaped), 'filter' => $status_filter]]);
+    csv_download('tickets' . ($status_filter ? '-' . $status_filter : ''), $shaped);
+}
+
 // Lightweight poll endpoint — JS calls this every ~12s while a thread
 // is open, so a new client reply pulls the page in without manual
 // refresh. Returns the highest message id and the ticket status.
@@ -162,8 +182,11 @@ $tickets = tickets_all($status_filter ?: null);
 <?php else: /* ----- list view ----- */ ?>
 
   <div class="portal-card">
-    <h2>All tickets</h2>
-    <p class="inline-form" style="margin-bottom:14px;">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;flex-wrap:wrap;">
+      <h2 style="margin:0;">All tickets</h2>
+      <a href="/admin/tickets.php?<?= htmlspecialchars(http_build_query(array_filter(['status' => $status_filter, 'export' => 'csv']))) ?>" class="btn btn-ghost btn-sm">Export CSV</a>
+    </div>
+    <p class="inline-form" style="margin: 14px 0;">
       <span class="muted small">Filter:</span>
       <a href="/admin/tickets.php" class="btn btn-ghost btn-sm" <?= $status_filter === '' ? 'aria-current="page"' : '' ?>>All</a>
       <?php foreach (TICKET_STATUSES as $s): ?>

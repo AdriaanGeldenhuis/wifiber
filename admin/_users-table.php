@@ -209,6 +209,9 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
         <?php if ($search !== ''): ?>
           <a href="?" class="btn btn-ghost btn-sm">Clear</a>
         <?php endif; ?>
+        <?php if ($is_client_view): ?>
+          <a href="?export=csv<?= $search !== '' ? '&q=' . urlencode($search) : '' ?>" class="btn btn-ghost btn-sm">Export CSV</a>
+        <?php endif; ?>
       </form>
     </div>
 
