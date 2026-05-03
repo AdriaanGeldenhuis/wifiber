@@ -44,10 +44,21 @@ $is_admin   = $portal === 'admin';
     <span><?= $is_admin ? 'Admin' : 'Account' ?></span>
   </a>
   <nav class="portal-nav" aria-label="Portal navigation">
-    <?php foreach ($nav as $item):
-      $cls = $item['key'] === $active_key ? ' is-active' : '';
-    ?>
-      <a href="<?= htmlspecialchars($item['href']) ?>" class="portal-nav-item<?= $cls ?>"><?= htmlspecialchars($item['label']) ?></a>
+    <?php foreach ($nav as $entry): ?>
+      <?php if (isset($entry['group'])): ?>
+        <div class="portal-nav-group">
+          <div class="portal-nav-group-label"><?= htmlspecialchars($entry['group']) ?></div>
+          <?php foreach ($entry['items'] as $item):
+            $cls = $item['key'] === $active_key ? ' is-active' : '';
+          ?>
+            <a href="<?= htmlspecialchars($item['href']) ?>" class="portal-nav-item<?= $cls ?>"><?= htmlspecialchars($item['label']) ?></a>
+          <?php endforeach; ?>
+        </div>
+      <?php else:
+        $cls = $entry['key'] === $active_key ? ' is-active' : '';
+      ?>
+        <a href="<?= htmlspecialchars($entry['href']) ?>" class="portal-nav-item<?= $cls ?>"><?= htmlspecialchars($entry['label']) ?></a>
+      <?php endif; ?>
     <?php endforeach; ?>
   </nav>
   <div class="portal-user">
