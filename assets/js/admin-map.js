@@ -157,7 +157,7 @@
     const el = document.getElementById('map-hint');
     if (!el) return;
     el.textContent = msg || '';
-    el.style.display = msg ? '' : 'none';
+    el.style.display = msg ? 'block' : 'none';
   }
 
   /* ---------- layer toggles ---------- */
@@ -224,22 +224,24 @@
     const list = devicesBySite.get(siteId) || [];
     const rows = list.map((d) => {
       const c = DEVICE_COLOR[d.status] || DEVICE_COLOR.unknown;
-      const pill = '<span style="background:' + c + ';color:#fff;padding:0 5px;border-radius:6px;font-size:10px;">'
-                 + escapeHtml(d.status) + '</span>';
-      const meta = [d.role, d.vendor + (d.model ? ' ' + d.model : '')].filter(Boolean).join(' &middot; ');
-      return '<li style="padding:3px 0;">'
-           + escapeHtml(d.name) + ' ' + pill
-           + ' <a href="#" data-edit-device="' + d.id + '" style="font-size:11px;">edit</a>'
-           + ' <a href="#" data-delete-device="' + d.id + '" style="font-size:11px;color:#d77;">×</a>'
-           + '<br><small class="muted">' + escapeHtml(meta) + '</small>'
+      const pill = '<span class="pp-pill" style="background:' + c + ';">' + escapeHtml(d.status) + '</span>';
+      const meta = [d.role, d.vendor + (d.model ? ' ' + d.model : '')].filter(Boolean).join(' · ');
+      return '<li>'
+           +   '<div class="pp-row">'
+           +     '<span class="pp-name">' + escapeHtml(d.name) + '</span>'
+           +     pill
+           +     '<button type="button" class="pp-act" data-edit-device="' + d.id + '">Edit</button>'
+           +     '<button type="button" class="pp-act pp-act-danger" data-delete-device="' + d.id + '" aria-label="Delete">×</button>'
+           +   '</div>'
+           +   (meta ? '<div class="pp-meta">' + escapeHtml(meta) + '</div>' : '')
            + '</li>';
     }).join('');
-    return '<div style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;">'
-         + '<div style="display:flex;justify-content:space-between;align-items:center;">'
-         +   '<small><strong>Devices (' + list.length + ')</strong></small>'
-         +   '<a href="#" data-add-device="' + siteId + '" style="font-size:11px;">+ add</a>'
-         + '</div>'
-         + (list.length ? '<ul style="margin:4px 0 0;padding-left:14px;">' + rows + '</ul>' : '')
+    return '<div class="pp-section">'
+         +   '<div class="pp-section-head">'
+         +     '<strong>Devices (' + list.length + ')</strong>'
+         +     '<button type="button" class="pp-act pp-act-primary" data-add-device="' + siteId + '">+ Add</button>'
+         +   '</div>'
+         +   (list.length ? '<ul class="pp-list">' + rows + '</ul>' : '')
          + '</div>';
   }
 
@@ -248,27 +250,29 @@
     const list = [...ids].map((id) => sectorIndex.get(id)).filter(Boolean).map((e) => e.data);
     const rows = list.map((s) => {
       const c = BAND_COLOR[s.band] || BAND_COLOR.other;
-      const dot = '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + c + ';"></span>';
-      const az  = s.azimuth_deg   != null ? s.azimuth_deg   + '&deg;' : '?';
-      const bw  = s.beamwidth_deg != null ? s.beamwidth_deg + '&deg;' : '?';
-      const fq  = s.frequency_mhz != null ? s.frequency_mhz + ' MHz'
-                + (s.channel_width_mhz ? ' @ ' + s.channel_width_mhz : '')
-                : '';
-      return '<li style="padding:3px 0;">' + dot + ' '
-           + '<a href="#" data-focus-sector="' + s.id + '" style="color:inherit;">' + escapeHtml(s.name) + '</a> '
-           + '<a href="#" data-edit-sector="' + s.id + '" style="font-size:11px;">edit</a>'
-           + ' <a href="#" data-delete-sector="' + s.id + '" style="font-size:11px;color:#d77;">×</a>'
-           + '<br><small class="muted">'
-           + escapeHtml(s.band) + ' &middot; ' + az + ' / ' + bw
-           + (fq ? ' &middot; ' + escapeHtml(fq) : '')
-           + '</small></li>';
+      const dot = '<span class="pp-dot" style="background:' + c + ';"></span>';
+      const az  = s.azimuth_deg   != null ? s.azimuth_deg   + '°' : '—';
+      const bw  = s.beamwidth_deg != null ? s.beamwidth_deg + '°' : '—';
+      const fq  = s.frequency_mhz != null
+        ? s.frequency_mhz + ' MHz' + (s.channel_width_mhz ? ' @ ' + s.channel_width_mhz : '')
+        : '';
+      const meta = [escapeHtml(s.band), 'az ' + az + ' · bw ' + bw, fq && escapeHtml(fq)].filter(Boolean).join(' · ');
+      return '<li>'
+           +   '<div class="pp-row">'
+           +     dot
+           +     '<a href="#" class="pp-name" data-focus-sector="' + s.id + '">' + escapeHtml(s.name) + '</a>'
+           +     '<button type="button" class="pp-act" data-edit-sector="' + s.id + '">Edit</button>'
+           +     '<button type="button" class="pp-act pp-act-danger" data-delete-sector="' + s.id + '" aria-label="Delete">×</button>'
+           +   '</div>'
+           +   '<div class="pp-meta">' + meta + '</div>'
+           + '</li>';
     }).join('');
-    return '<div style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;">'
-         + '<div style="display:flex;justify-content:space-between;align-items:center;">'
-         +   '<small><strong>Sectors (' + list.length + ')</strong></small>'
-         +   '<a href="#" data-add-sector="' + towerId + '" style="font-size:11px;">+ add</a>'
-         + '</div>'
-         + (list.length ? '<ul style="margin:4px 0 0;padding-left:14px;">' + rows + '</ul>' : '')
+    return '<div class="pp-section">'
+         +   '<div class="pp-section-head">'
+         +     '<strong>Sectors (' + list.length + ')</strong>'
+         +     '<button type="button" class="pp-act pp-act-primary" data-add-sector="' + towerId + '">+ Add</button>'
+         +   '</div>'
+         +   (list.length ? '<ul class="pp-list">' + rows + '</ul>' : '')
          + '</div>';
   }
 
@@ -327,21 +331,18 @@
   }
 
   function sitePopupHTML(s) {
-    const towerExtras = s.type === 'tower'
-      ? '<div class="row" style="margin-top:6px;">'
-        + '<button type="button" class="btn btn-ghost btn-sm" data-add-sector="' + s.id + '">+ Sector</button>'
-        + '</div>'
-      : '';
     return ''
       + '<div class="map-popup">'
       +   '<strong>' + escapeHtml(s.name) + '</strong><br>'
       +   '<small>' + escapeHtml(siteTypeLabel(s.type)) + '</small>'
-      +   (s.notes ? '<p style="margin:6px 0 0;">' + escapeHtml(s.notes) + '</p>' : '')
-      +   '<div class="row" style="margin-top:8px;">'
+      +   (s.notes ? '<p>' + escapeHtml(s.notes) + '</p>' : '')
+      +   '<div class="pp-actions">'
       +     '<button type="button" class="btn btn-ghost btn-sm" data-edit-site="' + s.id + '">Edit</button>'
       +     '<button type="button" class="btn btn-danger btn-sm" data-delete-site="' + s.id + '">Delete</button>'
+      +     (s.type === 'tower'
+            ? '<button type="button" class="btn btn-primary btn-sm" data-add-sector="' + s.id + '">+ Sector</button>'
+            : '')
       +   '</div>'
-      +   towerExtras
       +   deviceListHTML(s.id)
       +   (s.type === 'tower' ? sectorListHTML(s.id) : '')
       + '</div>';
@@ -382,12 +383,16 @@
   }
 
   function linkPopupHTML(l, from, to) {
+    const meta = [escapeHtml(l.type)]
+      .concat(l.capacity_mbps ? [l.capacity_mbps + ' Mbps'] : [])
+      .concat(l.frequency     ? [escapeHtml(l.frequency)]   : [])
+      .join(' · ');
     return ''
       + '<div class="map-popup">'
       +   '<strong>' + escapeHtml(l.label || (l.type.toUpperCase() + ' link')) + '</strong><br>'
-      +   '<small>' + escapeHtml(from.name) + ' &harr; ' + escapeHtml(to.name) + '</small><br>'
-      +   '<small>' + escapeHtml(l.type) + (l.capacity_mbps ? ' &middot; ' + l.capacity_mbps + ' Mbps' : '') + (l.frequency ? ' &middot; ' + escapeHtml(l.frequency) : '') + '</small>'
-      +   '<div class="row" style="margin-top:8px;">'
+      +   '<small>' + escapeHtml(from.name) + ' ↔ ' + escapeHtml(to.name) + '</small>'
+      +   '<p>' + meta + '</p>'
+      +   '<div class="pp-actions">'
       +     '<button type="button" class="btn btn-danger btn-sm" data-delete-link="' + l.id + '">Delete link</button>'
       +   '</div>'
       + '</div>';
@@ -426,25 +431,25 @@
   }
 
   function clientPopupHTML(c) {
+    const statusColor = STATUS_COLOR[c.status] || '#888';
+    const apColor     = DEVICE_COLOR[c.network_status] || '#888';
     return ''
       + '<div class="map-popup">'
       +   '<strong>' + escapeHtml(c.account_no || c.username) + '</strong><br>'
-      +   escapeHtml(c.name || '') + '<br>'
-      +   (c.address ? '<small>' + escapeHtml(c.address) + '</small><br>' : '')
-      +   '<span style="display:inline-block;background:' + (STATUS_COLOR[c.status] || '#888')
-      +     ';color:#fff;padding:1px 7px;border-radius:8px;font-size:11px;text-transform:uppercase;">' + escapeHtml(c.status) + '</span>'
+      +   '<small>' + escapeHtml(c.name || '') + '</small>'
+      +   (c.address ? '<p>' + escapeHtml(c.address) + '</p>' : '')
+      +   '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap;">'
+      +     '<span class="pp-pill" style="background:' + statusColor + ';">' + escapeHtml(c.status) + '</span>'
+      +     (c.network_status
+              ? '<span class="pp-pill" style="background:' + apColor + ';">AP ' + escapeHtml(c.network_status) + '</span>'
+              : '')
+      +   '</div>'
       +   (c.sector_label
-            ? '<div style="margin-top:6px;font-size:12px;"><span class="muted">Sector:</span> '
-              + '<a href="/admin/sectors.php?search=' + encodeURIComponent(c.sector_label.split(' · ')[0])
-              + '" style="color:inherit;">' + escapeHtml(c.sector_label) + '</a></div>'
+            ? '<dl class="pp-kv"><dt>Sector</dt><dd>'
+              + '<a href="/admin/sectors.php?search=' + encodeURIComponent(c.sector_label.split(' · ')[0]) + '">'
+              + escapeHtml(c.sector_label) + '</a></dd></dl>'
             : '')
-      +   (c.network_status
-            ? '<div style="margin-top:2px;font-size:12px;"><span class="muted">AP:</span> '
-              + '<span style="background:' + (DEVICE_COLOR[c.network_status] || '#888')
-              + ';color:#fff;padding:0 6px;border-radius:6px;font-size:10px;">'
-              + escapeHtml(c.network_status) + '</span></div>'
-            : '')
-      +   '<div class="row" style="margin-top:8px;">'
+      +   '<div class="pp-actions">'
       +     '<a class="btn btn-ghost btn-sm" href="/admin/client-edit.php?id=' + c.id + '">Open record</a>'
       +   '</div>'
       + '</div>';
@@ -563,16 +568,15 @@
       }
     );
     poly.addTo(previewLayer);
-    // Floating azimuth/beamwidth label at the cone's centerline tip.
+    // Floating azimuth/beamwidth pill at the cone's centerline tip.
     const tip = destination(t.lat, t.lng, sectorDraft.azimuth, range);
     const label = L.marker(tip, {
       interactive: false,
       icon: L.divIcon({
         className: 'wf-sector-label',
-        html: '<span style="background:#05DAFD;color:#001218;padding:2px 8px;border-radius:10px;'
-            + 'font-size:11px;font-weight:600;white-space:nowrap;box-shadow:0 1px 4px rgba(0,0,0,.4);">'
+        html: '<span class="wf-sector-label-pill">'
             + 'az ' + sectorDraft.azimuth + '° · bw ' + sectorDraft.beamwidth + '°</span>',
-        iconSize: [1, 1], iconAnchor: [50, 10],
+        iconSize: [1, 1], iconAnchor: [60, 12],
       }),
     });
     label.addTo(previewLayer);
@@ -689,28 +693,30 @@
       : null;
     const outage = outageBySectorId[s.id];
     const outageBlock = outage
-      ? '<div style="margin:6px 0;padding:6px 8px;background:rgba(220,68,68,0.18);border-left:3px solid #d44;font-size:12px;">'
+      ? '<div class="pp-outage">'
         + '<strong>Active outage</strong><br>'
-        + '<small>Started: ' + escapeHtml(outage.started_at) + '</small><br>'
-        + (outage.cause ? '<small>Cause: ' + escapeHtml(outage.cause) + '</small><br>' : '')
-        + '<small>' + outage.affected_count + ' customer'
-          + (outage.affected_count === 1 ? '' : 's') + ' affected</small>'
+        + 'Started: ' + escapeHtml(outage.started_at) + '<br>'
+        + (outage.cause ? 'Cause: ' + escapeHtml(outage.cause) + '<br>' : '')
+        + outage.affected_count + ' customer' + (outage.affected_count === 1 ? '' : 's') + ' affected'
         + '</div>'
       : '';
+    const kv = [];
+    kv.push(['Azimuth', s.azimuth_deg   != null ? s.azimuth_deg   + '°' : '—']);
+    kv.push(['Beam',    s.beamwidth_deg != null ? s.beamwidth_deg + '°' : '—']);
+    if (fq)                       kv.push(['Freq',  fq]);
+    if (s.tx_power_dbm   != null) kv.push(['TX',    s.tx_power_dbm + ' dBm']);
+    if (s.ap_device_name)         kv.push(['AP',    s.ap_device_name]);
+    if (s.max_clients    != null) kv.push(['Max',   s.max_clients + ' clients']);
+    const kvHtml = '<dl class="pp-kv">'
+      + kv.map(([k, v]) => '<dt>' + escapeHtml(k) + '</dt><dd>' + escapeHtml(String(v)) + '</dd>').join('')
+      + '</dl>';
     return ''
       + '<div class="map-popup">'
       +   '<strong>' + escapeHtml(s.name) + '</strong><br>'
-      +   '<small>' + escapeHtml(towerName) + ' &middot; ' + escapeHtml(s.band) + '</small>'
+      +   '<small>' + escapeHtml(towerName) + ' · ' + escapeHtml(s.band) + '</small>'
       +   outageBlock
-      +   '<div style="margin-top:6px;font-size:12px;">'
-      +     '<div>Azimuth: ' + (s.azimuth_deg   != null ? s.azimuth_deg   + '&deg;' : '—') + '</div>'
-      +     '<div>Beam: '    + (s.beamwidth_deg != null ? s.beamwidth_deg + '&deg;' : '—') + '</div>'
-      +     (fq ? '<div>Freq: ' + escapeHtml(fq) + '</div>' : '')
-      +     (s.tx_power_dbm != null ? '<div>TX: ' + s.tx_power_dbm + ' dBm</div>' : '')
-      +     (s.ap_device_name ? '<div>AP: ' + escapeHtml(s.ap_device_name) + '</div>' : '')
-      +     (s.max_clients != null ? '<div>Max clients: ' + s.max_clients + '</div>' : '')
-      +   '</div>'
-      +   '<div class="row" style="margin-top:8px;">'
+      +   kvHtml
+      +   '<div class="pp-actions">'
       +     '<button type="button" class="btn btn-ghost btn-sm" data-edit-sector="' + s.id + '">Edit</button>'
       +     '<button type="button" class="btn btn-danger btn-sm" data-delete-sector="' + s.id + '">Delete</button>'
       +   '</div>'
