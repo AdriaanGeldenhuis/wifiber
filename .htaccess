@@ -1,6 +1,11 @@
 # --- Pretty URLs: /pricing -> /pricing.php ----------------------------------
 RewriteEngine On
 
+# Make sure /account/ and /admin/ resolve to their index.php — some shared
+# hosts don't have index.php in the global DirectoryIndex, which causes a
+# bare directory request to 403 instead of running the PHP file.
+DirectoryIndex index.php index.html
+
 # Force HTTPS
 RewriteCond %{HTTPS} !=on
 RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301]
@@ -23,6 +28,11 @@ RewriteRule ^([^/.]+)/([^/.]+)$ /$1/$2.php [L]
 
 # /sitemap.xml -> /sitemap.php (auto-generated XML)
 RewriteRule ^sitemap\.xml$ /sitemap.php [L]
+
+# /favicon.ico -> the site logo. Browsers request this URL automatically
+# even when <link rel="icon"> points elsewhere, so without this rule every
+# page load logs a 404.
+RewriteRule ^favicon\.ico$ /assets/images/logo-300.webp [L]
 
 # --- Security ----------------------------------------------------------------
 # Block dotfiles (e.g. .git, .env)
@@ -48,7 +58,7 @@ Options -Indexes
   # script-src can be strict. The plausible.io / Google analytics origins are
   # whitelisted so admins can switch the provider on from /admin/settings.php
   # without anyone having to edit .htaccess.
-  Header always set Content-Security-Policy "default-src 'self'; script-src 'self' https://plausible.io https://www.googletagmanager.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://api.qrserver.com https://www.google-analytics.com; connect-src 'self' https://plausible.io https://www.google-analytics.com https://*.analytics.google.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
+  Header always set Content-Security-Policy "default-src 'self'; script-src 'self' https://plausible.io https://www.googletagmanager.com https://unpkg.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com https://unpkg.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://api.qrserver.com https://www.google-analytics.com https://*.tile.openstreetmap.org https://server.arcgisonline.com https://unpkg.com; connect-src 'self' https://plausible.io https://www.google-analytics.com https://*.analytics.google.com https://unpkg.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
 </IfModule>
 
 # Block access to includes/, auth/, and data/ from the web

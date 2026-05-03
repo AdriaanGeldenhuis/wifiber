@@ -6,6 +6,8 @@
  * Output is the page body — caller is responsible for layout header/footer.
  */
 
+require_once __DIR__ . '/../auth/products.php';
+
 function render_users_admin(string $role, string $heading, string $subtitle, array $current_user): void {
     $self = strtok($_SERVER['REQUEST_URI'], '?');
 
@@ -16,35 +18,66 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
         if ($action === 'create') {
             $username = trim($_POST['username'] ?? '');
             $name     = trim($_POST['name']     ?? '');
+            $surname  = trim($_POST['surname']  ?? '');
             $email    = trim($_POST['email']    ?? '');
             $password = (string)($_POST['password'] ?? '');
             $errors   = [];
             if (strlen($username) < 3)                                       $errors[] = 'Username must be at least 3 characters.';
             if ($name === '')                                                $errors[] = 'Display name is required.';
+            if ($role === 'client' && $surname === '')                       $errors[] = 'Surname is required so we can issue an account number.';
             if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) $errors[] = 'Email is not valid.';
             if (strlen($password) < 8)                                       $errors[] = 'Password must be at least 8 characters.';
+            $created = null;
             if (!$errors) {
                 try {
+                    // Resolve product picker -> legacy package text so all
+                    // existing readers keep working.
+                    $product_id = (int)($_POST['product_id'] ?? 0);
+                    $package    = '';
+                    if ($product_id > 0 && ($p = products_find($product_id))) {
+                        $package = $p['name'];
+                    }
                     $created = create_user($username, $password, $role, $name, $email, [
-                        'phone'   => $_POST['phone']   ?? '',
-                        'address' => $_POST['address'] ?? '',
-                        'package' => $_POST['package'] ?? '',
+                        'phone'         => $_POST['phone']         ?? '',
+                        'address'       => $_POST['address']       ?? '',
+                        'package'       => $package,
+                        'surname'       => $surname,
+                        'customer_type' => $_POST['customer_type'] ?? 'residential',
                     ]);
-                    $msg = ucfirst($role) . " '{$username}' created.";
+                    if ($product_id > 0 && $created && !empty($created['id'])) {
+                        update_user((int)$created['id'], function (array $u) use ($product_id) {
+                            $u['product_id'] = $product_id;
+                            return $u;
+                        });
+                        $created = find_user_by_id((int)$created['id']) ?? $created;
+                    }
+                    $msg = ucfirst($role) . " '{$username}' created";
+                    if (!empty($created['account_no'])) {
+                        $msg .= " (account #{$created['account_no']})";
+                    }
+                    $msg .= '.';
+                    $email_ok = true;
                     if (!empty($_POST['send_welcome'])) {
                         $r = send_welcome_email($created, $password);
+                        $email_ok = $r['ok'];
                         $msg .= $r['ok']
                             ? " Welcome email sent to {$created['email']}."
                             : " (Welcome email could not be sent: {$r['reason']}.)";
                     }
-                    flash($r['ok'] ?? true ? 'success' : 'error', $msg);
+                    flash($email_ok ? 'success' : 'error', $msg);
                 } catch (Throwable $e) {
                     flash('error', $e->getMessage());
                 }
             } else {
                 flash('error', implode(' ', $errors));
             }
-            header('Location: ' . $self);
+            // Send admins straight to the rich edit page so they can fill in
+            // the rest of the client record (ID, GPS, equipment, etc.).
+            if ($role === 'client' && $created && !empty($created['id'])) {
+                header('Location: /admin/client-edit.php?id=' . (int)$created['id']);
+            } else {
+                header('Location: ' . $self);
+            }
             exit;
         }
 
@@ -158,10 +191,18 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
         <?php foreach ($users as $u): ?>
           <details class="user-row">
             <summary>
-              <strong><?= htmlspecialchars($u['username']) ?></strong>
+              <?php if ($is_client_view && !empty($u['account_no'])): ?>
+                <strong><?= htmlspecialchars($u['account_no']) ?></strong>
+                <span class="muted">&middot; <?= htmlspecialchars($u['username']) ?></span>
+              <?php else: ?>
+                <strong><?= htmlspecialchars($u['username']) ?></strong>
+              <?php endif; ?>
               <span class="muted">&middot; <?= htmlspecialchars($u['name'] ?? '') ?></span>
               <?php if ($is_client_view && !empty($u['package'])): ?>
                 <span class="pkg-pill"><?= htmlspecialchars($u['package']) ?></span>
+              <?php endif; ?>
+              <?php if ($is_client_view && !empty($u['status']) && $u['status'] !== 'active'): ?>
+                <span class="pkg-pill" style="background:#552;"><?= htmlspecialchars($u['status']) ?></span>
               <?php endif; ?>
               <span class="muted small" style="margin-left:auto;">
                 last login: <?= htmlspecialchars($u['last_login'] ?? 'never') ?>
@@ -169,35 +210,40 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
             </summary>
 
             <div class="user-row-body">
-              <form method="post" class="form form-grid">
-                <?= csrf_field() ?>
-                <input type="hidden" name="action" value="update">
-                <input type="hidden" name="id" value="<?= (int)$u['id'] ?>">
+              <?php if ($is_client_view): ?>
+                <ul class="kv">
+                  <li><span>Account #</span><strong><?= htmlspecialchars($u['account_no'] ?: '— pending — open editor to issue one') ?></strong></li>
+                  <li><span>Type</span><strong><?= htmlspecialchars($u['customer_type'] ?? 'residential') ?></strong></li>
+                  <li><span>Status</span><strong><?= htmlspecialchars($u['status'] ?? 'active') ?></strong></li>
+                  <?php if (!empty($u['email'])): ?><li><span>Email</span><strong><?= htmlspecialchars($u['email']) ?></strong></li><?php endif; ?>
+                  <?php if (!empty($u['phone'])): ?><li><span>Phone</span><strong><?= htmlspecialchars($u['phone']) ?></strong></li><?php endif; ?>
+                  <?php if (!empty($u['address'])): ?><li><span>Address</span><strong><?= htmlspecialchars($u['address']) ?></strong></li><?php endif; ?>
+                </ul>
+                <div class="form-actions" style="margin-top:14px;">
+                  <a href="/admin/client-edit.php?id=<?= (int)$u['id'] ?>" class="btn btn-primary btn-sm">Edit full details</a>
+                </div>
+              <?php else: ?>
+                <form method="post" class="form form-grid">
+                  <?= csrf_field() ?>
+                  <input type="hidden" name="action" value="update">
+                  <input type="hidden" name="id" value="<?= (int)$u['id'] ?>">
 
-                <div class="field"><label>Display name</label>
-                  <input type="text" name="name" required maxlength="100" value="<?= htmlspecialchars($u['name'] ?? '', ENT_QUOTES) ?>">
-                </div>
-                <div class="field"><label>Email</label>
-                  <input type="email" name="email" maxlength="120" value="<?= htmlspecialchars($u['email'] ?? '', ENT_QUOTES) ?>">
-                </div>
-                <div class="field"><label>Phone</label>
-                  <input type="tel" name="phone" maxlength="40" value="<?= htmlspecialchars($u['phone'] ?? '', ENT_QUOTES) ?>">
-                </div>
-                <?php if ($is_client_view): ?>
-                  <div class="field"><label>Package</label>
-                    <input type="text" name="package" maxlength="80" value="<?= htmlspecialchars($u['package'] ?? '', ENT_QUOTES) ?>" placeholder="e.g. Home 10 Mbps">
+                  <div class="field"><label>Display name</label>
+                    <input type="text" name="name" required maxlength="100" value="<?= htmlspecialchars($u['name'] ?? '', ENT_QUOTES) ?>">
                   </div>
-                  <div class="field" style="grid-column:1/-1;"><label>Address</label>
-                    <input type="text" name="address" maxlength="200" value="<?= htmlspecialchars($u['address'] ?? '', ENT_QUOTES) ?>">
+                  <div class="field"><label>Email</label>
+                    <input type="email" name="email" maxlength="120" value="<?= htmlspecialchars($u['email'] ?? '', ENT_QUOTES) ?>">
                   </div>
-                <?php else: ?>
+                  <div class="field"><label>Phone</label>
+                    <input type="tel" name="phone" maxlength="40" value="<?= htmlspecialchars($u['phone'] ?? '', ENT_QUOTES) ?>">
+                  </div>
                   <input type="hidden" name="package" value="<?= htmlspecialchars($u['package'] ?? '', ENT_QUOTES) ?>">
                   <input type="hidden" name="address" value="<?= htmlspecialchars($u['address'] ?? '', ENT_QUOTES) ?>">
-                <?php endif; ?>
-                <div class="form-actions">
-                  <button type="submit" class="btn btn-primary btn-sm">Save changes</button>
-                </div>
-              </form>
+                  <div class="form-actions">
+                    <button type="submit" class="btn btn-primary btn-sm">Save changes</button>
+                  </div>
+                </form>
+              <?php endif; ?>
 
               <hr style="border:none;border-top:1px solid var(--border);margin:18px 0;">
 
@@ -246,6 +292,9 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
 
     <div class="portal-card">
       <h2>Create new <?= htmlspecialchars($role) ?></h2>
+      <?php if ($is_client_view): ?>
+        <p class="muted small">Just the basics here. After save you'll land on the full client editor where you can fill in ID number, GPS, equipment, billing day and the rest.</p>
+      <?php endif; ?>
       <form method="post" class="form form-grid" autocomplete="off">
         <?= csrf_field() ?>
         <input type="hidden" name="action" value="create">
@@ -255,6 +304,17 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
         <div class="field"><label>Display name</label>
           <input type="text" name="name" required maxlength="100">
         </div>
+        <?php if ($is_client_view): ?>
+          <div class="field"><label>Surname <span class="muted small">(used for the account number, e.g. GEL0001)</span></label>
+            <input type="text" name="surname" required maxlength="60">
+          </div>
+          <div class="field"><label>Customer type</label>
+            <select name="customer_type">
+              <option value="residential">Residential</option>
+              <option value="business">Business</option>
+            </select>
+          </div>
+        <?php endif; ?>
         <div class="field"><label>Email <span class="muted">(optional)</span></label>
           <input type="email" name="email" maxlength="120">
         </div>
@@ -265,8 +325,13 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
           <div class="field"><label>Phone</label>
             <input type="tel" name="phone" maxlength="40">
           </div>
-          <div class="field"><label>Package</label>
-            <input type="text" name="package" maxlength="80" placeholder="e.g. Home 10 Mbps">
+          <div class="field"><label>Product</label>
+            <select name="product_id">
+              <option value="">— pick later —</option>
+              <?php foreach (products_all(true) as $p): ?>
+                <option value="<?= (int)$p['id'] ?>"><?= htmlspecialchars(product_dropdown_label($p)) ?></option>
+              <?php endforeach; ?>
+            </select>
           </div>
           <div class="field" style="grid-column:1/-1;"><label>Address</label>
             <input type="text" name="address" maxlength="200">

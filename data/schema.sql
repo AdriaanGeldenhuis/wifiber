@@ -7,13 +7,33 @@
 
 CREATE TABLE IF NOT EXISTS users (
   id                   INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  account_no           VARCHAR(20)  DEFAULT NULL,
   username             VARCHAR(60)  NOT NULL,
   email                VARCHAR(120) NOT NULL DEFAULT '',
   name                 VARCHAR(100) NOT NULL DEFAULT '',
+  surname              VARCHAR(60)  NOT NULL DEFAULT '',
+  id_number            VARCHAR(20)  NOT NULL DEFAULT '',
+  vat_number           VARCHAR(20)  NOT NULL DEFAULT '',
   role                 ENUM('admin','client') NOT NULL,
+  customer_type        ENUM('residential','business') NOT NULL DEFAULT 'residential',
+  status               ENUM('active','suspended','disconnected','lead') NOT NULL DEFAULT 'active',
+  service_start        DATE         DEFAULT NULL,
+  billing_day          TINYINT UNSIGNED DEFAULT NULL,
+  payment_method       VARCHAR(20)  NOT NULL DEFAULT 'eft',
   phone                VARCHAR(40)  NOT NULL DEFAULT '',
   address              VARCHAR(200) NOT NULL DEFAULT '',
+  lat                  DECIMAL(10,7) DEFAULT NULL,
+  lng                  DECIMAL(10,7) DEFAULT NULL,
+  alt_contact_name     VARCHAR(100) NOT NULL DEFAULT '',
+  alt_contact_phone    VARCHAR(40)  NOT NULL DEFAULT '',
   package              VARCHAR(80)  NOT NULL DEFAULT '',
+  product_id           INT UNSIGNED DEFAULT NULL,
+  site_id              INT UNSIGNED DEFAULT NULL,
+  equipment_mac        VARCHAR(20)  NOT NULL DEFAULT '',
+  equipment_ip         VARCHAR(45)  NOT NULL DEFAULT '',
+  equipment_serial     VARCHAR(60)  NOT NULL DEFAULT '',
+  equipment_model      VARCHAR(80)  NOT NULL DEFAULT '',
+  notes                TEXT         DEFAULT NULL,
   password_hash        VARCHAR(255) NOT NULL,
   totp_secret          VARCHAR(64)  DEFAULT NULL,
   totp_enabled         TINYINT(1)   NOT NULL DEFAULT 0,
@@ -23,7 +43,67 @@ CREATE TABLE IF NOT EXISTS users (
   last_login           DATETIME     DEFAULT NULL,
   PRIMARY KEY (id),
   UNIQUE KEY uniq_username (username),
-  KEY idx_role (role)
+  UNIQUE KEY uniq_account_no (account_no),
+  KEY idx_role (role),
+  KEY idx_user_product (product_id),
+  KEY idx_user_site    (site_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS sites (
+  id                INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  parent_id         INT UNSIGNED  DEFAULT NULL,
+  type              ENUM('tower','ap','ptp_endpoint','pop','other') NOT NULL DEFAULT 'tower',
+  name              VARCHAR(120)  NOT NULL,
+  lat               DECIMAL(10,7) NOT NULL,
+  lng               DECIMAL(10,7) NOT NULL,
+  height_m          DECIMAL(6,2)  DEFAULT NULL,
+  coverage_radius_m INT UNSIGNED  DEFAULT NULL,
+  color             VARCHAR(20)   DEFAULT NULL,
+  notes             TEXT          DEFAULT NULL,
+  is_active         TINYINT(1)    NOT NULL DEFAULT 1,
+  created_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_parent (parent_id),
+  KEY idx_type   (type),
+  KEY idx_active (is_active)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS site_links (
+  id            INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  from_site_id  INT UNSIGNED NOT NULL,
+  to_site_id    INT UNSIGNED NOT NULL,
+  type          ENUM('ptp','ptmp','fiber','backhaul') NOT NULL DEFAULT 'ptp',
+  label         VARCHAR(120) NOT NULL DEFAULT '',
+  capacity_mbps DECIMAL(8,2) DEFAULT NULL,
+  frequency     VARCHAR(20)  DEFAULT NULL,
+  color         VARCHAR(20)  DEFAULT NULL,
+  notes         TEXT         DEFAULT NULL,
+  created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_from (from_site_id),
+  KEY idx_to   (to_site_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS products (
+  id            INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  tier_key      VARCHAR(40)   NOT NULL DEFAULT '',
+  name          VARCHAR(120)  NOT NULL,
+  down_mbps     DECIMAL(8,2)  NOT NULL DEFAULT 0,
+  up_mbps       DECIMAL(8,2)  NOT NULL DEFAULT 0,
+  monthly_price DECIMAL(10,2) NOT NULL DEFAULT 0,
+  install_24mo  DECIMAL(10,2) NOT NULL DEFAULT 0,
+  install_mtm   DECIMAL(10,2) NOT NULL DEFAULT 2799,
+  contention    VARCHAR(20)   NOT NULL DEFAULT '',
+  description   TEXT          DEFAULT NULL,
+  is_active     TINYINT(1)    NOT NULL DEFAULT 1,
+  sort_order    INT           NOT NULL DEFAULT 0,
+  created_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uniq_name (name),
+  KEY idx_tier (tier_key),
+  KEY idx_active (is_active, sort_order)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS throttle (

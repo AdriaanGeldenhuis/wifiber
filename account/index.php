@@ -29,6 +29,13 @@ $active_incidents = incidents_active_all();
 <?php endif; ?>
 
 <div class="card-grid">
+  <?php if (!empty($user['account_no'])): ?>
+    <div class="portal-card">
+      <span class="card-label">Account number</span>
+      <div class="card-num" style="font-size:1.4rem;line-height:1.2;"><?= htmlspecialchars($user['account_no']) ?></div>
+      <p class="card-sub muted">Quote this when paying or contacting support.</p>
+    </div>
+  <?php endif; ?>
   <div class="portal-card">
     <span class="card-label">Your package</span>
     <div class="card-num" style="font-size:1.4rem;line-height:1.2;"><?= htmlspecialchars($user['package'] ?? '—') ?></div>

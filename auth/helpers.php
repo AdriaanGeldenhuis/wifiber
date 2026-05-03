@@ -127,10 +127,18 @@ function require_csrf(): void {
 /* ---------------------------------------------------------------- users */
 
 const USER_COLUMNS = [
-    'username','email','name','role','phone','address','package',
+    'account_no','username','email','name','surname','id_number','vat_number',
+    'role','customer_type','status','service_start','billing_day','payment_method',
+    'phone','address','lat','lng','alt_contact_name','alt_contact_phone',
+    'package','product_id','site_id','equipment_mac','equipment_ip','equipment_serial','equipment_model',
+    'notes',
     'password_hash','totp_secret','totp_enabled','totp_recovery_codes',
     'totp_enabled_at','last_login',
 ];
+
+const CUSTOMER_TYPES   = ['residential', 'business'];
+const CUSTOMER_STATUS  = ['active', 'lead', 'suspended', 'disconnected'];
+const PAYMENT_METHODS  = ['eft', 'debit_order', 'cash', 'card'];
 
 function row_to_user(?array $row): ?array {
     if (!$row) return null;
@@ -198,6 +206,25 @@ function update_user(int $id, callable $patch): bool {
                 $ts = is_int($v) ? $v : strtotime((string)$v);
                 $v  = $ts ? date('Y-m-d H:i:s', $ts) : null;
             }
+        } elseif ($c === 'service_start') {
+            if ($v === null || $v === '') {
+                $v = null;
+            } else {
+                $ts = is_int($v) ? $v : strtotime((string)$v);
+                $v  = $ts ? date('Y-m-d', $ts) : null;
+            }
+        } elseif ($c === 'billing_day') {
+            $v = ($v === null || $v === '' || !is_numeric($v)) ? null : max(1, min(31, (int)$v));
+        } elseif (in_array($c, ['lat','lng'], true)) {
+            $v = ($v === null || $v === '' || !is_numeric($v)) ? null : (float)$v;
+        } elseif ($c === 'customer_type') {
+            $v = in_array($v, CUSTOMER_TYPES, true) ? $v : 'residential';
+        } elseif ($c === 'status') {
+            $v = in_array($v, CUSTOMER_STATUS, true) ? $v : 'active';
+        } elseif ($c === 'payment_method') {
+            $v = in_array($v, PAYMENT_METHODS, true) ? $v : 'eft';
+        } elseif ($c === 'product_id' || $c === 'site_id') {
+            $v = ($v === null || $v === '' || !is_numeric($v) || (int)$v <= 0) ? null : (int)$v;
         }
 
         $set[]  = "`$c` = ?";
@@ -218,17 +245,35 @@ function create_user(string $username, string $password, string $role, string $n
     if (find_user_by_username($username)) {
         throw new RuntimeException("A user with that username already exists.");
     }
+
+    $surname       = trim((string)($extra['surname'] ?? ''));
+    $customer_type = in_array($extra['customer_type'] ?? '', CUSTOMER_TYPES, true)
+                       ? $extra['customer_type'] : 'residential';
+
+    // Account numbers are client-only — admin staff don't get one.
+    $account_no = null;
+    if ($role === 'client') {
+        if ($surname === '') {
+            throw new RuntimeException("Surname is required so we can issue an account number.");
+        }
+        $account_no = generate_account_no($surname);
+    }
+
     $stmt = pdo()->prepare(
         "INSERT INTO users
-            (username, email, name, role, phone, address, package, password_hash, created_at)
+            (account_no, username, email, name, surname, role, customer_type,
+             phone, address, package, password_hash, created_at)
          VALUES
-            (?, ?, ?, ?, ?, ?, ?, ?, NOW())"
+            (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())"
     );
     $stmt->execute([
+        $account_no,
         $username,
         $email,
         $name,
+        $surname,
         $role,
+        $customer_type,
         trim((string)($extra['phone']   ?? '')),
         trim((string)($extra['address'] ?? '')),
         trim((string)($extra['package'] ?? '')),
@@ -238,9 +283,40 @@ function create_user(string $username, string $password, string $role, string $n
     audit_log('user.create', [
         'target_type' => 'user',
         'target_id'   => $id,
-        'meta'        => ['username' => $username, 'role' => $role, 'email' => $email],
+        'meta'        => ['username' => $username, 'role' => $role, 'email' => $email, 'account_no' => $account_no],
     ]);
     return find_user_by_id($id) ?? [];
+}
+
+/**
+ * Issue the next account number for a given surname.
+ *
+ * Format: first three letters of the surname (uppercase, A-Z only, padded
+ * with X if the surname is shorter than three letters) followed by a
+ * zero-padded 4-digit sequence — e.g. "Geldenhuis" -> GEL0001, GEL0002, ...
+ *
+ * The sequence is per-prefix. Two surnames that share the same prefix
+ * share a counter (SMITH and SMILE both produce SMI####).
+ */
+function generate_account_no(string $surname): string {
+    $prefix = preg_replace('/[^A-Z]/', '', strtoupper($surname));
+    $prefix = substr($prefix . 'XXX', 0, 3);
+
+    $stmt = pdo()->prepare(
+        "SELECT account_no
+           FROM users
+          WHERE account_no LIKE ?
+          ORDER BY LENGTH(account_no) DESC, account_no DESC
+          LIMIT 1"
+    );
+    $stmt->execute([$prefix . '%']);
+    $last = $stmt->fetchColumn();
+
+    $next = 1;
+    if ($last && preg_match('/^' . preg_quote($prefix, '/') . '(\d+)$/', (string)$last, $m)) {
+        $next = (int)$m[1] + 1;
+    }
+    return $prefix . str_pad((string)$next, 4, '0', STR_PAD_LEFT);
 }
 
 function delete_user(int $id): bool {
@@ -365,7 +441,14 @@ function require_role(string $role, string $login_url): array {
         header('Location: ' . $login_url);
         exit;
     }
-    if (($user['role'] ?? '') !== $role) {
+    $own_role = $user['role'] ?? '';
+    if ($own_role !== $role) {
+        // Logged in but viewing the wrong portal — bounce to their own
+        // dashboard. The "My Account" link is shown to every visitor on
+        // the public site, so an admin clicking it should land in /admin/
+        // rather than getting an opaque "Access denied".
+        if ($own_role === 'admin')  { header('Location: /admin/');   exit; }
+        if ($own_role === 'client') { header('Location: /account/'); exit; }
         http_response_code(403);
         die('Access denied.');
     }
