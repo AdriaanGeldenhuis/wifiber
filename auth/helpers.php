@@ -494,24 +494,40 @@ function current_user(): ?array {
     return find_user_by_id((int)$_SESSION['user_id']);
 }
 
-function require_role(string $role, string $login_url): array {
+function require_role($role, string $login_url): array {
     $user = current_user();
     if (!$user) {
         header('Location: ' . $login_url);
         exit;
     }
     $own_role = $user['role'] ?? '';
-    if ($own_role !== $role) {
-        // Logged in but viewing the wrong portal — bounce to their own
-        // dashboard. The "My Account" link is shown to every visitor on
-        // the public site, so an admin clicking it should land in /admin/
-        // rather than getting an opaque "Access denied".
-        if ($own_role === 'admin')  { header('Location: /admin/');   exit; }
+    $allowed  = is_array($role) ? $role : [$role];
+    if (!in_array($own_role, $allowed, true)) {
+        if ($own_role === 'admin' || $own_role === 'noc_readonly') {
+            header('Location: /admin/');   exit;
+        }
         if ($own_role === 'client') { header('Location: /account/'); exit; }
         http_response_code(403);
         die('Access denied.');
     }
     return $user;
+}
+
+/**
+ * Inside admin pages: returns true if the current admin can mutate
+ * (push-to-radio, edit sectors, queue jobs, …). NOC-readonly returns
+ * false so views render but action buttons / forms are hidden.
+ */
+function admin_can_write(?array $user = null): bool {
+    $user = $user ?? current_user();
+    return ($user['role'] ?? '') === 'admin';
+}
+
+function require_admin_write(): void {
+    if (!admin_can_write()) {
+        http_response_code(403);
+        die('This action requires a full admin role. NOC-readonly accounts can view but not change network state.');
+    }
 }
 
 /* ---------------------------------------------------------------- flash */

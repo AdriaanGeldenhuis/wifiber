@@ -14,7 +14,7 @@
 require_once __DIR__ . '/../auth/helpers.php';
 
 require_admin_ip();
-$user = require_role('admin', '/admin/login.php');
+$user = require_role(['admin', 'noc_readonly'], '/admin/login.php');
 
 $portal = 'admin';
 $nav = [

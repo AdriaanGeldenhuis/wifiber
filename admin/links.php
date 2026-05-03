@@ -18,6 +18,7 @@ $self = '/admin/links.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_csrf();
+    require_admin_write();
     $action = $_POST['action'] ?? '';
 
     if ($action === 'save') {
