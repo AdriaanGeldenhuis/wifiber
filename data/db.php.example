@@ -15,4 +15,12 @@ return [
     'db'   => 'wifibfjedj_wp0e0b',   // database name from xneelo
     'user' => 'wifibfjedj_63',       // primary username from xneelo
     'pass' => 'CHANGE_ME',
+
+    // 32-byte key for encrypting per-device credentials at rest
+    // (auth/helpers.php::encrypt_secret). Generate once and never rotate
+    // without re-encrypting every device_credentials row:
+    //   php -r "echo base64_encode(random_bytes(32)).PHP_EOL;"
+    // Either base64 or raw binary is accepted. Without this set, vendor
+    // adapters cannot store credentials and config-push jobs are refused.
+    'device_key' => '',
 ];

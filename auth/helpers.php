@@ -98,6 +98,65 @@ function pdo(): PDO {
     return $pdo;
 }
 
+/* -------------------------------------------------------- secret crypto */
+
+/**
+ * Encrypt a secret (radio password / SSH key / SNMP community / API token)
+ * for at-rest storage in `device_credentials.*_enc` blobs.
+ *
+ * Uses libsodium's authenticated secretbox. The key must be 32 random bytes
+ * configured in data/db.local.php as 'device_key' (raw binary or base64;
+ * we accept either). Without that key the function returns NULL — callers
+ * should refuse to enqueue config-push jobs in that case.
+ *
+ * On decrypt failure (corruption, wrong key, missing key) returns NULL.
+ * Never throws — the caller decides how loud to be.
+ */
+function device_secret_key(): ?string {
+    static $key = null;
+    if ($key !== null) return $key === '' ? null : $key;
+    $cfg_file = is_file(DATA_DIR . '/db.local.php')
+        ? DATA_DIR . '/db.local.php'
+        : DATA_DIR . '/db.php';
+    if (!is_file($cfg_file)) { $key = ''; return null; }
+    $cfg = require $cfg_file;
+    $raw = is_array($cfg) ? ($cfg['device_key'] ?? '') : '';
+    if (!is_string($raw) || $raw === '') { $key = ''; return null; }
+    if (strlen($raw) !== SODIUM_CRYPTO_SECRETBOX_KEYBYTES) {
+        $decoded = base64_decode($raw, true);
+        if ($decoded !== false && strlen($decoded) === SODIUM_CRYPTO_SECRETBOX_KEYBYTES) {
+            $raw = $decoded;
+        } else {
+            $key = '';
+            return null;
+        }
+    }
+    $key = $raw;
+    return $key;
+}
+
+function encrypt_secret(?string $plaintext): ?string {
+    if ($plaintext === null || $plaintext === '') return null;
+    $key = device_secret_key();
+    if ($key === null) return null;
+    $nonce = random_bytes(SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+    $cipher = sodium_crypto_secretbox($plaintext, $nonce, $key);
+    return $nonce . $cipher;
+}
+
+function decrypt_secret(?string $blob): ?string {
+    if ($blob === null || $blob === '') return null;
+    $key = device_secret_key();
+    if ($key === null) return null;
+    if (strlen($blob) < SODIUM_CRYPTO_SECRETBOX_NONCEBYTES + SODIUM_CRYPTO_SECRETBOX_MACBYTES) {
+        return null;
+    }
+    $nonce = substr($blob, 0, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+    $cipher = substr($blob, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+    $plain = sodium_crypto_secretbox_open($cipher, $nonce, $key);
+    return $plain === false ? null : $plain;
+}
+
 /* ----------------------------------------------------------------- csrf */
 
 function csrf_token(): string {
