@@ -157,3 +157,17 @@ CREATE TABLE IF NOT EXISTS incident_updates (
   CONSTRAINT fk_incident_update_creator
     FOREIGN KEY (created_by) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS coverage_waitlist (
+  id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  address     VARCHAR(255) NOT NULL,
+  name        VARCHAR(120) NOT NULL DEFAULT '',
+  email       VARCHAR(120) NOT NULL DEFAULT '',
+  phone       VARCHAR(40)  NOT NULL DEFAULT '',
+  notes       TEXT         DEFAULT NULL,
+  ip_address  VARCHAR(45)  DEFAULT NULL,
+  status      ENUM('new','contacted','converted','dropped') NOT NULL DEFAULT 'new',
+  created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_status_created (status, created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
