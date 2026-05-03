@@ -126,8 +126,7 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
             if ($id === (int)$current_user['id']) {
                 flash('error', "You can't delete your own account.");
             } else {
-                $users = array_values(array_filter(load_users(), fn($u) => (int)($u['id'] ?? 0) !== $id));
-                save_users($users);
+                delete_user($id);
                 flash('success', 'User deleted.');
             }
             header('Location: ' . $self);

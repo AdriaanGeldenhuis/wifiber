@@ -1,0 +1,18 @@
+<?php
+/**
+ * MySQL connection settings.
+ *
+ * Copy this file to data/db.php and fill in the real values. data/db.php is
+ * gitignored — credentials never leave the production server.
+ *
+ * The xneelo control panel shows the host, database name and username under
+ * "Databases". Use the "Reset password" button there to set / rotate the
+ * password.
+ */
+return [
+    'host' => 'localhost',           // e.g. dedi321.cpt1.host-h.net
+    'port' => 3306,
+    'db'   => 'wifibfjedj_wp0e0b',   // database name from xneelo
+    'user' => 'wifibfjedj_63',       // primary username from xneelo
+    'pass' => 'CHANGE_ME',
+];

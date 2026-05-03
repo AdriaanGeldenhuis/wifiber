@@ -55,6 +55,9 @@ require __DIR__ . '/../auth/portal-header.php';
   </form>
 
   <p class="portal-foot-link">
+    <a href="/account/forgot.php">Forgot your password?</a>
+  </p>
+  <p class="portal-foot-link">
     Don't have an account? Give us a call on <a href="tel:0800111222">0800 111 222</a> and we'll set you up.
   </p>
 </div>

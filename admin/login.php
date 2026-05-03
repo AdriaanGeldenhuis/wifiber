@@ -89,6 +89,9 @@ require __DIR__ . '/../auth/portal-header.php';
   </form>
 
   <p class="portal-foot-link">
+    <a href="/admin/forgot.php">Forgot your password?</a>
+  </p>
+  <p class="portal-foot-link">
     Looking for the customer portal? <a href="/account/login.php">Sign in here</a>.
   </p>
 </div>
