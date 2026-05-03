@@ -706,16 +706,29 @@
     if (fq)                       kv.push(['Freq',  fq]);
     if (s.tx_power_dbm   != null) kv.push(['TX',    s.tx_power_dbm + ' dBm']);
     if (s.ap_device_name)         kv.push(['AP',    s.ap_device_name]);
-    if (s.max_clients    != null) kv.push(['Max',   s.max_clients + ' clients']);
     const kvHtml = '<dl class="pp-kv">'
       + kv.map(([k, v]) => '<dt>' + escapeHtml(k) + '</dt><dd>' + escapeHtml(String(v)) + '</dd>').join('')
       + '</dl>';
+
+    // Capacity bar — only when both customer_count and max_clients are set.
+    let capHtml = '';
+    if (s.max_clients != null && s.max_clients > 0 && s.customer_count != null) {
+      const pct = Math.min(100, Math.round((s.customer_count / s.max_clients) * 100));
+      const cls = pct >= 100 ? ' cap-full' : (pct >= 80 ? ' cap-warn' : '');
+      capHtml = '<div style="margin-top:8px;font-size:11px;">'
+        + '<div style="display:flex;justify-content:space-between;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;font-weight:600;">'
+        +   '<span>Capacity</span><span>' + s.customer_count + ' / ' + s.max_clients + ' · ' + pct + '%</span>'
+        + '</div>'
+        + '<div class="cap-bar"><span class="cap-bar-fill' + cls + '" style="width:' + pct + '%;"></span></div>'
+        + '</div>';
+    }
     return ''
       + '<div class="map-popup">'
       +   '<strong>' + escapeHtml(s.name) + '</strong><br>'
       +   '<small>' + escapeHtml(towerName) + ' · ' + escapeHtml(s.band) + '</small>'
       +   outageBlock
       +   kvHtml
+      +   capHtml
       +   '<div class="pp-actions">'
       +     '<button type="button" class="btn btn-ghost btn-sm" data-edit-sector="' + s.id + '">Edit</button>'
       +     '<button type="button" class="btn btn-danger btn-sm" data-delete-sector="' + s.id + '">Delete</button>'

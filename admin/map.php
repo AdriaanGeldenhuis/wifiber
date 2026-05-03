@@ -47,6 +47,7 @@ $sector_shape = function (array $s, ?array $ap_device): array {
         'channel_width_mhz' => $s['channel_width_mhz'],
         'tx_power_dbm'      => $s['tx_power_dbm'],
         'max_clients'       => $s['max_clients'],
+        'customer_count'    => isset($s['customer_count']) ? (int)$s['customer_count'] : null,
         'notes'             => $s['notes'] ?? null,
     ];
 };
@@ -166,6 +167,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 ]);
                 $row = sector_find($newid);
                 $ap  = (!empty($row['ap_device_id'])) ? device_find((int)$row['ap_device_id']) : null;
+                if ($row) {
+                    // sector_find() doesn't include customer_count, so back-fill
+                    // it so the JS can refresh the capacity bar in place.
+                    $cnt = pdo()->prepare("SELECT COUNT(*) FROM users WHERE role='client' AND sector_id = ?");
+                    $cnt->execute([$newid]);
+                    $row['customer_count'] = (int)$cnt->fetchColumn();
+                }
                 $reply([
                     'ok'      => true,
                     'id'      => $newid,

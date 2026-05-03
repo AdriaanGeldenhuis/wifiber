@@ -58,25 +58,32 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if ($action === 'ping_now') {
         $id = (int)($_POST['id'] ?? 0);
         $d  = $id ? device_find($id) : null;
-        if (!$d) {
-            flash('error', 'Device not found.');
-        } elseif (trim((string)$d['mgmt_ip']) === '') {
-            flash('error', 'No management IP set on this device.');
-        } else {
-            $r = icmp_ping($d['mgmt_ip']);
-            device_record_poll_result($id, (bool)$r['ok'], $r['rtt_ms']);
-            audit_log('device.ping', [
-                'target_type' => 'device', 'target_id' => $id,
-                'meta' => ['ok' => (bool)$r['ok'], 'rtt_ms' => $r['rtt_ms']],
-            ]);
-            if ($r['ok']) {
-                flash('success', sprintf('%s is reachable — %s', $d['name'], $r['rtt_ms'] !== null ? number_format($r['rtt_ms'], 2) . ' ms' : 'OK'));
-            } else {
-                flash('error', $d['name'] . ' is unreachable.');
+        $is_ajax = !empty($_POST['ajax']);
+        $reply = function (bool $ok, string $msg, array $extra = []) use ($is_ajax, $self) {
+            if ($is_ajax) {
+                while (ob_get_level() > 0) ob_end_clean();
+                header('Content-Type: application/json');
+                echo json_encode(['ok' => $ok, 'message' => $msg] + $extra);
+                exit;
             }
+            flash($ok ? 'success' : 'error', $msg);
+            header('Location: ' . $self);
+            exit;
+        };
+        if (!$d) $reply(false, 'Device not found.');
+        if (trim((string)$d['mgmt_ip']) === '') $reply(false, 'No management IP set on this device.');
+        $r = icmp_ping($d['mgmt_ip']);
+        device_record_poll_result($id, (bool)$r['ok'], $r['rtt_ms']);
+        audit_log('device.ping', [
+            'target_type' => 'device', 'target_id' => $id,
+            'meta' => ['ok' => (bool)$r['ok'], 'rtt_ms' => $r['rtt_ms']],
+        ]);
+        if ($r['ok']) {
+            $reply(true,
+                sprintf('%s is reachable%s', $d['name'], $r['rtt_ms'] !== null ? ' — ' . number_format($r['rtt_ms'], 2) . ' ms' : ''),
+                ['rtt_ms' => $r['rtt_ms'], 'status' => 'online']);
         }
-        header('Location: ' . $self);
-        exit;
+        $reply(false, $d['name'] . ' is unreachable.', ['status' => 'offline']);
     }
 }
 
@@ -172,7 +179,7 @@ $status_pill = function (string $status): string {
       <thead>
         <tr>
           <th>Name</th><th>Site</th><th>Vendor / model</th><th>Role</th>
-          <th>MAC / IP</th><th>Status</th><th>Last seen</th><th></th>
+          <th>MAC / IP</th><th>Firmware</th><th>Status</th><th>Last seen</th><th></th>
         </tr>
       </thead>
       <tbody>
@@ -188,17 +195,13 @@ $status_pill = function (string $status): string {
               <?= $d['mac'] ? '<small><code>' . htmlspecialchars($d['mac']) . '</code></small><br>' : '' ?>
               <?= $d['mgmt_ip'] ? '<small>' . htmlspecialchars($d['mgmt_ip']) . ($d['mgmt_port'] ? ':' . (int)$d['mgmt_port'] : '') . '</small>' : '<small class="muted">—</small>' ?>
             </td>
-            <td><?= $status_pill($d['status']) ?></td>
-            <td><small class="muted"><?= $d['last_seen_at'] ? htmlspecialchars($d['last_seen_at']) : 'never' ?></small></td>
+            <td><small<?= $d['firmware'] ? '' : ' class="muted"' ?>><?= $d['firmware'] ? htmlspecialchars($d['firmware']) : '—' ?></small></td>
+            <td data-device-status="<?= (int)$d['id'] ?>"><?= $status_pill($d['status']) ?></td>
+            <td><small class="muted" data-device-lastseen="<?= (int)$d['id'] ?>"><?= $d['last_seen_at'] ? htmlspecialchars($d['last_seen_at']) : 'never' ?></small></td>
             <td>
               <a href="/admin/device-view.php?id=<?= (int)$d['id'] ?>" class="btn btn-ghost btn-sm" style="margin-right:4px;">View</a>
               <?php if ($d['mgmt_ip']): ?>
-                <form method="post" class="inline-form" style="display:inline-block;margin-right:4px;">
-                  <?= csrf_field() ?>
-                  <input type="hidden" name="action" value="ping_now">
-                  <input type="hidden" name="id" value="<?= (int)$d['id'] ?>">
-                  <button type="submit" class="btn btn-ghost btn-sm" title="ICMP ping the management IP and record a health row">Ping</button>
-                </form>
+                <button type="button" class="btn btn-ghost btn-sm" data-ping-device="<?= (int)$d['id'] ?>" data-ping-name="<?= htmlspecialchars($d['name'], ENT_QUOTES) ?>" style="margin-right:4px;" title="ICMP ping the management IP and record a health row">Ping</button>
               <?php endif; ?>
               <details style="display:inline-block;">
                 <summary class="btn btn-ghost btn-sm">Edit</summary>
@@ -345,4 +348,46 @@ $status_pill = function (string $status): string {
   </form>
 </div>
 
+<script>
+// AJAX ping — submits without leaving the page and surfaces the result
+// as a toast. Updates the row's status pill in place on success.
+(function () {
+  document.addEventListener('click', async function (e) {
+    var btn = e.target.closest('[data-ping-device]');
+    if (!btn) return;
+    e.preventDefault();
+    var id   = btn.dataset.pingDevice;
+    var name = btn.dataset.pingName || ('Device #' + id);
+    var token = (document.querySelector('meta[name="csrf-token"]') || {}).content;
+    btn.disabled = true;
+    btn.classList.add('is-loading');
+    window.toast && window.toast('Pinging ' + name + '…', 'info', 2000);
+    var fd = new FormData();
+    fd.append('action', 'ping_now');
+    fd.append('id', id);
+    fd.append('ajax', '1');
+    fd.append('_csrf', token || '');
+    try {
+      var res = await fetch('/admin/devices.php', { method: 'POST', body: fd, credentials: 'same-origin' });
+      var j = await res.json();
+      btn.disabled = false;
+      btn.classList.remove('is-loading');
+      window.toast && window.toast(j.message || (j.ok ? 'OK' : 'Failed'), j.ok ? 'success' : 'error', 4000);
+      // Flip the row's status pill in place.
+      var pillCell = document.querySelector('[data-device-status="' + id + '"]');
+      if (pillCell && j.status) {
+        pillCell.innerHTML = '<span class="status-pill status-' + j.status + '">' + j.status + '</span>';
+      }
+      var lastCell = document.querySelector('[data-device-lastseen="' + id + '"]');
+      if (lastCell && j.ok) {
+        lastCell.textContent = 'just now';
+      }
+    } catch (err) {
+      btn.disabled = false;
+      btn.classList.remove('is-loading');
+      window.toast && window.toast('Network error', 'error');
+    }
+  });
+})();
+</script>
 <?php require __DIR__ . '/../auth/portal-footer.php'; ?>
