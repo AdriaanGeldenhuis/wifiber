@@ -6,6 +6,8 @@
  * Output is the page body — caller is responsible for layout header/footer.
  */
 
+require_once __DIR__ . '/../auth/products.php';
+
 function render_users_admin(string $role, string $heading, string $subtitle, array $current_user): void {
     $self = strtok($_SERVER['REQUEST_URI'], '?');
 
@@ -28,13 +30,27 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
             $created = null;
             if (!$errors) {
                 try {
+                    // Resolve product picker -> legacy package text so all
+                    // existing readers keep working.
+                    $product_id = (int)($_POST['product_id'] ?? 0);
+                    $package    = '';
+                    if ($product_id > 0 && ($p = products_find($product_id))) {
+                        $package = $p['name'];
+                    }
                     $created = create_user($username, $password, $role, $name, $email, [
                         'phone'         => $_POST['phone']         ?? '',
                         'address'       => $_POST['address']       ?? '',
-                        'package'       => $_POST['package']       ?? '',
+                        'package'       => $package,
                         'surname'       => $surname,
                         'customer_type' => $_POST['customer_type'] ?? 'residential',
                     ]);
+                    if ($product_id > 0 && $created && !empty($created['id'])) {
+                        update_user((int)$created['id'], function (array $u) use ($product_id) {
+                            $u['product_id'] = $product_id;
+                            return $u;
+                        });
+                        $created = find_user_by_id((int)$created['id']) ?? $created;
+                    }
                     $msg = ucfirst($role) . " '{$username}' created";
                     if (!empty($created['account_no'])) {
                         $msg .= " (account #{$created['account_no']})";
@@ -309,8 +325,13 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
           <div class="field"><label>Phone</label>
             <input type="tel" name="phone" maxlength="40">
           </div>
-          <div class="field"><label>Package</label>
-            <input type="text" name="package" maxlength="80" placeholder="e.g. Home 10 Mbps">
+          <div class="field"><label>Product</label>
+            <select name="product_id">
+              <option value="">— pick later —</option>
+              <?php foreach (products_all(true) as $p): ?>
+                <option value="<?= (int)$p['id'] ?>"><?= htmlspecialchars(product_dropdown_label($p)) ?></option>
+              <?php endforeach; ?>
+            </select>
           </div>
           <div class="field" style="grid-column:1/-1;"><label>Address</label>
             <input type="text" name="address" maxlength="200">

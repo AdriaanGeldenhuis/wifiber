@@ -130,7 +130,7 @@ const USER_COLUMNS = [
     'account_no','username','email','name','surname','id_number','vat_number',
     'role','customer_type','status','service_start','billing_day','payment_method',
     'phone','address','lat','lng','alt_contact_name','alt_contact_phone',
-    'package','equipment_mac','equipment_ip','equipment_serial','equipment_model',
+    'package','product_id','equipment_mac','equipment_ip','equipment_serial','equipment_model',
     'notes',
     'password_hash','totp_secret','totp_enabled','totp_recovery_codes',
     'totp_enabled_at','last_login',
@@ -223,6 +223,8 @@ function update_user(int $id, callable $patch): bool {
             $v = in_array($v, CUSTOMER_STATUS, true) ? $v : 'active';
         } elseif ($c === 'payment_method') {
             $v = in_array($v, PAYMENT_METHODS, true) ? $v : 'eft';
+        } elseif ($c === 'product_id') {
+            $v = ($v === null || $v === '' || !is_numeric($v) || (int)$v <= 0) ? null : (int)$v;
         }
 
         $set[]  = "`$c` = ?";

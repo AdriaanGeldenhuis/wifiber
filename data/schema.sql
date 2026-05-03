@@ -27,6 +27,7 @@ CREATE TABLE IF NOT EXISTS users (
   alt_contact_name     VARCHAR(100) NOT NULL DEFAULT '',
   alt_contact_phone    VARCHAR(40)  NOT NULL DEFAULT '',
   package              VARCHAR(80)  NOT NULL DEFAULT '',
+  product_id           INT UNSIGNED DEFAULT NULL,
   equipment_mac        VARCHAR(20)  NOT NULL DEFAULT '',
   equipment_ip         VARCHAR(45)  NOT NULL DEFAULT '',
   equipment_serial     VARCHAR(60)  NOT NULL DEFAULT '',
@@ -42,7 +43,29 @@ CREATE TABLE IF NOT EXISTS users (
   PRIMARY KEY (id),
   UNIQUE KEY uniq_username (username),
   UNIQUE KEY uniq_account_no (account_no),
-  KEY idx_role (role)
+  KEY idx_role (role),
+  KEY idx_user_product (product_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS products (
+  id            INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  tier_key      VARCHAR(40)   NOT NULL DEFAULT '',
+  name          VARCHAR(120)  NOT NULL,
+  down_mbps     DECIMAL(8,2)  NOT NULL DEFAULT 0,
+  up_mbps       DECIMAL(8,2)  NOT NULL DEFAULT 0,
+  monthly_price DECIMAL(10,2) NOT NULL DEFAULT 0,
+  install_24mo  DECIMAL(10,2) NOT NULL DEFAULT 0,
+  install_mtm   DECIMAL(10,2) NOT NULL DEFAULT 2799,
+  contention    VARCHAR(20)   NOT NULL DEFAULT '',
+  description   TEXT          DEFAULT NULL,
+  is_active     TINYINT(1)    NOT NULL DEFAULT 1,
+  sort_order    INT           NOT NULL DEFAULT 0,
+  created_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uniq_name (name),
+  KEY idx_tier (tier_key),
+  KEY idx_active (is_active, sort_order)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS throttle (

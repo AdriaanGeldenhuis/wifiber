@@ -6,6 +6,7 @@
 $page_title = 'Edit client';
 $active_key = 'clients';
 require __DIR__ . '/_layout.php';
+require_once __DIR__ . '/../auth/products.php';
 
 $id     = (int)($_GET['id'] ?? 0);
 $client = $id ? find_user_by_id($id) : null;
@@ -47,6 +48,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'service_start'     => $_POST['service_start']          ?? '',
             'billing_day'       => $_POST['billing_day']            ?? '',
             'payment_method'    => $_POST['payment_method']         ?? 'eft',
+            'product_id'        => $_POST['product_id']             ?? '',
             'package'           => trim($_POST['package']           ?? ''),
             'equipment_mac'     => trim($_POST['equipment_mac']     ?? ''),
             'equipment_ip'      => trim($_POST['equipment_ip']      ?? ''),
@@ -60,6 +62,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         // taken from whatever the admin actually saved.
         if (empty($client['account_no'])) {
             $patch['account_no'] = generate_account_no($surname);
+        }
+
+        // Keep the legacy `package` text in sync with the product picker
+        // so existing readers (public package_price_lookup, the client
+        // portal dashboard, older invoice flows) keep working.
+        if (!empty($patch['product_id']) && ($p = products_find((int)$patch['product_id']))) {
+            $patch['package'] = $p['name'];
+        } elseif ($patch['product_id'] === '' || $patch['product_id'] === null) {
+            // Cleared the picker — leave whatever they typed in `package`.
         }
 
         update_user($id, fn(array $u) => array_merge($u, $patch));
@@ -190,8 +201,23 @@ $v = fn($k, $d = '') => htmlspecialchars((string)($client[$k] ?? $d), ENT_QUOTES
           <?php endforeach; ?>
         </select>
       </div>
-      <div class="field" style="grid-column:1/-1;"><label>Package <span class="muted small">(replaced by the product picker in Phase 2)</span></label>
-        <input type="text" name="package" maxlength="80" value="<?= $v('package') ?>" placeholder="e.g. Home 10 Mbps">
+      <div class="field" style="grid-column:1/-1;"><label>Product</label>
+        <select name="product_id">
+          <option value="">— no product assigned —</option>
+          <?php
+          $catalogue   = products_all(false);
+          $current_pid = (int)($client['product_id'] ?? 0);
+          $current_in_list = false;
+          foreach ($catalogue as $p):
+              if (!$p['is_active'] && $p['id'] !== $current_pid) continue;
+              if ($p['id'] === $current_pid) $current_in_list = true;
+          ?>
+            <option value="<?= (int)$p['id'] ?>" <?= $current_pid===(int)$p['id']?'selected':'' ?>>
+              <?= htmlspecialchars(product_dropdown_label($p)) ?><?= $p['is_active'] ? '' : ' (inactive)' ?>
+            </option>
+          <?php endforeach; ?>
+        </select>
+        <p class="muted small" style="margin:6px 0 0;">Manage the catalogue under <a href="/admin/products.php">Products (billing)</a>. Picking a product also updates the legacy "package" field so older invoice templates keep working.</p>
       </div>
     </div>
   </div>
