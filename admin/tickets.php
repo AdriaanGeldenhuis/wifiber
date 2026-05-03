@@ -155,8 +155,18 @@ $tickets = tickets_all($status_filter ?: null);
     </p>
 
     <?php if (empty($tickets)): ?>
-      <p class="muted">No tickets <?= $status_filter ? 'with this status' : 'yet' ?>.</p>
+      <div class="empty-state">
+        <div class="empty-icon">✉</div>
+        <h3>No tickets <?= $status_filter ? 'with this status' : 'yet' ?></h3>
+        <p><?= $status_filter
+              ? 'Try a different filter, or clear it to see every ticket.'
+              : 'When a customer opens a support ticket from the client portal it shows up here.' ?></p>
+        <?php if ($status_filter): ?>
+          <a class="btn btn-primary" href="/admin/tickets.php">Show all tickets</a>
+        <?php endif; ?>
+      </div>
     <?php else: ?>
+      <div class="table-scroll">
       <table class="data-table">
         <thead>
           <tr><th>#</th><th>Subject</th><th>Client</th><th>Status</th><th>Messages</th><th>Last update</th></tr>
@@ -174,6 +184,7 @@ $tickets = tickets_all($status_filter ?: null);
           <?php endforeach; ?>
         </tbody>
       </table>
+      </div>
     <?php endif; ?>
   </div>
 

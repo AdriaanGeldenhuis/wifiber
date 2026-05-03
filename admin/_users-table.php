@@ -186,7 +186,11 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
     <div class="portal-card">
       <h2>Existing accounts</h2>
       <?php if (empty($users)): ?>
-        <p class="muted">No <?= htmlspecialchars($role) ?>s yet.</p>
+        <div class="empty-state">
+          <div class="empty-icon">+</div>
+          <h3>No <?= htmlspecialchars($role) ?>s yet</h3>
+          <p>Use the form below to add the first one. <?= $role === 'client' ? 'A welcome email with login credentials can be sent automatically.' : '' ?></p>
+        </div>
       <?php else: ?>
         <?php foreach ($users as $u): ?>
           <details class="user-row">

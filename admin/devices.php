@@ -161,8 +161,13 @@ $status_pill = function (string $status): string {
 <div class="portal-card">
   <h2>Inventory <span class="muted">(<?= count($devices) ?>)</span></h2>
   <?php if (!$devices): ?>
-    <p class="muted">No devices match. Add one below to get started.</p>
+    <div class="empty-state">
+      <div class="empty-icon">⚙</div>
+      <h3>No devices yet</h3>
+      <p>APs, CPEs, routers, switches and backhaul radios all live here. Add one with the form below, or place markers on the network map.</p>
+    </div>
   <?php else: ?>
+    <div class="table-scroll">
     <table class="data-table">
       <thead>
         <tr>
@@ -272,6 +277,7 @@ $status_pill = function (string $status): string {
         <?php endforeach; ?>
       </tbody>
     </table>
+    </div>
   <?php endif; ?>
 </div>
 

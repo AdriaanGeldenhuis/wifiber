@@ -132,8 +132,13 @@ $mine = tickets_for_user((int)$user['id']);
   <div class="portal-card">
     <h2>My tickets</h2>
     <?php if (empty($mine)): ?>
-      <p class="muted">You haven't opened a ticket yet. Use the form below to start one.</p>
+      <div class="empty-state">
+        <div class="empty-icon">✉</div>
+        <h3>No tickets yet</h3>
+        <p>If something needs attention — an outage, a billing question, a new install — open a ticket below and our team will pick it up.</p>
+      </div>
     <?php else: ?>
+      <div class="table-scroll">
       <table class="data-table">
         <thead>
           <tr><th>#</th><th>Subject</th><th>Status</th><th>Messages</th><th>Last update</th></tr>
@@ -150,6 +155,7 @@ $mine = tickets_for_user((int)$user['id']);
           <?php endforeach; ?>
         </tbody>
       </table>
+      </div>
     <?php endif; ?>
   </div>
 

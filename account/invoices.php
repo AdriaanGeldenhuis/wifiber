@@ -85,8 +85,13 @@ $billing = invoice_billing_settings();
   <div class="portal-card">
     <h2>My invoices</h2>
     <?php if (empty($mine)): ?>
-      <p class="muted">No invoices yet.</p>
+      <div class="empty-state">
+        <div class="empty-icon">₂</div>
+        <h3>No invoices yet</h3>
+        <p>Once your service starts billing, your invoices will appear here. You'll also get an email each month.</p>
+      </div>
     <?php else: ?>
+      <div class="table-scroll">
       <table class="data-table">
         <thead>
           <tr><th>Number</th><th>Issued</th><th>Due</th><th>Total</th><th>Status</th></tr>
@@ -105,6 +110,7 @@ $billing = invoice_billing_settings();
           <?php endforeach; ?>
         </tbody>
       </table>
+      </div>
     <?php endif; ?>
   </div>
 

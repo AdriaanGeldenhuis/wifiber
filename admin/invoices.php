@@ -68,8 +68,16 @@ $rows = invoices_all($filter ?: null);
 
 <div class="portal-card">
   <?php if (empty($rows)): ?>
-    <p class="muted">No invoices <?= $filter ? 'with this status' : 'yet' ?>.</p>
+    <div class="empty-state">
+      <div class="empty-icon">₂</div>
+      <h3>No invoices <?= $filter ? 'with this status' : 'yet' ?></h3>
+      <p><?= $filter
+            ? 'Try clearing the filter to see all invoices.'
+            : 'Generate the first invoice manually, or wait for the monthly cron to bill active subscribers.' ?></p>
+      <a class="btn btn-primary" href="<?= $filter ? '/admin/invoices.php' : '/admin/invoice-edit.php' ?>"><?= $filter ? 'Show all invoices' : '+ New invoice' ?></a>
+    </div>
   <?php else: ?>
+    <div class="table-scroll">
     <table class="data-table">
       <thead>
         <tr><th>Number</th><th>Client</th><th>Issued</th><th>Due</th><th>Total</th><th>Status</th><th></th></tr>
@@ -134,6 +142,7 @@ $rows = invoices_all($filter ?: null);
         <?php endforeach; ?>
       </tbody>
     </table>
+    </div>
   <?php endif; ?>
 </div>
 

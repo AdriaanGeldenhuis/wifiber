@@ -131,8 +131,14 @@ $device_label = function (?int $id) use ($all_devices): string {
 <div class="portal-card">
   <h2>Sectors <span class="muted">(<?= count($sectors) ?>)</span></h2>
   <?php if (!$sectors): ?>
-    <p class="muted">No sectors match. Add one below to get started.</p>
+    <div class="empty-state">
+      <div class="empty-icon">⌖</div>
+      <h3>No sectors yet</h3>
+      <p>Each tower can host multiple sector APs pointed in different directions. Define one with the form below, or draw it visually on the network map.</p>
+      <a class="btn btn-primary" href="/admin/map.php">Open the map</a>
+    </div>
   <?php else: ?>
+    <div class="table-scroll">
     <table class="data-table">
       <thead>
         <tr>
@@ -265,6 +271,7 @@ $device_label = function (?int $id) use ($all_devices): string {
         <?php endforeach; ?>
       </tbody>
     </table>
+    </div>
   <?php endif; ?>
 </div>
 

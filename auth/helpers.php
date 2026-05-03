@@ -675,7 +675,13 @@ function audit_log(string $action, array $opts = []): void {
     }
 }
 
-function audit_recent(int $limit = 200, ?string $action_like = null, ?int $user_id = null): array {
+function audit_recent(
+    int $limit = 200,
+    ?string $action_like = null,
+    ?int $user_id = null,
+    ?string $from_iso = null,
+    ?string $to_iso = null
+): array {
     $sql  = "SELECT * FROM audit_log";
     $args = [];
     $where = [];
@@ -687,8 +693,16 @@ function audit_recent(int $limit = 200, ?string $action_like = null, ?int $user_
         $where[] = "user_id = ?";
         $args[]  = $user_id;
     }
+    if ($from_iso) {
+        $where[] = "created_at >= ?";
+        $args[]  = $from_iso . ' 00:00:00';
+    }
+    if ($to_iso) {
+        $where[] = "created_at <= ?";
+        $args[]  = $to_iso . ' 23:59:59';
+    }
     if ($where) $sql .= " WHERE " . implode(' AND ', $where);
-    $limit = max(1, min(2000, $limit));
+    $limit = max(1, min(50000, $limit));
     $sql .= " ORDER BY id DESC LIMIT $limit";
     $stmt = pdo()->prepare($sql);
     $stmt->execute($args);
