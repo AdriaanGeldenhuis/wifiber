@@ -47,12 +47,15 @@
   const sitesLayer    = L.layerGroup().addTo(map);
   const linksLayer    = L.layerGroup().addTo(map);
   const clientsLayer  = L.layerGroup().addTo(map);
+  const sectorsLayer  = L.layerGroup().addTo(map);
   const coverageLayer = L.layerGroup();
 
   /* ---------- icons ---------- */
-  const SITE_COLOR  = { tower: '#08e', ap: '#0c8', ptp_endpoint: '#f80', pop: '#80f', other: '#888' };
-  const STATUS_COLOR = { active: '#0c8', lead: '#08e', suspended: '#fa0', disconnected: '#888' };
-  const LINK_COLOR   = { ptp: '#08e', ptmp: '#0c8', fiber: '#f0a', backhaul: '#f80' };
+  const SITE_COLOR    = { tower: '#08e', ap: '#0c8', ptp_endpoint: '#f80', pop: '#80f', other: '#888' };
+  const STATUS_COLOR  = { active: '#0c8', lead: '#08e', suspended: '#fa0', disconnected: '#888' };
+  const LINK_COLOR    = { ptp: '#08e', ptmp: '#0c8', fiber: '#f0a', backhaul: '#f80' };
+  const DEVICE_COLOR  = { online: '#0c8', offline: '#d44', unknown: '#888', retired: '#555' };
+  const BAND_COLOR    = { '2.4GHz': '#f80', '5GHz': '#08e', '6GHz': '#80f', '60GHz': '#f0a', 'other': '#888' };
 
   function dotIcon(color, size) {
     const s = size || 14;
@@ -99,6 +102,97 @@
   document.getElementById('toggle-coverage').addEventListener('change', (e) => {
     e.target.checked ? coverageLayer.addTo(map) : map.removeLayer(coverageLayer);
   });
+  document.getElementById('toggle-sectors').addEventListener('change', (e) => {
+    e.target.checked ? sectorsLayer.addTo(map) : map.removeLayer(sectorsLayer);
+  });
+
+  /* ---------- indexes (devices + sectors keyed by site/tower) ---------- */
+  const devicesBySite = new Map(); // site_id -> [device, ...]
+  (boot.devices || []).forEach((d) => {
+    if (d.site_id == null) return;
+    const sid = parseInt(d.site_id, 10);
+    if (!devicesBySite.has(sid)) devicesBySite.set(sid, []);
+    devicesBySite.get(sid).push(d);
+  });
+  const sectorsByTower = new Map(); // tower_id -> [sector, ...]
+  (boot.sectors || []).forEach((s) => {
+    const tid = parseInt(s.tower_id, 10);
+    if (!sectorsByTower.has(tid)) sectorsByTower.set(tid, []);
+    sectorsByTower.get(tid).push(s);
+  });
+
+  /* ---------- geometry: cone polygon from azimuth + beamwidth + range ---------- */
+  // Walks an arc on the WGS84 sphere from (azimuth - beamwidth/2) to
+  // (azimuth + beamwidth/2). Good enough for sectors a few km wide;
+  // accuracy degrades past tens of km but that's not what sectors are.
+  const EARTH_R = 6371000;
+
+  function destination(lat, lng, bearingDeg, distanceM) {
+    const br   = bearingDeg * Math.PI / 180;
+    const lat1 = lat * Math.PI / 180;
+    const lng1 = lng * Math.PI / 180;
+    const dr   = distanceM / EARTH_R;
+    const lat2 = Math.asin(Math.sin(lat1) * Math.cos(dr)
+                         + Math.cos(lat1) * Math.sin(dr) * Math.cos(br));
+    const lng2 = lng1 + Math.atan2(
+      Math.sin(br) * Math.sin(dr) * Math.cos(lat1),
+      Math.cos(dr) - Math.sin(lat1) * Math.sin(lat2)
+    );
+    return [lat2 * 180 / Math.PI, lng2 * 180 / Math.PI];
+  }
+
+  function sectorPolygon(towerLat, towerLng, azimuth, beamwidth, rangeM) {
+    const half  = beamwidth / 2;
+    const steps = Math.max(6, Math.ceil(beamwidth / 5));
+    const pts = [[towerLat, towerLng]];
+    for (let i = 0; i <= steps; i++) {
+      const ang = azimuth - half + (beamwidth * i / steps);
+      pts.push(destination(towerLat, towerLng, ang, rangeM));
+    }
+    pts.push([towerLat, towerLng]);
+    return pts;
+  }
+
+  /* ---------- popup helpers (devices + sectors at a site) ---------- */
+  function deviceListHTML(siteId) {
+    const list = devicesBySite.get(siteId) || [];
+    if (!list.length) return '';
+    const rows = list.map((d) => {
+      const c = DEVICE_COLOR[d.status] || DEVICE_COLOR.unknown;
+      const pill = '<span style="background:' + c + ';color:#fff;padding:0 5px;border-radius:6px;font-size:10px;">'
+                 + escapeHtml(d.status) + '</span>';
+      const meta = [d.role, d.vendor + (d.model ? ' ' + d.model : '')].filter(Boolean).join(' &middot; ');
+      return '<li><a href="/admin/devices.php?search=' + encodeURIComponent(d.name) + '" style="color:inherit;">'
+           + escapeHtml(d.name) + '</a> ' + pill + '<br><small class="muted">' + escapeHtml(meta) + '</small></li>';
+    }).join('');
+    return '<div style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;">'
+         + '<small><strong>Devices (' + list.length + ')</strong></small>'
+         + '<ul style="margin:4px 0 0;padding-left:14px;">' + rows + '</ul>'
+         + '</div>';
+  }
+
+  function sectorListHTML(towerId) {
+    const list = sectorsByTower.get(towerId) || [];
+    if (!list.length) return '';
+    const rows = list.map((s) => {
+      const c = BAND_COLOR[s.band] || BAND_COLOR.other;
+      const dot = '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + c + ';"></span>';
+      const az  = s.azimuth_deg   != null ? s.azimuth_deg   + '&deg;' : '?';
+      const bw  = s.beamwidth_deg != null ? s.beamwidth_deg + '&deg;' : '?';
+      const fq  = s.frequency_mhz != null ? s.frequency_mhz + ' MHz'
+                + (s.channel_width_mhz ? ' @ ' + s.channel_width_mhz : '')
+                : '';
+      return '<li>' + dot + ' <a href="/admin/sectors.php?tower_id=' + towerId + '" style="color:inherit;">'
+           + escapeHtml(s.name) + '</a><br><small class="muted">'
+           + escapeHtml(s.band) + ' &middot; ' + az + ' / ' + bw
+           + (fq ? ' &middot; ' + escapeHtml(fq) : '')
+           + '</small></li>';
+    }).join('');
+    return '<div style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;">'
+         + '<small><strong>Sectors (' + list.length + ')</strong></small>'
+         + '<ul style="margin:4px 0 0;padding-left:14px;">' + rows + '</ul>'
+         + '</div>';
+  }
 
   /* ---------- render sites ---------- */
   function siteTypeLabel(t) {
@@ -151,6 +245,8 @@
       +     '<button type="button" class="btn btn-ghost btn-sm" data-edit-site="' + s.id + '">Edit</button>'
       +     '<button type="button" class="btn btn-danger btn-sm" data-delete-site="' + s.id + '">Delete</button>'
       +   '</div>'
+      +   deviceListHTML(s.id)
+      +   (s.type === 'tower' ? sectorListHTML(s.id) : '')
       + '</div>';
   }
 
@@ -369,8 +465,57 @@
     setTimeout(() => { if (geoStatus.textContent === msg) geoStatus.textContent = ''; }, 4000);
   }
 
+  /* ---------- render sectors ---------- */
+  // A sector cone is anchored on its tower's lat/lng. Range falls back
+  // to the tower's coverage_radius_m, then a 1500 m default — sectors
+  // don't carry their own range yet (Phase 4 visualisation, not config).
+  const SECTOR_DEFAULT_RANGE_M = 1500;
+
+  function renderSector(sector) {
+    const tower = siteIndex.get(sector.tower_id);
+    if (!tower) return;
+    const az = sector.azimuth_deg;
+    const bw = sector.beamwidth_deg;
+    if (az == null || bw == null) return; // can't draw a cone without a direction
+
+    const range = (tower.data.coverage_radius_m && tower.data.coverage_radius_m > 0)
+                ? Number(tower.data.coverage_radius_m)
+                : SECTOR_DEFAULT_RANGE_M;
+    const color = BAND_COLOR[sector.band] || BAND_COLOR.other;
+
+    const poly = L.polygon(
+      sectorPolygon(tower.data.lat, tower.data.lng, Number(az), Number(bw), range),
+      { color: color, weight: 1.5, fillColor: color, fillOpacity: 0.15, opacity: 0.7 }
+    );
+    poly.bindPopup(sectorPopupHTML(sector, tower.data.name));
+    poly.addTo(sectorsLayer);
+  }
+
+  function sectorPopupHTML(s, towerName) {
+    const fq = s.frequency_mhz != null
+      ? s.frequency_mhz + ' MHz' + (s.channel_width_mhz ? ' @ ' + s.channel_width_mhz + ' MHz wide' : '')
+      : null;
+    return ''
+      + '<div class="map-popup">'
+      +   '<strong>' + escapeHtml(s.name) + '</strong><br>'
+      +   '<small>' + escapeHtml(towerName) + ' &middot; ' + escapeHtml(s.band) + '</small>'
+      +   '<div style="margin-top:6px;font-size:12px;">'
+      +     '<div>Azimuth: ' + (s.azimuth_deg   != null ? s.azimuth_deg   + '&deg;' : '—') + '</div>'
+      +     '<div>Beam: '    + (s.beamwidth_deg != null ? s.beamwidth_deg + '&deg;' : '—') + '</div>'
+      +     (fq ? '<div>Freq: ' + escapeHtml(fq) + '</div>' : '')
+      +     (s.tx_power_dbm != null ? '<div>TX: ' + s.tx_power_dbm + ' dBm</div>' : '')
+      +     (s.ap_device_name ? '<div>AP: ' + escapeHtml(s.ap_device_name) + '</div>' : '')
+      +     (s.max_clients != null ? '<div>Max clients: ' + s.max_clients + '</div>' : '')
+      +   '</div>'
+      +   '<div class="row" style="margin-top:8px;">'
+      +     '<a class="btn btn-ghost btn-sm" href="/admin/sectors.php?tower_id=' + s.tower_id + '">Open record</a>'
+      +   '</div>'
+      + '</div>';
+  }
+
   /* ---------- bootstrap ---------- */
   boot.sites.forEach(renderSite);
   boot.site_links.forEach(renderLink);
   boot.clients.forEach(renderClient);
+  (boot.sectors || []).forEach(renderSector);
 })();

@@ -11,6 +11,8 @@ $page_title = 'Network map';
 $active_key = 'map';
 require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/sites.php';
+require_once __DIR__ . '/../auth/devices.php';
+require_once __DIR__ . '/../auth/sectors.php';
 
 $is_ajax = !empty($_GET['ajax']);
 $reply   = function (array $payload) use ($is_ajax) {
@@ -129,6 +131,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $sites    = sites_all(false);
 $links    = site_links_all();
 $clients  = array_values(array_filter(load_users(), fn($u) => ($u['role'] ?? '') === 'client'));
+$devices  = devices_all();
+$sectors  = sectors_all();
 
 $map_data = [
     'csrf'       => csrf_token(),
@@ -155,6 +159,31 @@ $map_data = [
         'lat'            => $c['lat']        !== null ? (float)$c['lat'] : null,
         'lng'            => $c['lng']        !== null ? (float)$c['lng'] : null,
     ], $clients),
+    'devices' => array_map(fn($d) => [
+        'id'           => (int)$d['id'],
+        'site_id'      => $d['site_id'],
+        'name'         => $d['name'],
+        'vendor'       => $d['vendor'],
+        'model'        => $d['model'],
+        'role'         => $d['role'],
+        'mgmt_ip'      => $d['mgmt_ip'],
+        'status'       => $d['status'],
+        'last_seen_at' => $d['last_seen_at'],
+    ], $devices),
+    'sectors' => array_map(fn($s) => [
+        'id'                => (int)$s['id'],
+        'tower_id'          => (int)$s['tower_id'],
+        'ap_device_id'      => $s['ap_device_id'],
+        'ap_device_name'    => $s['ap_device_name'] ?? null,
+        'name'              => $s['name'],
+        'azimuth_deg'       => $s['azimuth_deg'],
+        'beamwidth_deg'     => $s['beamwidth_deg'],
+        'band'              => $s['band'],
+        'frequency_mhz'     => $s['frequency_mhz'],
+        'channel_width_mhz' => $s['channel_width_mhz'],
+        'tx_power_dbm'      => $s['tx_power_dbm'],
+        'max_clients'       => $s['max_clients'],
+    ], $sectors),
 ];
 ?>
 
@@ -230,6 +259,7 @@ $map_data = [
       <label class="inline-check"><input type="checkbox" id="toggle-sites"    checked> Sites</label>
       <label class="inline-check"><input type="checkbox" id="toggle-links"    checked> Links</label>
       <label class="inline-check"><input type="checkbox" id="toggle-clients"  checked> Clients</label>
+      <label class="inline-check"><input type="checkbox" id="toggle-sectors"  checked> Sectors</label>
       <label class="inline-check"><input type="checkbox" id="toggle-coverage">       Rings</label>
     </div>
 
@@ -239,6 +269,8 @@ $map_data = [
       <span>Sites <strong id="count-sites"><?= count($sites) ?></strong></span>
       <span>Links <strong id="count-links"><?= count($links) ?></strong></span>
       <span>Clients <strong id="count-clients"><?= count($clients) ?></strong></span>
+      <span>Devices <strong id="count-devices"><?= count($devices) ?></strong></span>
+      <span>Sectors <strong id="count-sectors"><?= count($sectors) ?></strong></span>
       <span>Unplaced <strong id="count-unplaced"><?= count(array_filter($clients, fn($c) => $c['lat'] === null || $c['lng'] === null)) ?></strong></span>
     </div>
 
