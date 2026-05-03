@@ -50,9 +50,10 @@ $nav = [
         ['key' => 'images',  'label' => 'Image library',    'href' => '/admin/images.php'],
     ]],
     ['group' => 'System Settings', 'items' => [
-        ['key' => 'settings', 'label' => 'Site settings', 'href' => '/admin/settings.php'],
-        ['key' => 'admins',   'label' => 'Admins',        'href' => '/admin/admins.php'],
-        ['key' => 'audit',    'label' => 'Audit log',     'href' => '/admin/audit.php'],
+        ['key' => 'settings',     'label' => 'Site settings', 'href' => '/admin/settings.php'],
+        ['key' => 'admins',       'label' => 'Admins',        'href' => '/admin/admins.php'],
+        ['key' => 'audit',        'label' => 'Audit log',     'href' => '/admin/audit.php'],
+        ['key' => 'integrations', 'label' => 'Integrations',  'href' => '/admin/integrations.php'],
     ]],
     ['group' => 'My Account', 'items' => [
         ['key' => 'password', 'label' => 'My password',     'href' => '/admin/password.php'],

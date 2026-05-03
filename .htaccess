@@ -26,6 +26,9 @@ RewriteCond %{REQUEST_FILENAME} !-d
 RewriteCond %{DOCUMENT_ROOT}/$1/$2.php -f
 RewriteRule ^([^/.]+)/([^/.]+)$ /$1/$2.php [L]
 
+# /api/v1/* -> /api/v1/index.php (front-controller dispatcher)
+RewriteRule ^api/v1(/.*)?$ /api/v1/index.php [L,QSA]
+
 # /sitemap.xml -> /sitemap.php (auto-generated XML)
 RewriteRule ^sitemap\.xml$ /sitemap.php [L]
 

@@ -219,6 +219,13 @@ foreach ($jobs as $job) {
         'target_type' => $scope, 'target_id' => $scope_id, 'actor_user_id' => $actor,
         'meta' => ['job_id' => $job_id, 'payload_keys' => array_keys($payload)],
     ]);
+    if (is_file(__DIR__ . '/../auth/webhooks.php')) {
+        require_once __DIR__ . '/../auth/webhooks.php';
+        webhook_fire('wireless.config_applied', [
+            'job_id' => $job_id, 'scope' => $scope, 'scope_id' => $scope_id,
+            'payload' => $payload, 'sector_name' => $sector['name'] ?? null,
+        ]);
+    }
     $applied++;
 }
 

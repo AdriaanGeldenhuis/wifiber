@@ -73,7 +73,24 @@ function outage_create(string $scope, ?int $scope_id, string $label, int $affect
             'target_type' => 'outage', 'target_id' => $id,
             'meta' => $sent,
         ]);
-    } elseif ($suppress) {
+    }
+    // Webhooks fire regardless of suppression — third-party
+    // integrations (Slack, PagerDuty) want to know.
+    if (function_exists('webhook_fire')) {
+        webhook_fire('outage.opened', [
+            'outage_id' => $id, 'scope' => $scope, 'scope_id' => $scope_id,
+            'label' => $label, 'affected_count' => $affected, 'cause' => $cause,
+            'suppressed' => $suppress,
+        ]);
+    } elseif (is_file(__DIR__ . '/webhooks.php')) {
+        require_once __DIR__ . '/webhooks.php';
+        webhook_fire('outage.opened', [
+            'outage_id' => $id, 'scope' => $scope, 'scope_id' => $scope_id,
+            'label' => $label, 'affected_count' => $affected, 'cause' => $cause,
+            'suppressed' => $suppress,
+        ]);
+    }
+    if ($suppress) {
         audit_log('outage.suppressed', [
             'target_type' => 'outage', 'target_id' => $id,
             'meta' => ['reason' => 'maintenance_window_active'],
@@ -144,6 +161,16 @@ function outage_resolve(int $outage_id, ?string $note = null): bool {
         audit_log('outage.notify_resolved', [
             'target_type' => 'outage', 'target_id' => $outage_id,
             'meta' => $sent,
+        ]);
+    }
+    if (is_file(__DIR__ . '/webhooks.php')) {
+        require_once __DIR__ . '/webhooks.php';
+        webhook_fire('outage.resolved', [
+            'outage_id' => $outage_id,
+            'scope' => $row['scope'] ?? null,
+            'scope_id' => $row['scope_id'] ?? null,
+            'label' => $row['scope_label'] ?? '',
+            'note' => $note,
         ]);
     }
     return true;
