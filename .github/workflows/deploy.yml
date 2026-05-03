@@ -1,0 +1,83 @@
+# Auto-deploy to xneelo on every push to main.
+#
+# Two jobs:
+#   1. lint   — runs `php -l` against every PHP file. Fails if any
+#               file has a syntax error, which keeps broken pushes from
+#               reaching production.
+#   2. deploy — SSHes into the production server and runs bin/deploy.sh,
+#               which does `git fetch + reset --hard`, then re-applies
+#               data/schema.sql via bin/migrate-schema.php.
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#
+#   DEPLOY_SSH_HOST     hostname or IP of the server (e.g. wifiber.co.za
+#                       or whatever xneelo gives you for SSH)
+#   DEPLOY_SSH_USER     SSH username, e.g. wifibfjedj
+#   DEPLOY_SSH_PORT     SSH port (xneelo: usually 22)
+#   DEPLOY_SSH_KEY      *private* half of an SSH key pair. Add the public
+#                       half to ~/.ssh/authorized_keys on the server first.
+#                       The key needs only enough access to run
+#                       bin/deploy.sh (i.e. the wifibfjedj user).
+#
+# Recommended setup:
+#   ssh-keygen -t ed25519 -C "github-actions-deploy" -f ~/wifiber-deploy -N ""
+#   ssh-copy-id -i ~/wifiber-deploy.pub wifibfjedj@<host>
+#   # then paste contents of ~/wifiber-deploy into DEPLOY_SSH_KEY,
+#   # delete the local copy
+
+name: Deploy
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  lint:
+    name: PHP syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: shivammathur/setup-php@v2
+        with:
+          php-version: '8.2'
+          tools: none
+          coverage: none
+      - name: php -l on every .php file
+        run: |
+          set -e
+          fail=0
+          while IFS= read -r -d '' f; do
+            php -l "$f" > /dev/null 2>&1 || { php -l "$f"; fail=1; }
+          done < <(find . -type f -name '*.php' -not -path './.git/*' -print0)
+          [ "$fail" = "0" ]
+
+  deploy:
+    name: Deploy to production
+    needs: lint
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - name: Sanity-check secrets are present
+        run: |
+          [ -n "${{ secrets.DEPLOY_SSH_HOST }}" ] || { echo "DEPLOY_SSH_HOST secret is missing"; exit 1; }
+          [ -n "${{ secrets.DEPLOY_SSH_USER }}" ] || { echo "DEPLOY_SSH_USER secret is missing"; exit 1; }
+          [ -n "${{ secrets.DEPLOY_SSH_KEY  }}" ] || { echo "DEPLOY_SSH_KEY secret is missing";  exit 1; }
+
+      - name: Run bin/deploy.sh on the server
+        uses: appleboy/ssh-action@v1.0.3
+        with:
+          host:     ${{ secrets.DEPLOY_SSH_HOST }}
+          username: ${{ secrets.DEPLOY_SSH_USER }}
+          port:     ${{ secrets.DEPLOY_SSH_PORT || 22 }}
+          key:      ${{ secrets.DEPLOY_SSH_KEY }}
+          # 2-min cap; deploy.sh + schema migration should be a few seconds.
+          command_timeout: 2m
+          script: |
+            set -e
+            cd ~/public_html
+            bash bin/deploy.sh
