@@ -13,6 +13,7 @@ require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/sites.php';
 require_once __DIR__ . '/../auth/devices.php';
 require_once __DIR__ . '/../auth/sectors.php';
+require_once __DIR__ . '/../auth/outages.php';
 
 $is_ajax = !empty($_GET['ajax']);
 $reply   = function (array $payload) use ($is_ajax) {
@@ -133,6 +134,34 @@ $links    = site_links_all();
 $clients  = array_values(array_filter(load_users(), fn($u) => ($u['role'] ?? '') === 'client'));
 $devices  = devices_all();
 $sectors  = sectors_all();
+$active_outages = outages_all(['status' => 'active'], 500);
+
+// Index active outage scope_ids so the JS can highlight affected
+// sectors and (transitively) towers without iterating per render.
+$outage_sector_ids = [];
+$outage_tower_ids  = [];
+$outage_by_sector  = [];
+foreach ($active_outages as $o) {
+    if ($o['scope'] === 'sector' && $o['scope_id']) {
+        $outage_sector_ids[] = (int)$o['scope_id'];
+        $outage_by_sector[(int)$o['scope_id']] = [
+            'id'             => (int)$o['id'],
+            'started_at'     => $o['started_at'],
+            'cause'          => $o['cause'],
+            'affected_count' => (int)$o['affected_count'],
+        ];
+    } elseif ($o['scope'] === 'tower' && $o['scope_id']) {
+        $outage_tower_ids[] = (int)$o['scope_id'];
+    }
+}
+// A tower is also "affected" if any of its sectors are in outage,
+// even without a tower-scope outage row of its own.
+foreach ($sectors as $sec) {
+    if (in_array((int)$sec['id'], $outage_sector_ids, true)) {
+        $outage_tower_ids[] = (int)$sec['tower_id'];
+    }
+}
+$outage_tower_ids = array_values(array_unique($outage_tower_ids));
 
 // Build a sector-id → "Name · Tower" lookup so each client marker can
 // surface the sector label in its popup without a per-client query.
@@ -209,6 +238,12 @@ $map_data = [
         'tx_power_dbm'      => $s['tx_power_dbm'],
         'max_clients'       => $s['max_clients'],
     ], $sectors),
+    'outages' => [
+        'sector_ids'    => $outage_sector_ids,
+        'tower_ids'     => $outage_tower_ids,
+        'by_sector_id'  => $outage_by_sector,
+        'active_count'  => count($active_outages),
+    ],
 ];
 ?>
 
@@ -297,6 +332,9 @@ $map_data = [
       <span>Devices <strong id="count-devices"><?= count($devices) ?></strong></span>
       <span>Sectors <strong id="count-sectors"><?= count($sectors) ?></strong></span>
       <span>Unplaced <strong id="count-unplaced"><?= count(array_filter($clients, fn($c) => $c['lat'] === null || $c['lng'] === null)) ?></strong></span>
+      <?php if (count($active_outages) > 0): ?>
+        <span style="color:#d44;"><a href="/admin/outages.php" style="color:inherit;">Outages <strong><?= count($active_outages) ?></strong></a></span>
+      <?php endif; ?>
     </div>
 
     <div class="sep"></div>

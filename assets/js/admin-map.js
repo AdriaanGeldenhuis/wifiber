@@ -135,6 +135,11 @@
     sectorsByTower.get(tid).push(s);
   });
 
+  /* ---------- outage indexes ---------- */
+  const outageSectorIds  = new Set((boot.outages && boot.outages.sector_ids) || []);
+  const outageTowerIds   = new Set((boot.outages && boot.outages.tower_ids)  || []);
+  const outageBySectorId = (boot.outages && boot.outages.by_sector_id) || {};
+
   /* ---------- geometry: cone polygon from azimuth + beamwidth + range ---------- */
   // Walks an arc on the WGS84 sphere from (azimuth - beamwidth/2) to
   // (azimuth + beamwidth/2). Good enough for sectors a few km wide;
@@ -214,10 +219,21 @@
   }
 
   function renderSite(s) {
+    const inOutage = outageTowerIds.has(s.id);
+    const badge    = inOutage ? '#d44' : null;
     const marker = L.marker([s.lat, s.lng], {
       draggable: true,
-      icon: dotIcon(SITE_COLOR[s.type] || '#888', 16),
+      icon: dotIcon(SITE_COLOR[s.type] || '#888', 16, badge),
+      zIndexOffset: inOutage ? 1000 : 0,
     });
+    if (inOutage) {
+      // Pulsing red halo to draw the eye on a busy map.
+      const halo = L.circleMarker([s.lat, s.lng], {
+        radius: 18, color: '#d44', weight: 2, fillColor: '#d44',
+        fillOpacity: 0.15, opacity: 0.85, interactive: false,
+      });
+      halo.addTo(sitesLayer);
+    }
     marker.bindPopup(sitePopupHTML(s));
     marker.on('dragend', async (e) => {
       const ll = e.target.getLatLng();
@@ -507,11 +523,23 @@
     const range = (tower.data.coverage_radius_m && tower.data.coverage_radius_m > 0)
                 ? Number(tower.data.coverage_radius_m)
                 : SECTOR_DEFAULT_RANGE_M;
-    const color = BAND_COLOR[sector.band] || BAND_COLOR.other;
+    const bandColor = BAND_COLOR[sector.band] || BAND_COLOR.other;
+    const inOutage  = outageSectorIds.has(sector.id);
+
+    // Outage tints the cone red and bumps the outline weight so it
+    // pops on a busy map. Healthy sectors keep their band colour.
+    const stroke = inOutage ? '#d44' : bandColor;
+    const fill   = inOutage ? '#d44' : bandColor;
 
     const poly = L.polygon(
       sectorPolygon(tower.data.lat, tower.data.lng, Number(az), Number(bw), range),
-      { color: color, weight: 1.5, fillColor: color, fillOpacity: 0.15, opacity: 0.7 }
+      {
+        color: stroke,
+        weight: inOutage ? 3 : 1.5,
+        fillColor: fill,
+        fillOpacity: inOutage ? 0.25 : 0.15,
+        opacity: inOutage ? 0.95 : 0.7,
+      }
     );
     poly.bindPopup(sectorPopupHTML(sector, tower.data.name));
     poly.addTo(sectorsLayer);
@@ -521,10 +549,21 @@
     const fq = s.frequency_mhz != null
       ? s.frequency_mhz + ' MHz' + (s.channel_width_mhz ? ' @ ' + s.channel_width_mhz + ' MHz wide' : '')
       : null;
+    const outage = outageBySectorId[s.id];
+    const outageBlock = outage
+      ? '<div style="margin:6px 0;padding:6px 8px;background:rgba(220,68,68,0.18);border-left:3px solid #d44;font-size:12px;">'
+        + '<strong>Active outage</strong><br>'
+        + '<small>Started: ' + escapeHtml(outage.started_at) + '</small><br>'
+        + (outage.cause ? '<small>Cause: ' + escapeHtml(outage.cause) + '</small><br>' : '')
+        + '<small>' + outage.affected_count + ' customer'
+          + (outage.affected_count === 1 ? '' : 's') + ' affected</small>'
+        + '</div>'
+      : '';
     return ''
       + '<div class="map-popup">'
       +   '<strong>' + escapeHtml(s.name) + '</strong><br>'
       +   '<small>' + escapeHtml(towerName) + ' &middot; ' + escapeHtml(s.band) + '</small>'
+      +   outageBlock
       +   '<div style="margin-top:6px;font-size:12px;">'
       +     '<div>Azimuth: ' + (s.azimuth_deg   != null ? s.azimuth_deg   + '&deg;' : '—') + '</div>'
       +     '<div>Beam: '    + (s.beamwidth_deg != null ? s.beamwidth_deg + '&deg;' : '—') + '</div>'
@@ -535,6 +574,7 @@
       +   '</div>'
       +   '<div class="row" style="margin-top:8px;">'
       +     '<a class="btn btn-ghost btn-sm" href="/admin/sectors.php?tower_id=' + s.tower_id + '">Open record</a>'
+      +     (outage ? '<a class="btn btn-ghost btn-sm" href="/admin/outages.php">Outages</a>' : '')
       +   '</div>'
       + '</div>';
   }
