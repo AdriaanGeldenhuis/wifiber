@@ -134,6 +134,15 @@ $clients  = array_values(array_filter(load_users(), fn($u) => ($u['role'] ?? '')
 $devices  = devices_all();
 $sectors  = sectors_all();
 
+// Build a sector-id → "Name · Tower" lookup so each client marker can
+// surface the sector label in its popup without a per-client query.
+$sector_label_by_id = [];
+foreach ($sectors as $sec) {
+    $label = $sec['name'];
+    if (!empty($sec['tower_name'])) $label .= ' · ' . $sec['tower_name'];
+    $sector_label_by_id[(int)$sec['id']] = $label;
+}
+
 $map_data = [
     'csrf'       => csrf_token(),
     'center'     => [-26.7100, 27.8300], // Vaal Triangle default
@@ -158,6 +167,8 @@ $map_data = [
         'address'        => $c['address']    ?? '',
         'lat'            => $c['lat']        !== null ? (float)$c['lat'] : null,
         'lng'            => $c['lng']        !== null ? (float)$c['lng'] : null,
+        'sector_id'      => !empty($c['sector_id']) ? (int)$c['sector_id'] : null,
+        'sector_label'   => !empty($c['sector_id']) ? ($sector_label_by_id[(int)$c['sector_id']] ?? null) : null,
     ], $clients),
     'devices' => array_map(fn($d) => [
         'id'           => (int)$d['id'],

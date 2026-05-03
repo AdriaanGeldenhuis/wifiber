@@ -25,6 +25,7 @@ function sector_normalise(array $r): array {
     $r['channel_width_mhz'] = $r['channel_width_mhz'] !== null ? (int)$r['channel_width_mhz'] : null;
     $r['tx_power_dbm']      = $r['tx_power_dbm']      !== null ? (int)$r['tx_power_dbm']      : null;
     $r['max_clients']       = $r['max_clients']       !== null ? (int)$r['max_clients']       : null;
+    if (isset($r['customer_count'])) $r['customer_count'] = (int)$r['customer_count'];
     return $r;
 }
 
@@ -41,7 +42,9 @@ function sectors_all(?array $filters = null): array {
                    t.name AS tower_name,
                    d.name AS ap_device_name,
                    d.vendor AS ap_device_vendor,
-                   d.model  AS ap_device_model
+                   d.model  AS ap_device_model,
+                   (SELECT COUNT(*) FROM users u
+                     WHERE u.sector_id = s.id AND u.role = 'client') AS customer_count
               FROM sectors s
               LEFT JOIN sites   t ON t.id = s.tower_id
               LEFT JOIN devices d ON d.id = s.ap_device_id";

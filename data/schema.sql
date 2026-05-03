@@ -29,6 +29,7 @@ CREATE TABLE IF NOT EXISTS users (
   package              VARCHAR(80)  NOT NULL DEFAULT '',
   product_id           INT UNSIGNED DEFAULT NULL,
   site_id              INT UNSIGNED DEFAULT NULL,
+  sector_id            INT UNSIGNED DEFAULT NULL,
   equipment_mac        VARCHAR(20)  NOT NULL DEFAULT '',
   equipment_ip         VARCHAR(45)  NOT NULL DEFAULT '',
   equipment_serial     VARCHAR(60)  NOT NULL DEFAULT '',
@@ -46,7 +47,8 @@ CREATE TABLE IF NOT EXISTS users (
   UNIQUE KEY uniq_account_no (account_no),
   KEY idx_role (role),
   KEY idx_user_product (product_id),
-  KEY idx_user_site    (site_id)
+  KEY idx_user_site    (site_id),
+  KEY idx_user_sector  (sector_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS sites (

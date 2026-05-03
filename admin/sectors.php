@@ -138,6 +138,7 @@ $device_label = function (?int $id) use ($all_devices): string {
         <tr>
           <th>Name</th><th>Tower</th><th>AP device</th>
           <th>Azimuth / beam</th><th>Band</th><th>Frequency</th><th>TX</th>
+          <th style="text-align:right;">Clients</th>
           <th></th>
         </tr>
       </thead>
@@ -169,6 +170,19 @@ $device_label = function (?int $id) use ($all_devices): string {
               <?php endif; ?>
             </td>
             <td><?= $s['tx_power_dbm'] !== null ? (int)$s['tx_power_dbm'] . ' dBm' : '—' ?></td>
+            <td style="text-align:right;">
+              <?php
+                $cc  = (int)($s['customer_count'] ?? 0);
+                $max = $s['max_clients'];
+              ?>
+              <strong<?= $cc === 0 ? ' class="muted"' : '' ?>><?= $cc ?></strong>
+              <?php if ($max !== null): ?>
+                <small class="muted"> / <?= (int)$max ?></small>
+              <?php endif; ?>
+              <?php if ($max !== null && $cc >= $max && $max > 0): ?>
+                <br><small style="color:#d44;">at capacity</small>
+              <?php endif; ?>
+            </td>
             <td>
               <details>
                 <summary class="btn btn-ghost btn-sm">Edit</summary>

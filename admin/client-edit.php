@@ -8,6 +8,7 @@ $active_key = 'clients';
 require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/products.php';
 require_once __DIR__ . '/../auth/sites.php';
+require_once __DIR__ . '/../auth/sectors.php';
 
 $id     = (int)($_GET['id'] ?? 0);
 $client = $id ? find_user_by_id($id) : null;
@@ -71,6 +72,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'payment_method'    => $_POST['payment_method']         ?? 'eft',
             'product_id'        => $_POST['product_id']             ?? '',
             'package'           => trim($_POST['package']           ?? ''),
+            'site_id'           => $_POST['site_id']                ?? '',
+            'sector_id'         => $_POST['sector_id']              ?? '',
             'equipment_mac'     => trim($_POST['equipment_mac']     ?? ''),
             'equipment_ip'      => trim($_POST['equipment_ip']      ?? ''),
             'equipment_serial'  => trim($_POST['equipment_serial']  ?? ''),
@@ -247,6 +250,48 @@ $v = fn($k, $d = '') => htmlspecialchars((string)($client[$k] ?? $d), ENT_QUOTES
           <?php endforeach; ?>
         </select>
         <p class="muted small" style="margin:6px 0 0;">Manage the catalogue under <a href="/admin/products.php">Products (billing)</a>. Picking a product also updates the legacy "package" field so older invoice templates keep working.</p>
+      </div>
+    </div>
+  </div>
+
+  <div class="portal-card">
+    <h2>Network</h2>
+    <div class="form form-grid">
+      <div class="field"><label>Tower / site</label>
+        <select name="site_id">
+          <option value="">— none —</option>
+          <?php
+          $all_sites      = sites_all(false);
+          $current_site   = (int)($client['site_id'] ?? 0);
+          foreach ($all_sites as $s):
+              if (!$s['is_active'] && (int)$s['id'] !== $current_site) continue;
+          ?>
+            <option value="<?= (int)$s['id'] ?>" <?= $current_site === (int)$s['id'] ? 'selected' : '' ?>>
+              <?= htmlspecialchars($s['name']) ?> (<?= htmlspecialchars($s['type']) ?>)<?= $s['is_active'] ? '' : ' — inactive' ?>
+            </option>
+          <?php endforeach; ?>
+        </select>
+      </div>
+      <div class="field"><label>Sector</label>
+        <select name="sector_id">
+          <option value="">— none —</option>
+          <?php
+          $all_sectors    = sectors_all();
+          $current_sector = (int)($client['sector_id'] ?? 0);
+          foreach ($all_sectors as $sec):
+          ?>
+            <option value="<?= (int)$sec['id'] ?>" <?= $current_sector === (int)$sec['id'] ? 'selected' : '' ?>>
+              <?= htmlspecialchars($sec['name']) ?>
+              <?php if (!empty($sec['tower_name'])): ?>
+                &middot; <?= htmlspecialchars($sec['tower_name']) ?>
+              <?php endif; ?>
+              <?php if (!empty($sec['frequency_mhz'])): ?>
+                &middot; <?= (int)$sec['frequency_mhz'] ?> MHz
+              <?php endif; ?>
+            </option>
+          <?php endforeach; ?>
+        </select>
+        <p class="muted small" style="margin:6px 0 0;">Manage sectors under <a href="/admin/sectors.php">Sectors</a>. Tower and sector are independent — picking a sector that lives on a different tower than the one above is allowed (the customer might be on a CPE attached directly to a non-tower AP).</p>
       </div>
     </div>
   </div>

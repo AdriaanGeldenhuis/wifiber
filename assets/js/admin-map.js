@@ -335,6 +335,11 @@
       +   (c.address ? '<small>' + escapeHtml(c.address) + '</small><br>' : '')
       +   '<span style="display:inline-block;background:' + (STATUS_COLOR[c.status] || '#888')
       +     ';color:#fff;padding:1px 7px;border-radius:8px;font-size:11px;text-transform:uppercase;">' + escapeHtml(c.status) + '</span>'
+      +   (c.sector_label
+            ? '<div style="margin-top:6px;font-size:12px;"><span class="muted">Sector:</span> '
+              + '<a href="/admin/sectors.php?search=' + encodeURIComponent(c.sector_label.split(' · ')[0])
+              + '" style="color:inherit;">' + escapeHtml(c.sector_label) + '</a></div>'
+            : '')
       +   '<div class="row" style="margin-top:8px;">'
       +     '<a class="btn btn-ghost btn-sm" href="/admin/client-edit.php?id=' + c.id + '">Open record</a>'
       +   '</div>'
