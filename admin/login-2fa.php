@@ -52,19 +52,28 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
         if (!$accepted) {
             record_login_fail(client_ip());
+            audit_log('login.2fa_fail', [
+                'target_type' => 'user', 'target_id' => (int)$candidate['id'],
+                'meta' => ['username' => $candidate['username']],
+            ]);
             $error = 'Code is wrong or expired.';
         } else {
             reset_login_fails(client_ip());
             session_regenerate_id(true);
-            $_SESSION['user_id']      = (int)$candidate['id'];
-            $_SESSION['user_role']    = $candidate['role'];
-            $_SESSION['user_name']    = $candidate['name'];
-            $_SESSION['logged_in_at'] = time();
+            $_SESSION['user_id']        = (int)$candidate['id'];
+            $_SESSION['user_role']      = $candidate['role'];
+            $_SESSION['user_name']      = $candidate['name'];
+            $_SESSION['logged_in_at']   = time();
+            $_SESSION['last_activity']  = time();
             unset($_SESSION['totp_pending_id'], $_SESSION['totp_pending_expires']);
             update_user((int)$candidate['id'], function (array $u) {
                 $u['last_login'] = date('c');
                 return $u;
             });
+            audit_log('login.success', [
+                'target_type' => 'user', 'target_id' => (int)$candidate['id'],
+                'meta' => ['role' => 'admin', '2fa' => true],
+            ]);
             header('Location: /admin/');
             exit;
         }

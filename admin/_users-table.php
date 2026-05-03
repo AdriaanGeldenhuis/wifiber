@@ -89,6 +89,13 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
                     return $u;
                 });
                 $msg = $ok ? 'Password updated.' : 'User not found.';
+                if ($ok) {
+                    audit_log('admin.password_reset', [
+                        'target_type' => 'user',
+                        'target_id'   => $id,
+                        'meta'        => ['emailed' => !empty($_POST['send_email'])],
+                    ]);
+                }
                 if ($ok && !empty($_POST['send_email'])) {
                     $u = find_user_by_id($id);
                     if ($u) {
@@ -109,6 +116,7 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
                 $u['password_hash'] = password_hash($newpw, PASSWORD_DEFAULT);
                 return $u;
             });
+            audit_log('admin.welcome_resend', ['target_type' => 'user', 'target_id' => $id]);
             $u = find_user_by_id($id);
             if ($u) {
                 $r = send_welcome_email($u, $newpw);
@@ -126,8 +134,7 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
             if ($id === (int)$current_user['id']) {
                 flash('error', "You can't delete your own account.");
             } else {
-                $users = array_values(array_filter(load_users(), fn($u) => (int)($u['id'] ?? 0) !== $id));
-                save_users($users);
+                delete_user($id);
                 flash('success', 'User deleted.');
             }
             header('Location: ' . $self);
@@ -212,7 +219,7 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
                 </details>
 
                 <?php if ($is_client_view && !empty($u['email'])): ?>
-                  <form method="post" class="inline-form" onsubmit="return confirm('Generate a new temp password and email it to <?= htmlspecialchars($u['email'], ENT_QUOTES) ?>?');">
+                  <form method="post" class="inline-form" data-confirm="Generate a new temp password and email it to <?= htmlspecialchars($u['email'], ENT_QUOTES) ?>?">
                     <?= csrf_field() ?>
                     <input type="hidden" name="action" value="send_welcome">
                     <input type="hidden" name="id" value="<?= (int)$u['id'] ?>">
@@ -221,7 +228,7 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
                 <?php endif; ?>
 
                 <?php if ((int)$u['id'] !== (int)$current_user['id']): ?>
-                  <form method="post" class="inline-form" onsubmit="return confirm('Delete <?= htmlspecialchars($u['username'], ENT_QUOTES) ?>? This cannot be undone.');">
+                  <form method="post" class="inline-form" data-confirm="Delete <?= htmlspecialchars($u['username'], ENT_QUOTES) ?>? This cannot be undone.">
                     <?= csrf_field() ?>
                     <input type="hidden" name="action" value="delete">
                     <input type="hidden" name="id" value="<?= (int)$u['id'] ?>">

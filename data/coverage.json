@@ -1,0 +1,60 @@
+{
+    "intro": "Type your address or town and we'll tell you in a second whether we can hook you up.",
+    "areas": [
+        {
+            "name": "Vanderbijlpark",
+            "aliases": ["VDB", "vanderbijl"],
+            "suburbs": ["Vaaloewer"]
+        },
+        {
+            "name": "Vereeniging",
+            "aliases": [],
+            "suburbs": ["Three Rivers", "Duncanville", "Peacehaven", "Arcon Park", "Falcon Ridge"]
+        },
+        {
+            "name": "Sasolburg",
+            "aliases": [],
+            "suburbs": ["Vaalpark", "Zamdela"]
+        },
+        {
+            "name": "Meyerton",
+            "aliases": [],
+            "suburbs": ["Henley on Klip", "Kookrus"]
+        },
+        {
+            "name": "Heidelberg",
+            "aliases": [],
+            "suburbs": []
+        },
+        {
+            "name": "Sebokeng",
+            "aliases": [],
+            "suburbs": []
+        },
+        {
+            "name": "Evaton",
+            "aliases": [],
+            "suburbs": []
+        },
+        {
+            "name": "Roshnee",
+            "aliases": [],
+            "suburbs": []
+        },
+        {
+            "name": "Boipatong",
+            "aliases": [],
+            "suburbs": []
+        },
+        {
+            "name": "Bophelong",
+            "aliases": [],
+            "suburbs": []
+        },
+        {
+            "name": "Sharpeville",
+            "aliases": [],
+            "suburbs": []
+        }
+    ]
+}

@@ -104,9 +104,9 @@ function fmt_bytes(int $b): string {
           <a href="<?= $url ?>" target="_blank" class="image-thumb" style="background-image:url('<?= $url ?>');"></a>
           <div class="image-meta">
             <div class="muted small"><?= fmt_bytes($f['size']) ?> &middot; <?= date('Y-m-d', $f['time']) ?></div>
-            <input type="text" readonly class="copy-url" value="<?= $url ?>" onclick="this.select();" title="Click to select, then copy">
+            <input type="text" readonly class="copy-url" value="<?= $url ?>" data-select-all title="Click to select, then copy">
           </div>
-          <form method="post" class="inline-form" onsubmit="return confirm('Delete <?= htmlspecialchars($f['name'], ENT_QUOTES) ?>?');">
+          <form method="post" class="inline-form" data-confirm="Delete <?= htmlspecialchars($f['name'], ENT_QUOTES) ?>?">
             <?= csrf_field() ?>
             <input type="hidden" name="action" value="delete">
             <input type="hidden" name="name" value="<?= htmlspecialchars($f['name'], ENT_QUOTES) ?>">

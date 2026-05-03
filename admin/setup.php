@@ -14,7 +14,8 @@ if (any_admin_exists()) {
       <p>An admin account already exists. For security, this setup page is disabled.</p>
       <p><a href="/admin/login.php" class="btn btn-primary">Go to login</a></p>
       <p style="margin-top:24px; color:var(--text-muted); font-size:.85rem;">
-        Need to reset? SSH into the server and edit <code>data/users.json</code>, or delete it and reload this page.
+        Need to reset? SSH into the server and run
+        <code>DELETE FROM users WHERE role = 'admin';</code> against the database, then reload this page.
       </p>
     </div>
     <?php

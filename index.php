@@ -72,6 +72,26 @@ require __DIR__ . '/includes/header.php';
   </div>
 </section>
 
+<section class="section-tight coverage-quick" id="coverage-check">
+  <div class="container">
+    <div class="coverage-check-card">
+      <div class="coverage-quick-head">
+        <h2>Quick coverage check</h2>
+        <p>Type your address or town &mdash; we'll tell you in a second whether we can hook you up.</p>
+      </div>
+      <form method="post" class="coverage-check-form" action="/coverage">
+        <?= csrf_field() ?>
+        <input type="hidden" name="action" value="check">
+        <div class="coverage-check-row">
+          <input type="text" name="address" required maxlength="200"
+                 placeholder="e.g. 12 Main Street, Vanderbijlpark">
+          <button type="submit" class="btn btn-primary">Check coverage</button>
+        </div>
+      </form>
+    </div>
+  </div>
+</section>
+
 <section class="section-tight">
   <div class="container">
     <div class="stat-strip">

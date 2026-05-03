@@ -3,9 +3,9 @@
  * Shared auth helpers for admin and client portals.
  *
  * Storage:
- *   data/users.json       — all user accounts (role: admin | client)
- *   data/throttle.json    — login-failure tracking by IP
- *   data/admin-ips.json   — optional admin IP allowlist (empty = open)
+ *   MySQL          — users, throttle, password_resets (see data/schema.sql)
+ *   data/db.php    — DB credentials (gitignored, see data/db.php.example)
+ *   data/admin-ips.json — optional admin IP allowlist (empty = open)
  *
  * Sessions are HttpOnly + Secure (when over HTTPS) + SameSite=Lax.
  * CSRF tokens are required on all POSTs.
@@ -14,13 +14,16 @@
 declare(strict_types=1);
 
 const DATA_DIR        = __DIR__ . '/../data';
-const USERS_FILE      = DATA_DIR . '/users.json';
-const THROTTLE_FILE   = DATA_DIR . '/throttle.json';
 const ADMIN_IPS_FILE  = DATA_DIR . '/admin-ips.json';
 
 const MAX_LOGIN_FAILS = 5;
 const LOCKOUT_SECS    = 900;   // 15 min
+const PW_RESET_TTL    = 3600;  // 1 hour
 const SESSION_NAME    = 'wfsess';
+
+const POST_RATE_LIMIT_MAX    = 30;   // POSTs per IP
+const POST_RATE_LIMIT_WINDOW = 60;   // seconds
+const SESSION_IDLE_TIMEOUT   = 3600; // 1 hour idle -> auto-logout
 
 /* --------------------------------------------------------------- session */
 
@@ -58,6 +61,43 @@ function json_save(string $path, array $data): bool {
     return @rename($tmp, $path);
 }
 
+/* ------------------------------------------------------------------ pdo */
+
+function pdo(): PDO {
+    static $pdo = null;
+    if ($pdo !== null) return $pdo;
+
+    // data/db.local.php (gitignored) wins over data/db.php so a developer
+    // can point the same code at a local MariaDB without touching prod creds.
+    $cfg_file = is_file(DATA_DIR . '/db.local.php')
+        ? DATA_DIR . '/db.local.php'
+        : DATA_DIR . '/db.php';
+    if (!is_file($cfg_file)) {
+        http_response_code(500);
+        die('Database is not configured. Copy data/db.php.example to data/db.php and fill in the credentials.');
+    }
+    $cfg = require $cfg_file;
+    if (!is_array($cfg) || empty($cfg['host']) || empty($cfg['db']) || empty($cfg['user'])) {
+        http_response_code(500);
+        die('data/db.php is incomplete. Expected keys: host, db, user, pass (port optional).');
+    }
+    $dsn = sprintf(
+        'mysql:host=%s;port=%d;dbname=%s;charset=utf8mb4',
+        $cfg['host'], (int)($cfg['port'] ?? 3306), $cfg['db']
+    );
+    try {
+        $pdo = new PDO($dsn, $cfg['user'], (string)($cfg['pass'] ?? ''), [
+            PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+            PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+            PDO::ATTR_EMULATE_PREPARES   => false,
+        ]);
+    } catch (PDOException $e) {
+        http_response_code(500);
+        die('Could not connect to the database. Check data/db.php and that the database server is reachable.');
+    }
+    return $pdo;
+}
+
 /* ----------------------------------------------------------------- csrf */
 
 function csrf_token(): string {
@@ -86,72 +126,134 @@ function require_csrf(): void {
 
 /* ---------------------------------------------------------------- users */
 
-function load_users(): array {
-    $d = json_load(USERS_FILE, ['users' => []]);
-    return $d['users'] ?? [];
+const USER_COLUMNS = [
+    'username','email','name','role','phone','address','package',
+    'password_hash','totp_secret','totp_enabled','totp_recovery_codes',
+    'totp_enabled_at','last_login',
+];
+
+function row_to_user(?array $row): ?array {
+    if (!$row) return null;
+    $row['id']           = (int)$row['id'];
+    $row['totp_enabled'] = !empty($row['totp_enabled']);
+    $codes = $row['totp_recovery_codes'] ?? null;
+    if (is_string($codes) && $codes !== '') {
+        $decoded = json_decode($codes, true);
+        $row['totp_recovery_codes'] = is_array($decoded) ? $decoded : [];
+    } else {
+        $row['totp_recovery_codes'] = [];
+    }
+    return $row;
 }
 
-function save_users(array $users): bool {
-    return json_save(USERS_FILE, ['users' => array_values($users)]);
+function load_users(): array {
+    $stmt = pdo()->query("SELECT * FROM users ORDER BY id ASC");
+    $out = [];
+    foreach ($stmt as $row) $out[] = row_to_user($row);
+    return $out;
 }
 
 function find_user_by_username(string $username): ?array {
-    foreach (load_users() as $u) {
-        if (isset($u['username']) && strcasecmp($u['username'], $username) === 0) return $u;
-    }
-    return null;
+    $stmt = pdo()->prepare("SELECT * FROM users WHERE username = ? LIMIT 1");
+    $stmt->execute([$username]);
+    return row_to_user($stmt->fetch() ?: null);
+}
+
+function find_user_by_username_or_email(string $needle): ?array {
+    $needle = trim($needle);
+    if ($needle === '') return null;
+    $stmt = pdo()->prepare(
+        "SELECT * FROM users WHERE username = ? OR (email <> '' AND email = ?) LIMIT 1"
+    );
+    $stmt->execute([$needle, $needle]);
+    return row_to_user($stmt->fetch() ?: null);
 }
 
 function find_user_by_id(int $id): ?array {
-    foreach (load_users() as $u) {
-        if (($u['id'] ?? null) === $id) return $u;
-    }
-    return null;
-}
-
-function next_user_id(array $users): int {
-    $max = 0;
-    foreach ($users as $u) $max = max($max, (int)($u['id'] ?? 0));
-    return $max + 1;
+    $stmt = pdo()->prepare("SELECT * FROM users WHERE id = ? LIMIT 1");
+    $stmt->execute([$id]);
+    return row_to_user($stmt->fetch() ?: null);
 }
 
 function update_user(int $id, callable $patch): bool {
-    $users = load_users();
-    $found = false;
-    foreach ($users as &$u) {
-        if (($u['id'] ?? null) === $id) {
-            $u = $patch($u);
-            $found = true;
-            break;
+    $current = find_user_by_id($id);
+    if (!$current) return false;
+    $patched = $patch($current);
+    if (!is_array($patched)) return false;
+
+    $set  = [];
+    $args = [];
+    foreach (USER_COLUMNS as $c) {
+        if (!array_key_exists($c, $patched)) continue;
+        $v = $patched[$c];
+
+        if ($c === 'totp_recovery_codes') {
+            $v = (is_array($v) && $v) ? json_encode(array_values($v)) : null;
+        } elseif ($c === 'totp_enabled') {
+            $v = $v ? 1 : 0;
+        } elseif (in_array($c, ['totp_enabled_at','last_login'], true)) {
+            if ($v === null || $v === '') {
+                $v = null;
+            } else {
+                $ts = is_int($v) ? $v : strtotime((string)$v);
+                $v  = $ts ? date('Y-m-d H:i:s', $ts) : null;
+            }
         }
+
+        $set[]  = "`$c` = ?";
+        $args[] = $v;
     }
-    return $found ? save_users($users) : false;
+    if (!$set) return true;
+
+    $args[] = $id;
+    $sql = "UPDATE users SET " . implode(', ', $set) . " WHERE id = ?";
+    $stmt = pdo()->prepare($sql);
+    return $stmt->execute($args);
 }
 
 function create_user(string $username, string $password, string $role, string $name, string $email = '', array $extra = []): array {
     if (!in_array($role, ['admin', 'client'], true)) {
         throw new InvalidArgumentException("role must be admin or client");
     }
-    $users = load_users();
     if (find_user_by_username($username)) {
         throw new RuntimeException("A user with that username already exists.");
     }
-    $user = [
-        'id'            => next_user_id($users),
-        'username'      => $username,
-        'email'         => $email,
-        'name'          => $name,
-        'role'          => $role,
-        'phone'         => trim((string)($extra['phone']   ?? '')),
-        'address'       => trim((string)($extra['address'] ?? '')),
-        'package'       => trim((string)($extra['package'] ?? '')),
-        'password_hash' => password_hash($password, PASSWORD_DEFAULT),
-        'created_at'    => date('c'),
-        'last_login'    => null,
-    ];
-    $users[] = $user;
-    save_users($users);
-    return $user;
+    $stmt = pdo()->prepare(
+        "INSERT INTO users
+            (username, email, name, role, phone, address, package, password_hash, created_at)
+         VALUES
+            (?, ?, ?, ?, ?, ?, ?, ?, NOW())"
+    );
+    $stmt->execute([
+        $username,
+        $email,
+        $name,
+        $role,
+        trim((string)($extra['phone']   ?? '')),
+        trim((string)($extra['address'] ?? '')),
+        trim((string)($extra['package'] ?? '')),
+        password_hash($password, PASSWORD_DEFAULT),
+    ]);
+    $id = (int)pdo()->lastInsertId();
+    audit_log('user.create', [
+        'target_type' => 'user',
+        'target_id'   => $id,
+        'meta'        => ['username' => $username, 'role' => $role, 'email' => $email],
+    ]);
+    return find_user_by_id($id) ?? [];
+}
+
+function delete_user(int $id): bool {
+    $u  = find_user_by_id($id);
+    $ok = pdo()->prepare("DELETE FROM users WHERE id = ?")->execute([$id]);
+    if ($ok && $u) {
+        audit_log('user.delete', [
+            'target_type' => 'user',
+            'target_id'   => $id,
+            'meta'        => ['username' => $u['username'] ?? '', 'role' => $u['role'] ?? ''],
+        ]);
+    }
+    return $ok;
 }
 
 /* --------------------------------------------------------------- login */
@@ -161,33 +263,30 @@ function client_ip(): string {
 }
 
 function is_locked_out(string $ip): bool {
-    $t = json_load(THROTTLE_FILE);
-    $e = $t[$ip] ?? null;
-    if (!$e) return false;
-    if (($e['fails'] ?? 0) < MAX_LOGIN_FAILS) return false;
-    if (time() - ($e['last'] ?? 0) > LOCKOUT_SECS) {
-        unset($t[$ip]);
-        json_save(THROTTLE_FILE, $t);
+    $stmt = pdo()->prepare("SELECT fails, last_fail FROM throttle WHERE ip = ?");
+    $stmt->execute([$ip]);
+    $row = $stmt->fetch();
+    if (!$row) return false;
+    if ((int)$row['fails'] < MAX_LOGIN_FAILS) return false;
+    if (time() - (int)$row['last_fail'] > LOCKOUT_SECS) {
+        $del = pdo()->prepare("DELETE FROM throttle WHERE ip = ?");
+        $del->execute([$ip]);
         return false;
     }
     return true;
 }
 
 function record_login_fail(string $ip): void {
-    $t = json_load(THROTTLE_FILE);
-    $t[$ip] = [
-        'fails' => (int)(($t[$ip]['fails'] ?? 0) + 1),
-        'last'  => time(),
-    ];
-    json_save(THROTTLE_FILE, $t);
+    $stmt = pdo()->prepare(
+        "INSERT INTO throttle (ip, fails, last_fail) VALUES (?, 1, ?)
+         ON DUPLICATE KEY UPDATE fails = fails + 1, last_fail = VALUES(last_fail)"
+    );
+    $stmt->execute([$ip, time()]);
 }
 
 function reset_login_fails(string $ip): void {
-    $t = json_load(THROTTLE_FILE);
-    if (isset($t[$ip])) {
-        unset($t[$ip]);
-        json_save(THROTTLE_FILE, $t);
-    }
+    $stmt = pdo()->prepare("DELETE FROM throttle WHERE ip = ?");
+    $stmt->execute([$ip]);
 }
 
 function attempt_login(string $username, string $password, string $required_role): ?array {
@@ -197,9 +296,17 @@ function attempt_login(string $username, string $password, string $required_role
     $valid = $user && password_verify($password, $user['password_hash'] ?? '');
     if (!$valid || ($user['role'] ?? '') !== $required_role) {
         record_login_fail($ip);
+        audit_log('login.fail', ['meta' => ['username' => $username, 'role' => $required_role]]);
         return null;
     }
     reset_login_fails($ip);
+    audit_log('login.success', [
+        'user_id'     => (int)$user['id'],
+        'username'    => (string)$user['username'],
+        'target_type' => 'user',
+        'target_id'   => (int)$user['id'],
+        'meta'        => ['role' => $user['role']],
+    ]);
 
     // Re-hash if PHP's defaults have moved on
     if (password_needs_rehash($user['password_hash'], PASSWORD_DEFAULT)) {
@@ -210,10 +317,11 @@ function attempt_login(string $username, string $password, string $required_role
     }
 
     session_regenerate_id(true);
-    $_SESSION['user_id']      = (int)$user['id'];
-    $_SESSION['user_role']    = $user['role'];
-    $_SESSION['user_name']    = $user['name'];
-    $_SESSION['logged_in_at'] = time();
+    $_SESSION['user_id']        = (int)$user['id'];
+    $_SESSION['user_role']      = $user['role'];
+    $_SESSION['user_name']      = $user['name'];
+    $_SESSION['logged_in_at']   = time();
+    $_SESSION['last_activity']  = time();
 
     update_user((int)$user['id'], function (array $u) {
         $u['last_login'] = date('c');
@@ -224,6 +332,13 @@ function attempt_login(string $username, string $password, string $required_role
 }
 
 function logout(): void {
+    if (!empty($_SESSION['user_id'])) {
+        audit_log('logout', [
+            'user_id'     => (int)$_SESSION['user_id'],
+            'target_type' => 'user',
+            'target_id'   => (int)$_SESSION['user_id'],
+        ]);
+    }
     $_SESSION = [];
     if (ini_get('session.use_cookies')) {
         $p = session_get_cookie_params();
@@ -234,6 +349,13 @@ function logout(): void {
 
 function current_user(): ?array {
     if (empty($_SESSION['user_id'])) return null;
+    // Idle session timeout — kick the user out if they haven't done anything in an hour.
+    $last = (int)($_SESSION['last_activity'] ?? 0);
+    if ($last > 0 && time() - $last > SESSION_IDLE_TIMEOUT) {
+        logout();
+        return null;
+    }
+    $_SESSION['last_activity'] = time();
     return find_user_by_id((int)$_SESSION['user_id']);
 }
 
@@ -297,10 +419,8 @@ function require_admin_ip(): void {
 /* ---------------------------------------------------------- bootstrap */
 
 function any_admin_exists(): bool {
-    foreach (load_users() as $u) {
-        if (($u['role'] ?? '') === 'admin') return true;
-    }
-    return false;
+    $stmt = pdo()->query("SELECT 1 FROM users WHERE role = 'admin' LIMIT 1");
+    return (bool)$stmt->fetchColumn();
 }
 
 /* ---------------------------------------------------------------- email */
@@ -341,4 +461,202 @@ function send_welcome_email(array $user, string $temporary_password, ?string $ba
     return ['ok' => (bool)$sent, 'reason' => $sent ? 'sent' : 'mail() failed'];
 }
 
+/* ------------------------------------------------------- password reset */
+/*
+ * Tokens use a selector + validator scheme. The full token (selector.validator)
+ * is sent in the email link; only the selector and a SHA-256 hash of the
+ * validator are persisted, so a leaked password_resets row cannot be replayed.
+ */
+
+function pw_reset_purge_expired(): void {
+    $stmt = pdo()->prepare("DELETE FROM password_resets WHERE expires_at <= ?");
+    $stmt->execute([time()]);
+}
+
+function pw_reset_create_token(int $user_id): string {
+    pw_reset_purge_expired();
+    // One outstanding link per user — drop any older tokens.
+    $del = pdo()->prepare("DELETE FROM password_resets WHERE user_id = ?");
+    $del->execute([$user_id]);
+
+    $selector  = bin2hex(random_bytes(8));   // 16 hex chars
+    $validator = bin2hex(random_bytes(32));  // 64 hex chars
+    $stmt = pdo()->prepare(
+        "INSERT INTO password_resets (selector, validator_hash, user_id, expires_at, created_at)
+         VALUES (?, ?, ?, ?, NOW())"
+    );
+    $stmt->execute([$selector, hash('sha256', $validator), $user_id, time() + PW_RESET_TTL]);
+    return $selector . '.' . $validator;
+}
+
+function pw_reset_lookup(string $token): ?array {
+    $token = trim($token);
+    if ($token === '' || strpos($token, '.') === false) return null;
+    [$selector, $validator] = explode('.', $token, 2);
+    if ($selector === '' || $validator === '') return null;
+
+    pw_reset_purge_expired();
+    $stmt = pdo()->prepare("SELECT * FROM password_resets WHERE selector = ? LIMIT 1");
+    $stmt->execute([$selector]);
+    $r = $stmt->fetch();
+    if (!$r) return null;
+    if (!hash_equals((string)$r['validator_hash'], hash('sha256', $validator))) return null;
+    if ((int)$r['expires_at'] <= time()) return null;
+    $user = find_user_by_id((int)$r['user_id']);
+    if (!$user) return null;
+    return ['reset' => $r, 'user' => $user];
+}
+
+function pw_reset_consume(string $token): ?array {
+    $found = pw_reset_lookup($token);
+    if (!$found) return null;
+    $del = pdo()->prepare("DELETE FROM password_resets WHERE selector = ?");
+    $del->execute([(string)$found['reset']['selector']]);
+    return $found['user'];
+}
+
+function pw_reset_invalidate_for_user(int $user_id): void {
+    $stmt = pdo()->prepare("DELETE FROM password_resets WHERE user_id = ?");
+    $stmt->execute([$user_id]);
+}
+
+function send_password_reset_email(array $user, string $token, string $reset_path, ?string $base_url = null): array {
+    if (empty($user['email']) || !filter_var($user['email'], FILTER_VALIDATE_EMAIL)) {
+        return ['ok' => false, 'reason' => 'no email on file'];
+    }
+    $site      = load_site_settings();
+    $site_name = $site['name']    ?? 'WiFIBER';
+    $support   = $site['email_support'] ?? 'support@wifiber.co.za';
+    $phone     = $site['phone']   ?? '';
+    $base      = $base_url ?? ((!empty($_SERVER['HTTPS']) ? 'https' : 'http') . '://' . ($_SERVER['HTTP_HOST'] ?? 'wifiber.co.za'));
+    $reset_url = rtrim($base, '/') . $reset_path . '?token=' . urlencode($token);
+
+    $name = $user['name'] ?? $user['username'];
+    $body = "Hi {$name},\n\n"
+          . "Someone (hopefully you) asked to reset your {$site_name} password.\n\n"
+          . "Click the link below to choose a new one. The link is good for 1 hour:\n"
+          . "{$reset_url}\n\n"
+          . "If you didn't ask for this, you can ignore this email — your\n"
+          . "current password will keep working.\n\n"
+          . "Need a hand? Reply to this email or call us"
+          . ($phone ? " on {$phone}" : '') . ".\n\n"
+          . "— The {$site_name} team\n";
+
+    $headers = "From: {$site_name} <no-reply@" . preg_replace('/^www\./', '', $_SERVER['HTTP_HOST'] ?? 'wifiber.co.za') . ">\r\n"
+             . "Reply-To: {$support}\r\n"
+             . "X-Mailer: WiFIBER-Portal\r\n"
+             . "Content-Type: text/plain; charset=UTF-8\r\n";
+
+    $sent = @mail($user['email'], "Reset your {$site_name} password", $body, $headers);
+    return ['ok' => (bool)$sent, 'reason' => $sent ? 'sent' : 'mail() failed'];
+}
+
+/* ----------------------------------------------------------- audit log */
+/*
+ * Lightweight audit trail. Anything security- or money-relevant calls
+ * audit_log() with a verb (e.g. "user.create", "invoice.paid") plus
+ * optional structured context. The current user / IP are captured
+ * automatically.
+ */
+
+function audit_log(string $action, array $opts = []): void {
+    try {
+        $user_id  = $opts['user_id']  ?? ($_SESSION['user_id'] ?? null);
+        // Prefer an explicit username, then a DB lookup by id, then fall back to
+        // the session's display name only if nothing else is known. This keeps
+        // audit rows readable even when the call site only has the id.
+        $username = $opts['username'] ?? null;
+        if (!$username && $user_id !== null) {
+            $u = find_user_by_id((int)$user_id);
+            if ($u) $username = $u['username'];
+        }
+        if (!$username) $username = $_SESSION['user_name'] ?? null;
+        $stmt = pdo()->prepare(
+            "INSERT INTO audit_log
+                (user_id, username, action, target_type, target_id, meta, ip_address)
+             VALUES (?, ?, ?, ?, ?, ?, ?)"
+        );
+        $meta = $opts['meta'] ?? null;
+        $stmt->execute([
+            $user_id ? (int)$user_id : null,
+            $username ? mb_substr((string)$username, 0, 60) : null,
+            mb_substr($action, 0, 60),
+            isset($opts['target_type']) ? mb_substr((string)$opts['target_type'], 0, 40) : null,
+            isset($opts['target_id'])   ? (int)$opts['target_id'] : null,
+            ($meta && is_array($meta)) ? json_encode($meta, JSON_UNESCAPED_SLASHES) : null,
+            client_ip(),
+        ]);
+    } catch (Throwable $e) {
+        // Auditing must never break the parent action; log to error_log and move on.
+        error_log('audit_log failed: ' . $e->getMessage());
+    }
+}
+
+function audit_recent(int $limit = 200, ?string $action_like = null, ?int $user_id = null): array {
+    $sql  = "SELECT * FROM audit_log";
+    $args = [];
+    $where = [];
+    if ($action_like !== null && $action_like !== '') {
+        $where[] = "action LIKE ?";
+        $args[]  = '%' . $action_like . '%';
+    }
+    if ($user_id) {
+        $where[] = "user_id = ?";
+        $args[]  = $user_id;
+    }
+    if ($where) $sql .= " WHERE " . implode(' AND ', $where);
+    $limit = max(1, min(2000, $limit));
+    $sql .= " ORDER BY id DESC LIMIT $limit";
+    $stmt = pdo()->prepare($sql);
+    $stmt->execute($args);
+    return $stmt->fetchAll();
+}
+
+/* ------------------------------------------------------- rate limiting */
+/*
+ * Simple per-bucket counter with a fixed window. Used by
+ * enforce_global_post_rate_limit() (called below for every POST) to cap how
+ * many writes a single IP can do in a minute. Login throttling is separate
+ * (see is_locked_out / record_login_fail above).
+ */
+
+function rate_limit_check(string $bucket, int $max, int $window_secs): bool {
+    if ($max <= 0) return true;
+    $now = time();
+    try {
+        $sel = pdo()->prepare("SELECT counter, window_at FROM rate_limit WHERE bucket = ?");
+        $sel->execute([$bucket]);
+        $row = $sel->fetch();
+        if (!$row || ($now - (int)$row['window_at']) >= $window_secs) {
+            // Fresh window — reset.
+            pdo()->prepare(
+                "INSERT INTO rate_limit (bucket, counter, window_at) VALUES (?, 1, ?)
+                 ON DUPLICATE KEY UPDATE counter = 1, window_at = VALUES(window_at)"
+            )->execute([$bucket, $now]);
+            return true;
+        }
+        if ((int)$row['counter'] >= $max) return false;
+        pdo()->prepare("UPDATE rate_limit SET counter = counter + 1 WHERE bucket = ?")
+            ->execute([$bucket]);
+        return true;
+    } catch (Throwable $e) {
+        // If the rate-limit table is missing or DB is sad, fail open rather than
+        // locking everyone out. The error will surface elsewhere.
+        error_log('rate_limit_check failed: ' . $e->getMessage());
+        return true;
+    }
+}
+
+function enforce_global_post_rate_limit(): void {
+    if (($_SERVER['REQUEST_METHOD'] ?? 'GET') !== 'POST') return;
+    $ip = client_ip();
+    if (!rate_limit_check('post-ip:' . $ip, POST_RATE_LIMIT_MAX, POST_RATE_LIMIT_WINDOW)) {
+        audit_log('rate_limit.block', ['meta' => ['ip' => $ip, 'bucket' => 'post-ip']]);
+        http_response_code(429);
+        header('Retry-After: ' . POST_RATE_LIMIT_WINDOW);
+        die('Too many requests. Please slow down and try again in a minute.');
+    }
+}
+
 start_session();
+enforce_global_post_rate_limit();

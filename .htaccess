@@ -21,6 +21,9 @@ RewriteCond %{REQUEST_FILENAME} !-d
 RewriteCond %{DOCUMENT_ROOT}/$1/$2.php -f
 RewriteRule ^([^/.]+)/([^/.]+)$ /$1/$2.php [L]
 
+# /sitemap.xml -> /sitemap.php (auto-generated XML)
+RewriteRule ^sitemap\.xml$ /sitemap.php [L]
+
 # --- Security ----------------------------------------------------------------
 # Block dotfiles (e.g. .git, .env)
 RedirectMatch 404 /\..*$
@@ -28,12 +31,24 @@ RedirectMatch 404 /\..*$
 # Disable directory listings
 Options -Indexes
 
-# Don't expose PHP version
+# Don't expose PHP version + send the modern security headers.
 <IfModule mod_headers.c>
   Header unset X-Powered-By
-  Header set X-Content-Type-Options "nosniff"
-  Header set X-Frame-Options "SAMEORIGIN"
-  Header set Referrer-Policy "strict-origin-when-cross-origin"
+  Header always set X-Content-Type-Options "nosniff"
+  Header always set X-Frame-Options "DENY"
+  Header always set Referrer-Policy "strict-origin-when-cross-origin"
+  # Two-year HSTS with preload directive — submit the apex once at https://hstspreload.org
+  # if you want to be on the browser preload list. includeSubDomains is intentional.
+  Header always set Strict-Transport-Security "max-age=63072000; includeSubDomains; preload"
+  # Lock down powerful browser APIs — none of them are used.
+  Header always set Permissions-Policy "geolocation=(), camera=(), microphone=(), payment=(), usb=()"
+  # Content-Security-Policy: 'unsafe-inline' is kept for STYLE only because the
+  # legacy templates use style="..." attributes in many places. Inline scripts
+  # have all been moved to assets/js/portal.js + assets/js/main.js so the
+  # script-src can be strict. The plausible.io / Google analytics origins are
+  # whitelisted so admins can switch the provider on from /admin/settings.php
+  # without anyone having to edit .htaccess.
+  Header always set Content-Security-Policy "default-src 'self'; script-src 'self' https://plausible.io https://www.googletagmanager.com; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: https://api.qrserver.com https://www.google-analytics.com; connect-src 'self' https://plausible.io https://www.google-analytics.com https://*.analytics.google.com; frame-ancestors 'none'; base-uri 'self'; form-action 'self'; object-src 'none'"
 </IfModule>
 
 # Block access to includes/, auth/, and data/ from the web

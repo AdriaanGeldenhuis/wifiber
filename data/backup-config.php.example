@@ -1,0 +1,24 @@
+<?php
+/**
+ * Optional config for bin/backup-data.php.
+ *
+ * Copy this file to data/backup-config.php and fill in what you need.
+ * If you skip this file, the script just stores tarballs in
+ * ~/backups and never pushes anywhere — fine if you also rely on
+ * xneelo's own snapshots.
+ *
+ * For 'git_remote' to work, the cron user (your hosting account)
+ * needs an SSH key already authorised on the GitHub repo, or a
+ * Personal-Access-Token-embedded HTTPS URL like:
+ *   https://<TOKEN>@github.com/youruser/wifiber-backup.git
+ */
+return [
+    'local_dir'           => $_SERVER['HOME'] . '/backups',
+    'keep_days'           => 30,
+    'git_remote'          => null,        // e.g. 'git@github.com:adriaangeldenhuis/wifiber-backup.git'
+    'git_branch'          => 'main',
+    'git_committer_name'  => 'wifiber-backup',
+    'git_committer_email' => 'backup@wifiber.co.za',
+    // Skip ticket attachments to keep tarballs small? (default: include them)
+    'skip_ticket_attachments' => false,
+];

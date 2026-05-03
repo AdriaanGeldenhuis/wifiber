@@ -37,6 +37,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
               && password_verify($password, $candidate['password_hash'] ?? '');
         if (!$valid) {
             record_login_fail(client_ip());
+            audit_log('login.fail', ['meta' => ['username' => $username, 'role' => 'admin']]);
             $error = 'Invalid username or password.';
         } else {
             // Step 2: if 2FA is enabled, divert to the TOTP page
@@ -44,20 +45,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 session_regenerate_id(true);
                 $_SESSION['totp_pending_id']      = (int)$candidate['id'];
                 $_SESSION['totp_pending_expires'] = time() + 300; // 5 minute window
+                audit_log('login.password_ok_pending_2fa', [
+                    'target_type' => 'user', 'target_id' => (int)$candidate['id'],
+                    'meta' => ['username' => $candidate['username']],
+                ]);
                 header('Location: /admin/login-2fa.php');
                 exit;
             }
             // Otherwise finalise login the same way attempt_login does
             reset_login_fails(client_ip());
             session_regenerate_id(true);
-            $_SESSION['user_id']      = (int)$candidate['id'];
-            $_SESSION['user_role']    = $candidate['role'];
-            $_SESSION['user_name']    = $candidate['name'];
-            $_SESSION['logged_in_at'] = time();
+            $_SESSION['user_id']        = (int)$candidate['id'];
+            $_SESSION['user_role']      = $candidate['role'];
+            $_SESSION['user_name']      = $candidate['name'];
+            $_SESSION['logged_in_at']   = time();
+            $_SESSION['last_activity']  = time();
             update_user((int)$candidate['id'], function (array $u) {
                 $u['last_login'] = date('c');
                 return $u;
             });
+            audit_log('login.success', [
+                'target_type' => 'user', 'target_id' => (int)$candidate['id'],
+                'meta' => ['role' => 'admin', '2fa' => false],
+            ]);
             header('Location: /admin/');
             exit;
         }
@@ -88,6 +98,9 @@ require __DIR__ . '/../auth/portal-header.php';
     <button type="submit" class="btn btn-primary btn-block">Sign in</button>
   </form>
 
+  <p class="portal-foot-link">
+    <a href="/admin/forgot.php">Forgot your password?</a>
+  </p>
   <p class="portal-foot-link">
     Looking for the customer portal? <a href="/account/login.php">Sign in here</a>.
   </p>

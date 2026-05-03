@@ -455,3 +455,66 @@ code   { background: var(--bg-elev); padding: 2px 6px; border-radius: 4px; font-
   transition: color .15s, border-color .15s;
 }
 .portal-link:hover { color: var(--accent); border-color: var(--accent); }
+
+/* ---------- Support tickets ---------- */
+.status-pill {
+  display: inline-block;
+  padding: 3px 10px;
+  border-radius: 999px;
+  font-size: .72rem;
+  font-weight: 600;
+  letter-spacing: .04em;
+  border: 1px solid var(--border-strong);
+}
+.status-pill.status-open        { color: var(--accent);   border-color: rgba(57,217,255,.4); background: rgba(57,217,255,.08); }
+.status-pill.status-in_progress { color: #ffb84d;         border-color: rgba(255,184,77,.4); background: rgba(255,184,77,.08); }
+.status-pill.status-closed      { color: var(--text-dim); }
+.status-pill.status-unpaid      { color: var(--accent);   border-color: rgba(57,217,255,.4); background: rgba(57,217,255,.08); }
+.status-pill.status-paid        { color: var(--success);  border-color: rgba(74,222,128,.4); background: rgba(74,222,128,.08); }
+.status-pill.status-overdue     { color: var(--danger);   border-color: rgba(255,84,112,.4); background: rgba(255,84,112,.08); }
+.status-pill.status-cancelled   { color: var(--text-dim); }
+
+.ticket-thread { display: flex; flex-direction: column; gap: 14px; }
+.ticket-msg {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 14px 16px;
+  background: rgba(255,255,255,.015);
+}
+.ticket-msg-admin  { border-left: 3px solid var(--accent); }
+.ticket-msg-client { border-left: 3px solid var(--border-strong); }
+.ticket-msg-head {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 8px;
+  flex-wrap: wrap;
+}
+.ticket-msg-body { color: var(--text); line-height: 1.55; word-break: break-word; }
+.ticket-msg-att  { margin: 10px 0 0; font-size: .9rem; }
+.ticket-msg-att a { color: var(--accent); }
+
+.field textarea { min-height: 110px; line-height: 1.5; resize: vertical; }
+.field input[type="file"] { padding: 8px 10px; color: var(--text-dim); font-size: .9rem; }
+
+/* Incident-related status pills (mirror style.css colours) */
+.status-pill.status-investigating { color: #ff8c4d; border-color: rgba(255,140,77,.4);  background: rgba(255,140,77,.08); }
+.status-pill.status-identified    { color: #ffb84d; border-color: rgba(255,184,77,.4);  background: rgba(255,184,77,.08); }
+.status-pill.status-monitoring    { color: var(--accent); border-color: rgba(57,217,255,.4); background: rgba(57,217,255,.08); }
+.status-pill.status-resolved      { color: var(--success); border-color: rgba(74,222,128,.4); background: rgba(74,222,128,.08); }
+.status-pill.sev-info     { color: #5cd8ff; border-color: rgba(92,216,255,.4);  background: rgba(92,216,255,.08); }
+.status-pill.sev-minor    { color: #ffb84d; border-color: rgba(255,184,77,.4);  background: rgba(255,184,77,.08); }
+.status-pill.sev-major    { color: #ff8c4d; border-color: rgba(255,140,77,.4);  background: rgba(255,140,77,.08); }
+.status-pill.sev-critical { color: var(--danger); border-color: rgba(255,84,112,.4); background: rgba(255,84,112,.08); }
+
+.data-table input[type="text"],
+.data-table select {
+  width: 100%;
+  padding: 7px 10px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  color: var(--text);
+  font-family: inherit;
+  font-size: .88rem;
+}
