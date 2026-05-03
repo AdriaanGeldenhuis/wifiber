@@ -30,6 +30,7 @@ if (PHP_SAPI !== 'cli') {
 }
 
 require __DIR__ . '/../auth/devices.php';
+require __DIR__ . '/../auth/notifications.php';
 
 $opts = ['quiet' => false, 'threshold-db' => 3, 'window-days' => 7];
 foreach ($argv as $a) {
@@ -66,6 +67,7 @@ foreach ($by_device as $dev_id => $samples) {
     $delta = $slope * $window_seconds;
     if ($delta < -$opts['threshold-db']) {
         $first = $samples[0]; $last = end($samples);
+        $dev = device_find($dev_id);
         audit_log('cable_snr.alert', [
             'target_type' => 'device', 'target_id' => $dev_id,
             'meta' => [
@@ -77,6 +79,25 @@ foreach ($by_device as $dev_id => $samples) {
                 'samples'         => count($samples),
             ],
         ]);
+        // Email the NOC team. If site_settings has 'noc_email' set,
+        // send there; otherwise fall back to every admin user.
+        $site = load_site_settings();
+        $noc_email = trim((string)($site['noc_email'] ?? ''));
+        $recipients = [];
+        if ($noc_email !== '') {
+            $recipients[] = ['id' => 0, 'email' => $noc_email, 'name' => 'NOC'];
+        } else {
+            $stmt = pdo()->prepare("SELECT id, email, name FROM users WHERE role = 'admin' AND email <> ''");
+            $stmt->execute();
+            $recipients = $stmt->fetchAll();
+        }
+        foreach ($recipients as $r) {
+            notify_send($r, 'cable.snr_drop', [
+                'device_name' => $dev['name'] ?? ('#' . $dev_id),
+                'drop_db'     => $delta,
+                'window_days' => $opts['window-days'],
+            ], ['email']);
+        }
         $alerts++;
         if (!$opts['quiet']) {
             printf("[cable-snr] device #%d: %.1f dB drop over %d days (%d samples)\n",

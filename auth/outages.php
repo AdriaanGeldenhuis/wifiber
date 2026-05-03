@@ -75,50 +75,28 @@ function outage_create(string $scope, ?int $scope_id, string $label, int $affect
  * fan-out (debounce per customer per 30 min) is item 14 follow-up.
  */
 function outage_notify_affected(int $outage_id, int $sector_id, string $label, ?string $cause): array {
+    require_once __DIR__ . '/notifications.php';
     $stmt = pdo()->prepare(
-        "SELECT id, email, name, username
+        "SELECT id, email, name, username, phone, phone_e164, notify_prefs
            FROM users
           WHERE role = 'client'
             AND status = 'active'
-            AND sector_id = ?
-            AND email IS NOT NULL
-            AND email <> ''"
+            AND sector_id = ?"
     );
     $stmt->execute([$sector_id]);
     $rows = $stmt->fetchAll();
 
-    $site      = load_site_settings();
-    $site_name = $site['name']          ?? 'Your ISP';
-    $support   = $site['email_support'] ?? null;
-    $phone     = $site['phone']         ?? '';
-    $host      = preg_replace('/^www\./', '', $_SERVER['HTTP_HOST'] ?? 'localhost');
-
     $sent = 0; $failed = 0; $skipped = 0;
     foreach ($rows as $u) {
-        $email = trim((string)$u['email']);
-        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) { $skipped++; continue; }
-        $name  = $u['name'] ?? $u['username'];
-
-        $body = "Hi {$name},\n\n"
-              . "We're aware of a service issue affecting your area"
-              . ($label ? " ({$label})" : '') . ".\n"
-              . ($cause ? "Cause: {$cause}\n" : '')
-              . "Started: " . date('Y-m-d H:i') . "\n\n"
-              . "Our team is already working on it — you don't need to log a ticket.\n"
-              . "We'll send another email when it's resolved.\n\n"
-              . ($phone ? "Urgent? Call us on {$phone}.\n\n" : '')
-              . "— The {$site_name} team\n";
-
-        $headers = "From: {$site_name} <no-reply@{$host}>\r\n"
-                 . ($support ? "Reply-To: {$support}\r\n" : '')
-                 . "X-Mailer: WiFIBER-Portal\r\n"
-                 . "X-Outage-Id: {$outage_id}\r\n"
-                 . "Content-Type: text/plain; charset=UTF-8\r\n";
-
-        $ok = @mail($email, "Service issue affecting your {$site_name} connection", $body, $headers);
-        $ok ? $sent++ : $failed++;
+        $r = notify_send($u, 'outage.opened', [
+            'scope_label' => $label,
+            'cause'       => $cause,
+            'outage_id'   => $outage_id,
+        ]);
+        $sent    += $r['sent'];
+        $failed  += $r['failed'];
+        $skipped += $r['skipped'];
     }
-
     return ['sent' => $sent, 'failed' => $failed, 'skipped' => $skipped, 'total' => count($rows)];
 }
 
@@ -157,44 +135,26 @@ function outage_resolve(int $outage_id, ?string $note = null): bool {
  * Mirror of outage_notify_affected for the all-clear message.
  */
 function outage_notify_resolved(int $outage_id, int $sector_id, string $label): array {
+    require_once __DIR__ . '/notifications.php';
     $stmt = pdo()->prepare(
-        "SELECT id, email, name, username
+        "SELECT id, email, name, username, phone, phone_e164, notify_prefs
            FROM users
           WHERE role = 'client'
             AND status = 'active'
-            AND sector_id = ?
-            AND email IS NOT NULL
-            AND email <> ''"
+            AND sector_id = ?"
     );
     $stmt->execute([$sector_id]);
     $rows = $stmt->fetchAll();
 
-    $site      = load_site_settings();
-    $site_name = $site['name']          ?? 'Your ISP';
-    $support   = $site['email_support'] ?? null;
-    $host      = preg_replace('/^www\./', '', $_SERVER['HTTP_HOST'] ?? 'localhost');
-
     $sent = 0; $failed = 0; $skipped = 0;
     foreach ($rows as $u) {
-        $email = trim((string)$u['email']);
-        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) { $skipped++; continue; }
-        $name  = $u['name'] ?? $u['username'];
-
-        $body = "Hi {$name},\n\n"
-              . "Good news — the issue affecting your area"
-              . ($label ? " ({$label})" : '')
-              . " has been resolved.\n\n"
-              . "If you're still experiencing problems, reply to this email or open a ticket at /account/tickets.php and we'll take a look.\n\n"
-              . "— The {$site_name} team\n";
-
-        $headers = "From: {$site_name} <no-reply@{$host}>\r\n"
-                 . ($support ? "Reply-To: {$support}\r\n" : '')
-                 . "X-Mailer: WiFIBER-Portal\r\n"
-                 . "X-Outage-Id: {$outage_id}\r\n"
-                 . "Content-Type: text/plain; charset=UTF-8\r\n";
-
-        $ok = @mail($email, "Service restored — {$site_name}", $body, $headers);
-        $ok ? $sent++ : $failed++;
+        $r = notify_send($u, 'outage.resolved', [
+            'scope_label' => $label,
+            'outage_id'   => $outage_id,
+        ]);
+        $sent    += $r['sent'];
+        $failed  += $r['failed'];
+        $skipped += $r['skipped'];
     }
     return ['sent' => $sent, 'failed' => $failed, 'skipped' => $skipped, 'total' => count($rows)];
 }

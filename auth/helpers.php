@@ -188,9 +188,9 @@ function require_csrf(): void {
 const USER_COLUMNS = [
     'account_no','username','email','name','surname','id_number','vat_number',
     'role','customer_type','status','service_start','billing_day','payment_method',
-    'phone','address','lat','lng','alt_contact_name','alt_contact_phone',
+    'phone','phone_e164','address','lat','lng','alt_contact_name','alt_contact_phone',
     'package','product_id','site_id','sector_id','equipment_mac','equipment_ip','equipment_serial','equipment_model',
-    'notes',
+    'notes','notify_prefs',
     'password_hash','totp_secret','totp_enabled','totp_recovery_codes',
     'totp_enabled_at','last_login',
 ];

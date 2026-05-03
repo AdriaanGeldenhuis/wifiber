@@ -48,6 +48,7 @@ if (PHP_SAPI !== 'cli') {
 require __DIR__ . '/../auth/devices.php';
 require __DIR__ . '/../auth/wireless.php';
 require __DIR__ . '/../auth/outages.php';
+require __DIR__ . '/../auth/notifications.php';
 require __DIR__ . '/../auth/vendors/airos.php';
 require __DIR__ . '/../auth/vendors/routeros.php';
 require __DIR__ . '/../auth/vendors/cambium.php';
@@ -173,6 +174,16 @@ foreach ($rows as $row) {
                 $row['name'] . ' (credentials)',
                 0,
                 'Vendor adapter auth failed ' . $fails . 'x in a row: ' . $result['error']);
+            // Page the NOC.
+            $site = load_site_settings();
+            $noc = trim((string)($site['noc_email'] ?? ''));
+            if ($noc !== '') {
+                notify_send(['id' => 0, 'email' => $noc, 'name' => 'NOC'],
+                    'cred.fail', [
+                        'device_name' => $row['name'],
+                        'fails'       => $fails,
+                    ], ['email']);
+            }
         }
         continue;
     }
