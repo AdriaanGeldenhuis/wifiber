@@ -33,7 +33,6 @@ CREATE TABLE IF NOT EXISTS users (
   equipment_ip         VARCHAR(45)  NOT NULL DEFAULT '',
   equipment_serial     VARCHAR(60)  NOT NULL DEFAULT '',
   equipment_model      VARCHAR(80)  NOT NULL DEFAULT '',
-  uisp_client_id       VARCHAR(64)  DEFAULT NULL,
   notes                TEXT         DEFAULT NULL,
   password_hash        VARCHAR(255) NOT NULL,
   totp_secret          VARCHAR(64)  DEFAULT NULL,
@@ -45,7 +44,6 @@ CREATE TABLE IF NOT EXISTS users (
   PRIMARY KEY (id),
   UNIQUE KEY uniq_username (username),
   UNIQUE KEY uniq_account_no (account_no),
-  UNIQUE KEY uniq_users_uisp_client (uisp_client_id),
   KEY idx_role (role),
   KEY idx_user_product (product_id),
   KEY idx_user_site    (site_id)
@@ -63,11 +61,9 @@ CREATE TABLE IF NOT EXISTS sites (
   color             VARCHAR(20)   DEFAULT NULL,
   notes             TEXT          DEFAULT NULL,
   is_active         TINYINT(1)    NOT NULL DEFAULT 1,
-  uisp_id           VARCHAR(64)   DEFAULT NULL,
   created_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  UNIQUE KEY uniq_sites_uisp_id (uisp_id),
   KEY idx_parent (parent_id),
   KEY idx_type   (type),
   KEY idx_active (is_active)
@@ -83,10 +79,8 @@ CREATE TABLE IF NOT EXISTS site_links (
   frequency     VARCHAR(20)  DEFAULT NULL,
   color         VARCHAR(20)  DEFAULT NULL,
   notes         TEXT         DEFAULT NULL,
-  uisp_id       VARCHAR(64)  DEFAULT NULL,
   created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  UNIQUE KEY uniq_site_links_uisp_id (uisp_id),
   KEY idx_from (from_site_id),
   KEY idx_to   (to_site_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -281,84 +275,4 @@ CREATE TABLE IF NOT EXISTS rate_limit (
   window_at   INT UNSIGNED NOT NULL,
   PRIMARY KEY (bucket),
   KEY idx_window (window_at)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
--- ---------------------------------------------------------------- UISP cache
--- Mirrors entities pulled from UISP's NMS + CRM APIs. Populated by
--- bin/uisp-sync.php (and the manual "Sync now" button on /admin/uisp.php).
--- Rows that disappear from UISP are marked is_stale = 1, never hard-deleted,
--- so any manual sites/users linked via uisp_id keep working.
-
-CREATE TABLE IF NOT EXISTS uisp_sites (
-  uisp_id        VARCHAR(64)   NOT NULL,
-  name           VARCHAR(160)  NOT NULL,
-  address        VARCHAR(255)  DEFAULT NULL,
-  lat            DECIMAL(10,7) DEFAULT NULL,
-  lng            DECIMAL(10,7) DEFAULT NULL,
-  height_m       DECIMAL(6,2)  DEFAULT NULL,
-  status         VARCHAR(32)   DEFAULT NULL,
-  raw_json       JSON          DEFAULT NULL,
-  last_seen_at   DATETIME      DEFAULT NULL,
-  synced_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  is_stale       TINYINT(1)    NOT NULL DEFAULT 0,
-  PRIMARY KEY (uisp_id),
-  KEY idx_uisp_site_synced (synced_at),
-  KEY idx_uisp_site_stale  (is_stale)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS uisp_devices (
-  uisp_id        VARCHAR(64)   NOT NULL,
-  uisp_site_id   VARCHAR(64)   DEFAULT NULL,
-  name           VARCHAR(160)  NOT NULL DEFAULT '',
-  type           VARCHAR(40)   DEFAULT NULL,
-  model          VARCHAR(80)   DEFAULT NULL,
-  mac            VARCHAR(20)   DEFAULT NULL,
-  ip             VARCHAR(45)   DEFAULT NULL,
-  role           VARCHAR(40)   DEFAULT NULL,
-  status         ENUM('online','offline','unknown') NOT NULL DEFAULT 'unknown',
-  signal_dbm     SMALLINT      DEFAULT NULL,
-  lat            DECIMAL(10,7) DEFAULT NULL,
-  lng            DECIMAL(10,7) DEFAULT NULL,
-  raw_json       JSON          DEFAULT NULL,
-  last_seen_at   DATETIME      DEFAULT NULL,
-  synced_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  is_stale       TINYINT(1)    NOT NULL DEFAULT 0,
-  PRIMARY KEY (uisp_id),
-  KEY idx_uisp_dev_site   (uisp_site_id),
-  KEY idx_uisp_dev_status (status),
-  KEY idx_uisp_dev_stale  (is_stale)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS uisp_data_links (
-  uisp_id              VARCHAR(64)   NOT NULL,
-  from_device_uisp_id  VARCHAR(64)   DEFAULT NULL,
-  to_device_uisp_id    VARCHAR(64)   DEFAULT NULL,
-  frequency            VARCHAR(40)   DEFAULT NULL,
-  capacity_mbps        DECIMAL(8,2)  DEFAULT NULL,
-  status               VARCHAR(32)   DEFAULT NULL,
-  raw_json             JSON          DEFAULT NULL,
-  synced_at            DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  is_stale             TINYINT(1)    NOT NULL DEFAULT 0,
-  PRIMARY KEY (uisp_id),
-  KEY idx_uisp_dl_from  (from_device_uisp_id),
-  KEY idx_uisp_dl_to    (to_device_uisp_id),
-  KEY idx_uisp_dl_stale (is_stale)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
-
-CREATE TABLE IF NOT EXISTS uisp_clients (
-  uisp_id           VARCHAR(64)   NOT NULL,
-  account_no        VARCHAR(40)   DEFAULT NULL,
-  name              VARCHAR(160)  NOT NULL DEFAULT '',
-  email             VARCHAR(160)  DEFAULT NULL,
-  address_full      VARCHAR(400)  DEFAULT NULL,
-  lat               DECIMAL(10,7) DEFAULT NULL,
-  lng               DECIMAL(10,7) DEFAULT NULL,
-  status            VARCHAR(32)   DEFAULT NULL,
-  services_summary  JSON          DEFAULT NULL,
-  raw_json          JSON          DEFAULT NULL,
-  synced_at         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  is_stale          TINYINT(1)    NOT NULL DEFAULT 0,
-  PRIMARY KEY (uisp_id),
-  KEY idx_uisp_client_status (status),
-  KEY idx_uisp_client_stale  (is_stale)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

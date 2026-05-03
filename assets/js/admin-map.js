@@ -49,24 +49,10 @@
   const clientsLayer  = L.layerGroup().addTo(map);
   const coverageLayer = L.layerGroup();
 
-  /* UISP overlay layers — added to the map only if UISP is configured. */
-  const uispSitesLayer   = L.layerGroup();
-  const uispDevicesLayer = L.layerGroup();
-  const uispLinksLayer   = L.layerGroup();
-  const uispClientsLayer = L.layerGroup();
-  const uispEnabled = !!(boot.uisp && boot.uisp.enabled);
-  if (uispEnabled) {
-    uispSitesLayer.addTo(map);
-    uispDevicesLayer.addTo(map);
-    uispLinksLayer.addTo(map);
-    uispClientsLayer.addTo(map);
-  }
-
   /* ---------- icons ---------- */
   const SITE_COLOR  = { tower: '#08e', ap: '#0c8', ptp_endpoint: '#f80', pop: '#80f', other: '#888' };
   const STATUS_COLOR = { active: '#0c8', lead: '#08e', suspended: '#fa0', disconnected: '#888' };
   const LINK_COLOR   = { ptp: '#08e', ptmp: '#0c8', fiber: '#f0a', backhaul: '#f80' };
-  const UISP_STATUS_COLOR = { online: '#0c8', offline: '#d44', unknown: '#888' };
 
   function dotIcon(color, size) {
     const s = size || 14;
@@ -79,108 +65,11 @@
     });
   }
 
-  function diamondIcon(color, size) {
-    const s = size || 18;
-    return L.divIcon({
-      className: 'wf-uisp-marker',
-      html: '<span style="display:block;width:' + s + 'px;height:' + s + 'px;background:' + color
-          + ';border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.5);transform:rotate(45deg);"></span>',
-      iconSize: [s + 6, s + 6],
-      iconAnchor: [(s + 6) / 2, (s + 6) / 2],
-    });
-  }
-
-  function ringIcon(color, size) {
-    const s = size || 11;
-    return L.divIcon({
-      className: 'wf-uisp-marker',
-      html: '<span style="display:block;width:' + s + 'px;height:' + s + 'px;border-radius:50%;background:transparent;border:3px solid '
-          + color + ';box-shadow:0 0 3px rgba(0,0,0,.5);"></span>',
-      iconSize: [s + 6, s + 6],
-      iconAnchor: [(s + 6) / 2, (s + 6) / 2],
-    });
-  }
-
-  function pillHTML(text, status) {
-    const color = UISP_STATUS_COLOR[status] || '#888';
-    return '<span class="map-uisp-pill ' + escapeHtml(status || 'unknown') + '" style="background:' + color
-         + ';color:#fff;padding:1px 6px;border-radius:8px;font-size:10px;">' + escapeHtml(text) + '</span>';
-  }
-
   /* ---------- state ---------- */
   let mode = 'pan';            // 'pan' | 'add_site' | 'add_link'
   let pendingLinkFrom = null;  // first site clicked when adding a link
   const siteIndex = new Map(); // id -> {data, marker}
   const linkLines = new Map(); // id -> polyline
-
-  /* UISP indexes — populated before rendering so popups can cross-reference. */
-  const uispSiteById          = new Map(); // uisp_id -> uisp site row
-  const uispDeviceById        = new Map(); // uisp_id -> uisp device row
-  const uispClientById        = new Map(); // uisp_id -> uisp client row
-  const linkedSiteByUispId    = new Map(); // uisp_id -> manual site row
-  const linkedClientByUispId  = new Map(); // uisp_client_id -> manual client row
-
-  function devicesForUispSite(uispSiteId) {
-    const out = [];
-    uispDeviceById.forEach(d => { if (d.uisp_site_id === uispSiteId) out.push(d); });
-    return out;
-  }
-
-  function uispBadgeForSite(s) {
-    if (!s.uisp_id) return '';
-    const linked = uispSiteById.get(s.uisp_id);
-    let html = '<div style="margin-top:6px;border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;">'
-             + '<small>UISP: <code>' + escapeHtml(s.uisp_id) + '</code></small>';
-    if (!linked) {
-      html += ' ' + pillHTML('not in cache', 'unknown');
-    } else {
-      const devs = devicesForUispSite(s.uisp_id);
-      const on = devs.filter(d => d.status === 'online').length;
-      const off = devs.filter(d => d.status === 'offline').length;
-      const un = devs.length - on - off;
-      html += '<br><small>'
-           + (on  ? pillHTML(on + ' online',   'online')   + ' ' : '')
-           + (off ? pillHTML(off + ' offline', 'offline')  + ' ' : '')
-           + (un  ? pillHTML(un + ' unknown',  'unknown')  + ' ' : '')
-           + (devs.length === 0 ? '<span class="muted">no devices in cache</span>' : '')
-           + '</small>';
-    }
-    html += '<form data-map-form="unlink_site" style="display:inline;margin-left:6px;">'
-         +    '<input type="hidden" name="site_id" value="' + s.id + '">'
-         +    '<button type="submit" class="btn btn-ghost btn-sm">Unlink</button>'
-         +  '</form>'
-         + '</div>';
-    return html;
-  }
-
-  function uispBadgeForClient(c) {
-    if (!c.uisp_client_id) return '';
-    const linked = uispClientById.get(c.uisp_client_id);
-    let html = '<div style="margin-top:6px;border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;">'
-             + '<small>UISP: <code>' + escapeHtml(c.uisp_client_id) + '</code></small>';
-    if (linked) {
-      html += '<br><small>' + pillHTML(linked.status || 'unknown', /online|active/i.test(linked.status || '') ? 'online' : 'unknown') + '</small>';
-    } else {
-      html += ' ' + pillHTML('not in cache', 'unknown');
-    }
-    html += '<form data-map-form="unlink_client" style="display:inline;margin-left:6px;">'
-         +    '<input type="hidden" name="user_id" value="' + c.id + '">'
-         +    '<button type="submit" class="btn btn-ghost btn-sm">Unlink</button>'
-         +  '</form>'
-         + '</div>';
-    return html;
-  }
-
-  function unlinkedManualSitesOptions() {
-    return boot.sites.filter(s => !s.uisp_id)
-      .map(s => '<option value="' + s.id + '">' + escapeHtml(s.name + ' (' + s.type + ')') + '</option>')
-      .join('');
-  }
-  function unlinkedManualClientsOptions() {
-    return boot.clients.filter(u => !u.uisp_client_id)
-      .map(u => '<option value="' + u.id + '">' + escapeHtml((u.account_no || ('#' + u.id)) + ' · ' + (u.name || u.username || '')) + '</option>')
-      .join('');
-  }
 
   /* ---------- mode toggling ---------- */
   function setMode(next) {
@@ -210,19 +99,6 @@
   document.getElementById('toggle-coverage').addEventListener('change', (e) => {
     e.target.checked ? coverageLayer.addTo(map) : map.removeLayer(coverageLayer);
   });
-
-  /* UISP toggles (only present if UISP is enabled) */
-  function bindUispToggle(id, layer) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener('change', (e) => {
-      e.target.checked ? layer.addTo(map) : map.removeLayer(layer);
-    });
-  }
-  bindUispToggle('toggle-uisp-sites',   uispSitesLayer);
-  bindUispToggle('toggle-uisp-devices', uispDevicesLayer);
-  bindUispToggle('toggle-uisp-links',   uispLinksLayer);
-  bindUispToggle('toggle-uisp-clients', uispClientsLayer);
 
   /* ---------- render sites ---------- */
   function siteTypeLabel(t) {
@@ -275,7 +151,6 @@
       +     '<button type="button" class="btn btn-ghost btn-sm" data-edit-site="' + s.id + '">Edit</button>'
       +     '<button type="button" class="btn btn-danger btn-sm" data-delete-site="' + s.id + '">Delete</button>'
       +   '</div>'
-      +   uispBadgeForSite(s)
       + '</div>';
   }
 
@@ -367,127 +242,6 @@
       +   '<div class="row" style="margin-top:8px;">'
       +     '<a class="btn btn-ghost btn-sm" href="/admin/client-edit.php?id=' + c.id + '">Open record</a>'
       +   '</div>'
-      +   uispBadgeForClient(c)
-      + '</div>';
-  }
-
-  /* ---------- UISP renderers ---------- */
-  function renderUispSite(s) {
-    if (s.lat == null || s.lng == null) return;
-    if (linkedSiteByUispId.has(s.uisp_id)) return; // manual marker covers it
-
-    const m = L.marker([s.lat, s.lng], { icon: diamondIcon('#80f', 18) });
-    m.bindPopup(uispSitePopupHTML(s));
-    m.addTo(uispSitesLayer);
-  }
-
-  function uispSitePopupHTML(s) {
-    const opts = unlinkedManualSitesOptions();
-    const linkForm = opts
-      ? '<form data-map-form="link_site" class="map-popup" style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.1);padding-top:8px;">'
-        + '<input type="hidden" name="uisp_id" value="' + escapeHtml(s.uisp_id) + '">'
-        + '<label>Adopt as manual site<select name="site_id" required>'
-        +   '<option value="">— pick a manual site —</option>' + opts
-        + '</select></label>'
-        + '<button type="submit" class="btn btn-ghost btn-sm">Link</button>'
-        + '</form>'
-      : '';
-    return '<div class="map-popup">'
-      + '<strong>' + escapeHtml(s.name) + '</strong><br>'
-      + '<small>UISP site</small>'
-      + (s.address ? '<p style="margin:6px 0 0;">' + escapeHtml(s.address) + '</p>' : '')
-      + (s.is_stale ? '<div style="margin-top:6px;">' + pillHTML('stale', 'unknown') + '</div>' : '')
-      + '<div style="margin-top:6px;"><small>UISP id: <code>' + escapeHtml(s.uisp_id) + '</code></small></div>'
-      + linkForm
-      + '</div>';
-  }
-
-  function renderUispDevice(d) {
-    let lat = d.lat, lng = d.lng;
-    if (lat == null || lng == null) {
-      const parent = uispSiteById.get(d.uisp_site_id);
-      if (parent) { lat = parent.lat; lng = parent.lng; }
-    }
-    if (lat == null || lng == null) return;
-
-    const color = UISP_STATUS_COLOR[d.status] || UISP_STATUS_COLOR.unknown;
-    const m = L.marker([lat, lng], { icon: ringIcon(color, 11) });
-    m.bindPopup(uispDevicePopupHTML(d));
-    m.addTo(uispDevicesLayer);
-  }
-
-  function uispDevicePopupHTML(d) {
-    return '<div class="map-popup">'
-      + '<strong>' + escapeHtml(d.name) + '</strong><br>'
-      + '<small>' + escapeHtml(d.type || 'device') + (d.role ? ' · ' + escapeHtml(d.role) : '') + '</small>'
-      + '<div style="margin:6px 0;">' + pillHTML(d.status || 'unknown', d.status) + (d.is_stale ? ' ' + pillHTML('stale', 'unknown') : '') + '</div>'
-      + (d.model        ? '<small>Model: ' + escapeHtml(d.model) + '</small><br>' : '')
-      + (d.mac          ? '<small>MAC: '   + escapeHtml(d.mac)   + '</small><br>' : '')
-      + (d.ip           ? '<small>IP: '    + escapeHtml(d.ip)    + '</small><br>' : '')
-      + (d.signal_dbm != null ? '<small>Signal: ' + d.signal_dbm + ' dBm</small><br>' : '')
-      + (d.last_seen_at ? '<small>Last seen: ' + escapeHtml(d.last_seen_at) + '</small>' : '')
-      + '</div>';
-  }
-
-  function renderUispDataLink(l) {
-    const a = uispDeviceById.get(l.from_device_uisp_id);
-    const b = uispDeviceById.get(l.to_device_uisp_id);
-    if (!a || !b) return;
-    const aSite = a.uisp_site_id ? uispSiteById.get(a.uisp_site_id) : null;
-    const bSite = b.uisp_site_id ? uispSiteById.get(b.uisp_site_id) : null;
-    const fromLat = a.lat != null ? a.lat : (aSite ? aSite.lat : null);
-    const fromLng = a.lng != null ? a.lng : (aSite ? aSite.lng : null);
-    const toLat   = b.lat != null ? b.lat : (bSite ? bSite.lat : null);
-    const toLng   = b.lng != null ? b.lng : (bSite ? bSite.lng : null);
-    if (fromLat == null || fromLng == null || toLat == null || toLng == null) return;
-
-    const ok  = /active|connected|up/i.test(l.status || '');
-    const bad = /inactive|disconnected|offline|down/i.test(l.status || '');
-    const color = ok ? '#0c8' : bad ? '#d44' : '#bb2';
-
-    const line = L.polyline([[fromLat, fromLng], [toLat, toLng]], {
-      color: color, weight: 2, opacity: 0.85, dashArray: '5 4',
-    });
-    line.bindPopup(
-      '<div class="map-popup">'
-      + '<strong>UISP link</strong><br>'
-      + '<small>' + escapeHtml(a.name) + ' &harr; ' + escapeHtml(b.name) + '</small><br>'
-      + (l.frequency ? '<small>' + escapeHtml(l.frequency) + (l.capacity_mbps ? ' · ' + l.capacity_mbps + ' Mbps' : '') + '</small><br>' : '')
-      + '<div style="margin-top:6px;">' + pillHTML(l.status || 'unknown', ok ? 'online' : bad ? 'offline' : 'unknown') + '</div>'
-      + '</div>'
-    );
-    line.addTo(uispLinksLayer);
-  }
-
-  function renderUispClient(c) {
-    if (c.lat == null || c.lng == null) return;
-    if (linkedClientByUispId.has(c.uisp_id)) return; // manual marker covers it
-
-    const m = L.marker([c.lat, c.lng], { icon: ringIcon('#08e', 9) });
-    m.bindPopup(uispClientPopupHTML(c));
-    m.addTo(uispClientsLayer);
-  }
-
-  function uispClientPopupHTML(c) {
-    const opts = unlinkedManualClientsOptions();
-    const linkForm = opts
-      ? '<form data-map-form="link_client" class="map-popup" style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.1);padding-top:8px;">'
-        + '<input type="hidden" name="uisp_id" value="' + escapeHtml(c.uisp_id) + '">'
-        + '<label>Adopt as portal client<select name="user_id" required>'
-        +   '<option value="">— pick a portal client —</option>' + opts
-        + '</select></label>'
-        + '<button type="submit" class="btn btn-ghost btn-sm">Link</button>'
-        + '</form>'
-      : '';
-    const ok = /active|online/i.test(c.status || '');
-    return '<div class="map-popup">'
-      + '<strong>' + escapeHtml(c.name) + '</strong><br>'
-      + (c.account_no   ? '<small>' + escapeHtml(c.account_no)   + '</small><br>' : '')
-      + (c.email        ? '<small>' + escapeHtml(c.email)        + '</small><br>' : '')
-      + (c.address_full ? '<small>' + escapeHtml(c.address_full) + '</small><br>' : '')
-      + '<div style="margin-top:6px;">' + pillHTML(c.status || 'unknown', ok ? 'online' : 'unknown') + (c.is_stale ? ' ' + pillHTML('stale', 'unknown') : '') + '</div>'
-      + '<div style="margin-top:6px;"><small>UISP id: <code>' + escapeHtml(c.uisp_id) + '</code></small></div>'
-      + linkForm
       + '</div>';
   }
 
@@ -615,45 +369,8 @@
     setTimeout(() => { if (geoStatus.textContent === msg) geoStatus.textContent = ''; }, 4000);
   }
 
-  /* ---------- Sync UISP button ---------- */
-  const uispSyncBtn = document.getElementById('uisp-sync-btn');
-  const uispSyncStatusEl = document.getElementById('uisp-sync-status');
-  if (uispSyncBtn) {
-    uispSyncBtn.addEventListener('click', async () => {
-      uispSyncBtn.disabled = true;
-      if (uispSyncStatusEl) uispSyncStatusEl.textContent = 'Syncing UISP…';
-      const r = await postAction('uisp_sync', {});
-      if (r.ok) {
-        if (uispSyncStatusEl) uispSyncStatusEl.textContent = 'Synced — reloading…';
-        setTimeout(() => location.reload(), 800);
-      } else {
-        if (uispSyncStatusEl) uispSyncStatusEl.textContent = 'Sync failed';
-        alert(r.error || (r.errors && r.errors.join(' | ')) || 'Sync failed');
-        uispSyncBtn.disabled = false;
-      }
-    });
-  }
-
-  /* ---------- bootstrap ----------
-     Order matters: index UISP and "linked" maps before rendering anything,
-     so manual popups can show UISP status pills and UISP renderers can
-     skip entries that already have a manual marker. */
-  if (uispEnabled && boot.uisp) {
-    (boot.uisp.sites   || []).forEach(s => uispSiteById.set(s.uisp_id, s));
-    (boot.uisp.devices || []).forEach(d => uispDeviceById.set(d.uisp_id, d));
-    (boot.uisp.clients || []).forEach(c => uispClientById.set(c.uisp_id, c));
-  }
-  boot.sites.forEach(s   => { if (s.uisp_id)        linkedSiteByUispId  .set(s.uisp_id, s); });
-  boot.clients.forEach(c => { if (c.uisp_client_id) linkedClientByUispId.set(c.uisp_client_id, c); });
-
+  /* ---------- bootstrap ---------- */
   boot.sites.forEach(renderSite);
   boot.site_links.forEach(renderLink);
   boot.clients.forEach(renderClient);
-
-  if (uispEnabled && boot.uisp) {
-    (boot.uisp.sites      || []).forEach(renderUispSite);
-    (boot.uisp.devices    || []).forEach(renderUispDevice);
-    (boot.uisp.data_links || []).forEach(renderUispDataLink);
-    (boot.uisp.clients    || []).forEach(renderUispClient);
-  }
 })();

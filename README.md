@@ -30,48 +30,6 @@ Custom PHP/CSS/JS website for [wifiber.co.za](https://wifiber.co.za) &mdash; a w
     └── images/        # logos, partner logos, coverage map
 ```
 
-## UISP integration
-
-The admin network map (`/admin/map.php`) can pull live sites, devices,
-data-links and CRM clients from a UISP installation and overlay them on
-the same map as the manually-maintained records.
-
-### One-time setup
-
-1. Apply the migration:
-
-   ```bash
-   mysql -h <host> -u <user> -p <db> < data/migrations/2026_05_03_phase4_uisp.sql
-   ```
-
-2. In UISP, generate an **App key** under *Settings &rarr; Integrations*.
-
-3. Open `/admin/uisp.php`, paste the base URL (e.g. `https://uisp.example.com`)
-   and the App key, click **Save settings**, then **Test connection** and
-   **Sync now**. Status, version and per-entity counts appear below.
-
-4. (Optional) Schedule background syncs:
-
-   ```cron
-   0,15,30,45 * * * *  /usr/bin/php ~/public_html/bin/uisp-sync.php --quiet >> ~/uisp-sync.log 2>&1
-   ```
-
-### What the map shows
-
-- **UISP sites** &mdash; diamond markers, purple by default
-- **UISP devices** &mdash; ring markers coloured by status (green online, red offline)
-- **UISP data-links** &mdash; dashed lines coloured by link state
-- **UISP CRM clients** &mdash; small ring markers placed at their address GPS
-
-A manually-managed site or client can be **adopted** to its UISP counterpart
-(via the popup dropdowns or the table on `/admin/uisp.php`). Adopted
-records merge into a single map marker and the manual popup shows the
-UISP status pill plus a per-site device-status summary. Linking is
-reversible.
-
-If UISP is unreachable, the map keeps working from the cached snapshot
-and shows an "UISP offline" banner.
-
 ## Deploying to the server
 
 The site lives in `/usr/home/wifibfjedj/public_html` (a.k.a. `~/public_html`) on the production server.
