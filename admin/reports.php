@@ -257,4 +257,60 @@ $tight_sectors = $pdo->query(
   <?php endif; ?>
 </div>
 
+<?php
+/* ---------- airtime fairness (last 1h) ---------- */
+$airtime_rows = $pdo->query(
+    "SELECT u.id, u.name, u.surname, u.account_no,
+            sec.name AS sector_name,
+            AVG(s.airtime_local_pct + s.airtime_remote_pct) / 2 AS avg_share,
+            MAX(s.airtime_local_pct + s.airtime_remote_pct) / 2 AS peak_share,
+            COUNT(s.id) AS samples
+       FROM wireless_links wl
+       JOIN link_health_samples s ON s.link_id = wl.id
+       LEFT JOIN users u   ON u.id = wl.customer_id
+       LEFT JOIN sectors sec ON sec.id = wl.sector_id
+      WHERE s.polled_at >= NOW() - INTERVAL 1 HOUR
+        AND wl.customer_id IS NOT NULL
+        AND s.airtime_local_pct IS NOT NULL
+      GROUP BY u.id, u.name, u.surname, u.account_no, sec.name
+      ORDER BY avg_share DESC
+      LIMIT 25"
+)->fetchAll();
+?>
+<h2 style="margin: 24px 0 8px;">Airtime fairness <small class="muted">(last 1h, top 25)</small></h2>
+<div class="portal-card">
+  <p class="muted" style="margin:0 0 8px;">Customers ranked by their share of sector airtime. Heavy talkers can starve neighbours of throughput before any single link looks "down" — this surfaces them before tickets land.</p>
+  <?php if (!$airtime_rows): ?>
+    <p class="muted" style="margin:0;">No airtime samples yet — vendor adapters report this on AirOS / Mimosa once the polling worker has been running for ≥1 minute.</p>
+  <?php else: ?>
+    <div class="table-scroll">
+    <table class="data-table">
+      <thead>
+        <tr><th>#</th><th>Customer</th><th>Sector</th><th style="text-align:right;">Avg share</th><th style="text-align:right;">Peak</th><th style="text-align:right;">Samples</th></tr>
+      </thead>
+      <tbody>
+        <?php $i = 0; foreach ($airtime_rows as $r):
+          $i++;
+          $avg  = (float)$r['avg_share'];
+          $peak = (float)$r['peak_share'];
+          $colour = $avg >= 30 ? '#d44' : ($avg >= 15 ? '#fbbf24' : '#0c8');
+          $cust = trim(($r['name'] ?? '') . ' ' . ($r['surname'] ?? '')) ?: '#' . (int)$r['id'];
+        ?>
+          <tr>
+            <td><?= $i ?></td>
+            <td><a href="/admin/client-edit.php?id=<?= (int)$r['id'] ?>" style="color:inherit;"><strong><?= htmlspecialchars($cust) ?></strong></a>
+              <?php if ($r['account_no']): ?><br><small class="muted"><?= htmlspecialchars($r['account_no']) ?></small><?php endif; ?>
+            </td>
+            <td><small><?= htmlspecialchars((string)($r['sector_name'] ?? '—')) ?></small></td>
+            <td style="text-align:right;"><strong style="color:<?= $colour ?>;"><?= number_format($avg, 1) ?> %</strong></td>
+            <td style="text-align:right;"><?= number_format($peak, 1) ?> %</td>
+            <td style="text-align:right;"><?= (int)$r['samples'] ?></td>
+          </tr>
+        <?php endforeach; ?>
+      </tbody>
+    </table>
+    </div>
+  <?php endif; ?>
+</div>
+
 <?php require __DIR__ . '/../auth/portal-footer.php'; ?>

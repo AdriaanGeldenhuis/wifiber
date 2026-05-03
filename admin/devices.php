@@ -166,6 +166,33 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
+    if ($action === 'poll_wireless_now') {
+        $id = (int)($_POST['id'] ?? 0);
+        $is_ajax = !empty($_POST['ajax']);
+        $reply_w = function (bool $ok, string $msg) use ($is_ajax, $self) {
+            if ($is_ajax) {
+                while (ob_get_level() > 0) ob_end_clean();
+                header('Content-Type: application/json');
+                echo json_encode(['ok' => $ok, 'message' => $msg]);
+                exit;
+            }
+            flash($ok ? 'success' : 'error', $msg);
+            header('Location: ' . $self);
+            exit;
+        };
+        $cmd = sprintf(
+            '/usr/bin/php %s --once --quiet --only-device=%d 2>&1',
+            escapeshellarg(realpath(__DIR__ . '/../bin/poll-wireless.php')),
+            $id
+        );
+        $out = shell_exec($cmd);
+        audit_log('device.poll_wireless_now', [
+            'target_type' => 'device', 'target_id' => $id,
+            'meta' => ['output' => mb_substr((string)$out, 0, 200)],
+        ]);
+        $reply_w(true, 'Wireless poll triggered. Refresh in a few seconds for telemetry.');
+    }
+
     if ($action === 'ping_now') {
         $id = (int)($_POST['id'] ?? 0);
         $d  = $id ? device_find($id) : null;
@@ -348,6 +375,14 @@ $status_pill = function (string $status): string {
               <a href="/admin/device-view.php?id=<?= (int)$d['id'] ?>" class="btn btn-ghost btn-sm" style="margin-right:4px;">View</a>
               <?php if ($d['mgmt_ip']): ?>
                 <button type="button" class="btn btn-ghost btn-sm" data-ping-device="<?= (int)$d['id'] ?>" data-ping-name="<?= htmlspecialchars($d['name'], ENT_QUOTES) ?>" style="margin-right:4px;" title="ICMP ping the management IP and record a health row">Ping</button>
+              <?php endif; ?>
+              <?php if ($d['mgmt_ip'] && in_array($d['vendor'], ['ubiquiti','mikrotik','cambium','mimosa'], true)): ?>
+                <form method="post" class="inline-form" style="display:inline-block;margin-right:4px;">
+                  <?= csrf_field() ?>
+                  <input type="hidden" name="action" value="poll_wireless_now">
+                  <input type="hidden" name="id" value="<?= (int)$d['id'] ?>">
+                  <button type="submit" class="btn btn-ghost btn-sm" title="Run the vendor adapter against this device right now (synchronous)">Poll</button>
+                </form>
               <?php endif; ?>
               <details style="display:inline-block;">
                 <summary class="btn btn-ghost btn-sm">Creds</summary>

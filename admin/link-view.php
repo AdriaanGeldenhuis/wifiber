@@ -36,6 +36,47 @@ $cpe_h      = $cpe_health[0] ?? null;
 $ap_eth  = ethernet_health_latest((int)$link['ap_device_id']);
 $cpe_eth = $link['cpe_device_id'] ? ethernet_health_latest((int)$link['cpe_device_id']) : null;
 
+$tab = (string)($_GET['tab'] ?? 'link');
+
+/* Fresnel zone radius at midpoint, 60% clearance recommendation, vs.
+   AP/CPE site heights. Standard formula: r = 8.657 * sqrt(d_km / f_GHz)
+   metres. We assume both endpoints share the same 5 GHz band the link
+   is on (link.frequency_mhz, fall back to 5500). */
+$ap_site  = !empty($link['ap_site_id'])  ? site_find((int)$link['ap_site_id'])  : null;
+$cpe_site = !empty($link['cpe_site_id']) ? site_find((int)$link['cpe_site_id']) : null;
+$dist_km  = $link['distance_km'] !== null ? (float)$link['distance_km']
+          : (($ap_site && $cpe_site && $ap_site['lat'] !== null && $cpe_site['lat'] !== null)
+              ? haversine_km((float)$ap_site['lat'], (float)$ap_site['lng'],
+                             (float)$cpe_site['lat'], (float)$cpe_site['lng'])
+              : null);
+$freq_ghz = $link['frequency_mhz'] !== null ? ((int)$link['frequency_mhz']) / 1000.0 : 5.5;
+$fresnel = null;
+if ($dist_km !== null && $dist_km > 0) {
+    $r_m_full = 8.657 * sqrt($dist_km / $freq_ghz);    // 1st Fresnel zone @ midpoint
+    $r_m_60   = $r_m_full * 0.6;                       // recommended clearance
+    // Earth bulge in metres: h = (d_km^2) / (8 * 1.33) for 4/3 effective radius
+    $bulge = ($dist_km * $dist_km) / (8 * 1.33);
+    $ap_h  = $ap_site['height_m']  ?? null;
+    $cpe_h = $cpe_site['height_m'] ?? null;
+    $needed_height = ($ap_h !== null && $cpe_h !== null)
+        ? ($r_m_60 + $bulge)
+        : null;
+    $clearance = ($ap_h !== null && $cpe_h !== null)
+        ? min((float)$ap_h, (float)$cpe_h) - $needed_height
+        : null;
+    $fresnel = [
+        'distance_km'   => $dist_km,
+        'frequency_ghz' => $freq_ghz,
+        'r_full_m'      => $r_m_full,
+        'r_60_m'        => $r_m_60,
+        'earth_bulge_m' => $bulge,
+        'ap_height_m'   => $ap_h,
+        'cpe_height_m'  => $cpe_h,
+        'needed_m'      => $needed_height,
+        'clearance_m'   => $clearance,
+    ];
+}
+
 $samples = wireless_link_recent_samples($id, 288); // 24h at 5min cadence
 $rf_ap   = rf_environment_recent((int)$link['ap_device_id'], 60);
 $rf_cpe  = $link['cpe_device_id'] ? rf_environment_recent((int)$link['cpe_device_id'], 60) : [];
@@ -215,9 +256,49 @@ $cinr_gauge = function (?int $snr) {
 
 <div class="lv-tabs" style="margin:18px auto;">
   <a class="lv-tab" href="/admin/map.php">Map</a>
-  <span class="lv-tab active">Link</span>
-  <span class="lv-tab" title="Fresnel zone calculator coming in Phase 5">Fresnel</span>
+  <a class="lv-tab <?= $tab === 'link' ? 'active' : '' ?>" href="?id=<?= (int)$link['id'] ?>&tab=link">Link</a>
+  <a class="lv-tab <?= $tab === 'fresnel' ? 'active' : '' ?>" href="?id=<?= (int)$link['id'] ?>&tab=fresnel">Fresnel</a>
 </div>
+
+<?php if ($tab === 'fresnel'): ?>
+<div class="portal-card">
+  <h2>Fresnel zone &amp; line-of-sight</h2>
+  <?php if (!$fresnel): ?>
+    <small class="muted">Need both endpoint sites with lat/lng + a measured distance to compute. Open the AP and CPE devices and confirm they are attached to a site with coordinates.</small>
+  <?php else: ?>
+    <p class="muted">Recommended: ≥60 % of the first Fresnel zone clear at the midpoint, plus an allowance for 4/3-Earth bulge.</p>
+    <div class="lv-row"><span><b>Distance</b></span>
+      <span><?= number_format($fresnel['distance_km'], 3) ?> km</span></div>
+    <div class="lv-row"><span><b>Frequency</b></span>
+      <span><?= number_format($fresnel['frequency_ghz'], 3) ?> GHz</span></div>
+    <div class="lv-row"><span><b>1st Fresnel radius (midpoint)</b></span>
+      <span><?= number_format($fresnel['r_full_m'], 2) ?> m</span></div>
+    <div class="lv-row"><span><b>60 % clearance recommended</b></span>
+      <span><?= number_format($fresnel['r_60_m'], 2) ?> m</span></div>
+    <div class="lv-row"><span><b>Earth-bulge allowance (4/3 R)</b></span>
+      <span><?= number_format($fresnel['earth_bulge_m'], 2) ?> m</span></div>
+    <div class="lv-row"><span><b>AP / CPE site height</b></span>
+      <span>
+        <?= $fresnel['ap_height_m']  !== null ? number_format($fresnel['ap_height_m'], 1)  . ' m' : '—' ?>
+        /
+        <?= $fresnel['cpe_height_m'] !== null ? number_format($fresnel['cpe_height_m'], 1) . ' m' : '—' ?>
+      </span></div>
+    <?php if ($fresnel['needed_m'] !== null): ?>
+      <div class="lv-row"><span><b>Min height needed</b></span>
+        <span><?= number_format($fresnel['needed_m'], 2) ?> m</span></div>
+      <div class="lv-row"><span><b>Clearance margin</b></span>
+        <span style="color:<?= $fresnel['clearance_m'] >= 0 ? '#0c8' : '#d44' ?>;font-weight:600;">
+          <?= ($fresnel['clearance_m'] >= 0 ? '+' : '') . number_format($fresnel['clearance_m'], 2) ?> m
+          <?php if ($fresnel['clearance_m'] < 0): ?>
+            <span style="background:#d44;color:#fff;padding:1px 7px;border-radius:8px;font-size:11px;text-transform:uppercase;margin-left:6px;">obstructed</span>
+          <?php endif; ?>
+        </span></div>
+    <?php else: ?>
+      <small class="muted">Add a height_m on both endpoint sites to compute clearance.</small>
+    <?php endif; ?>
+  <?php endif; ?>
+</div>
+<?php else: ?>
 
 <div class="lv-grid">
   <div class="portal-card">
@@ -372,3 +453,4 @@ $cinr_gauge = function (?int $snr) {
   </div>
   <small class="muted">last evaluated: <?= $h($link['last_evaluated_at'] ?? '—') ?></small>
 </div>
+<?php endif; ?>

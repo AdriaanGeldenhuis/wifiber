@@ -12,6 +12,7 @@ require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/wireless.php';
 require_once __DIR__ . '/../auth/devices.php';
 require_once __DIR__ . '/../auth/sectors.php';
+require_once __DIR__ . '/../auth/csv.php';
 
 $self = '/admin/links.php';
 
@@ -60,6 +61,20 @@ $filters = [
 ];
 
 $links   = wireless_links_all($filters);
+
+if (($_GET['export'] ?? '') === 'csv') {
+    audit_log('wireless_links.export', ['meta' => ['rows' => count($links)]]);
+    csv_download('wireless-links', $links, [
+        'id', 'ap_name', 'cpe_name', 'sector_name', 'customer_name', 'customer_surname',
+        'ssid', 'frequency_mhz', 'channel_width_mhz', 'wireless_mode', 'security',
+        'signal_dbm', 'signal_dbm_remote', 'noise_dbm', 'snr_db', 'ccq_pct',
+        'tx_rate_mbps', 'rx_rate_mbps',
+        'airtime_local_pct', 'airtime_remote_pct',
+        'capacity_local_mbps', 'capacity_remote_mbps',
+        'throughput_local_mbps', 'throughput_remote_mbps',
+        'distance_km', 'health_score', 'last_evaluated_at',
+    ]);
+}
 $devices = devices_all(null);
 $sectors = sectors_all(null);
 
@@ -127,6 +142,16 @@ $health_pill = function (?int $score): string {
     <div class="form-actions" style="grid-column:1/-1;">
       <button type="submit" class="btn btn-primary btn-sm">Apply</button>
       <a href="<?= $self ?>" class="btn btn-ghost btn-sm">Reset</a>
+      <?php
+        $export_qs = http_build_query(array_filter([
+          'sector_id'    => $filters['sector_id'] ?: null,
+          'ap_device_id' => $filters['ap_device_id'] ?: null,
+          'health_max'   => $filters['health_max'] !== '' ? $filters['health_max'] : null,
+          'search'       => $filters['search'] !== ''     ? $filters['search']     : null,
+          'export'       => 'csv',
+        ]));
+      ?>
+      <a href="<?= $self ?>?<?= htmlspecialchars($export_qs) ?>" class="btn btn-ghost btn-sm">Export CSV</a>
     </div>
   </form>
 </div>

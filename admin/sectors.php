@@ -13,6 +13,8 @@ require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/sectors.php';
 require_once __DIR__ . '/../auth/sites.php';
 require_once __DIR__ . '/../auth/devices.php';
+require_once __DIR__ . '/../auth/wireless.php';
+require_once __DIR__ . '/../auth/totp.php';
 
 $self = '/admin/sectors.php';
 
@@ -52,6 +54,43 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             audit_log('sector.delete', ['target_type' => 'sector', 'target_id' => $id]);
             flash('success', 'Sector deleted.');
         }
+        header('Location: ' . $self);
+        exit;
+    }
+
+    if ($action === 'bulk_apply') {
+        $ids   = array_filter(array_map('intval', (array)($_POST['sector_ids'] ?? [])));
+        $freq  = (int)($_POST['frequency_mhz']     ?? 0);
+        $width = (int)($_POST['channel_width_mhz'] ?? 0);
+        $txp   = $_POST['tx_power_dbm'] !== '' ? (int)$_POST['tx_power_dbm'] : null;
+        if (!totp_require_step_up($user, (string)($_POST['totp_code'] ?? ''))) {
+            flash('error', 'Two-factor code is required for bulk push-to-radio.');
+            header('Location: ' . $self);
+            exit;
+        }
+        if (!$ids) {
+            flash('error', 'Select at least one sector.');
+            header('Location: ' . $self);
+            exit;
+        }
+        $payload = [];
+        if ($freq  > 0) $payload['frequency_mhz']     = $freq;
+        if ($width > 0) $payload['channel_width_mhz'] = $width;
+        if ($txp !== null) $payload['tx_power_dbm']  = $txp;
+        if (!$payload) {
+            flash('error', 'Set at least one of frequency, channel width or TX power.');
+            header('Location: ' . $self);
+            exit;
+        }
+        $queued = 0;
+        foreach ($ids as $sid) {
+            wireless_change_job_enqueue('sector', (int)$sid, (int)$user['id'], $payload);
+            $queued++;
+        }
+        audit_log('sector.bulk_apply', [
+            'meta' => ['count' => $queued, 'payload_keys' => array_keys($payload)],
+        ]);
+        flash('success', "Queued $queued change job(s). Worker will pick them up within 60 s.");
         header('Location: ' . $self);
         exit;
     }
@@ -138,10 +177,18 @@ $device_label = function (?int $id) use ($all_devices): string {
       <a class="btn btn-primary" href="/admin/map.php">Open the map</a>
     </div>
   <?php else: ?>
+    <form method="post" id="bulk-sectors"
+          onsubmit="<?= !empty($user['totp_enabled'])
+              ? "var c=prompt('Two-factor code:');if(!c)return false;this.totp_code.value=c;"
+              : '' ?>return confirm('Queue this change for every selected sector?')">
+    <?= csrf_field() ?>
+    <input type="hidden" name="action" value="bulk_apply">
+    <input type="hidden" name="totp_code" value="">
     <div class="table-scroll">
     <table class="data-table">
       <thead>
         <tr>
+          <th><input type="checkbox" onclick="document.querySelectorAll('input[name=&quot;sector_ids[]&quot;]').forEach(c => c.checked = this.checked)"></th>
           <th>Name</th><th>Tower</th><th>AP device</th>
           <th>Azimuth / beam</th><th>Band</th><th>Frequency</th><th>TX</th>
           <th>Capacity</th>
@@ -151,6 +198,7 @@ $device_label = function (?int $id) use ($all_devices): string {
       <tbody>
         <?php foreach ($sectors as $s): ?>
           <tr>
+            <td><input type="checkbox" name="sector_ids[]" value="<?= (int)$s['id'] ?>"></td>
             <td><strong><?= htmlspecialchars($s['name']) ?></strong></td>
             <td><?= htmlspecialchars($s['tower_name'] ?? $tower_label((int)$s['tower_id'])) ?></td>
             <td>
@@ -283,6 +331,24 @@ $device_label = function (?int $id) use ($all_devices): string {
       </tbody>
     </table>
     </div>
+
+    <div style="display:flex;flex-wrap:wrap;gap:10px;align-items:end;margin-top:14px;padding:12px;background:rgba(0,0,0,0.03);border-radius:8px;">
+      <strong style="margin-right:8px;align-self:center;">Bulk apply to selected:</strong>
+      <div class="field" style="margin:0;"><label>Frequency (MHz)</label>
+        <input type="number" name="frequency_mhz" placeholder="e.g. 5200" style="width:120px;"></div>
+      <div class="field" style="margin:0;"><label>Width (MHz)</label>
+        <select name="channel_width_mhz" style="width:90px;">
+          <option value="">—</option>
+          <?php foreach ([5,8,10,20,30,40,60,80,160] as $w): ?>
+            <option value="<?= $w ?>"><?= $w ?></option>
+          <?php endforeach; ?>
+        </select></div>
+      <div class="field" style="margin:0;"><label>TX power (dBm)</label>
+        <input type="number" name="tx_power_dbm" placeholder="" style="width:90px;"></div>
+      <button type="submit" class="btn btn-primary btn-sm">Queue change</button>
+      <small class="muted" style="align-self:center;">Each selected sector becomes a separate <code>wireless_change_jobs</code> row. Empty fields are unchanged.</small>
+    </div>
+    </form>
   <?php endif; ?>
 </div>
 
