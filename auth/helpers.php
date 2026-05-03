@@ -365,7 +365,14 @@ function require_role(string $role, string $login_url): array {
         header('Location: ' . $login_url);
         exit;
     }
-    if (($user['role'] ?? '') !== $role) {
+    $own_role = $user['role'] ?? '';
+    if ($own_role !== $role) {
+        // Logged in but viewing the wrong portal — bounce to their own
+        // dashboard. The "My Account" link is shown to every visitor on
+        // the public site, so an admin clicking it should land in /admin/
+        // rather than getting an opaque "Access denied".
+        if ($own_role === 'admin')  { header('Location: /admin/');   exit; }
+        if ($own_role === 'client') { header('Location: /account/'); exit; }
         http_response_code(403);
         die('Access denied.');
     }
