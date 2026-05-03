@@ -9,6 +9,14 @@
  *   $active_key string key marking active nav item
  *   $user       current user array (optional)
  */
+
+// Buffer the entire layout. Most portal pages include _layout.php (which
+// renders this header) BEFORE running their POST handler, and the handlers
+// finish with header('Location: ...') + exit. Without buffering, the layout
+// HTML has already been flushed by then and the redirect silently fails,
+// leaving the user looking at the sidebar with a blank main area on save.
+ob_start();
+
 $portal     = $portal ?? 'account';
 $page_title = $page_title ?? 'Portal';
 $nav        = $nav ?? [];
