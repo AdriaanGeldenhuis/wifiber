@@ -17,7 +17,6 @@ function site_normalise(array $r): array {
     $r['height_m']          = $r['height_m']          !== null ? (float)$r['height_m']          : null;
     $r['coverage_radius_m'] = $r['coverage_radius_m'] !== null ? (int)  $r['coverage_radius_m'] : null;
     $r['is_active']         = !empty($r['is_active']);
-    $r['uisp_id']           = isset($r['uisp_id']) && $r['uisp_id'] !== '' ? (string)$r['uisp_id'] : null;
     return $r;
 }
 

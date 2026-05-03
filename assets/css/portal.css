@@ -200,6 +200,9 @@ code   { background: var(--bg-elev); padding: 2px 6px; border-radius: 4px; font-
 .alert { padding: 12px 16px; border-radius: var(--radius-sm); margin-bottom: 18px; font-size: .92rem; }
 .alert-success { background: rgba(74,222,128,.08); color: var(--success); border: 1px solid rgba(74,222,128,.3); }
 .alert-error   { background: rgba(255,84,112,.08); color: var(--danger);  border: 1px solid rgba(255,84,112,.3); }
+.alert-warning { background: rgba(251,191,36,.08); color: #fbbf24;        border: 1px solid rgba(251,191,36,.3); }
+.alert strong  { font-weight: 600; }
+.alert .alert-meta { display: block; margin-top: 6px; font-size: .82rem; opacity: .85; }
 
 .portal-foot-link {
   margin-top: 24px;

@@ -47,140 +47,46 @@
   const sitesLayer    = L.layerGroup().addTo(map);
   const linksLayer    = L.layerGroup().addTo(map);
   const clientsLayer  = L.layerGroup().addTo(map);
+  const sectorsLayer  = L.layerGroup().addTo(map);
   const coverageLayer = L.layerGroup();
 
-  /* UISP overlay layers — added to the map only if UISP is configured. */
-  const uispSitesLayer   = L.layerGroup();
-  const uispDevicesLayer = L.layerGroup();
-  const uispLinksLayer   = L.layerGroup();
-  const uispClientsLayer = L.layerGroup();
-  const uispEnabled = !!(boot.uisp && boot.uisp.enabled);
-  if (uispEnabled) {
-    uispSitesLayer.addTo(map);
-    uispDevicesLayer.addTo(map);
-    uispLinksLayer.addTo(map);
-    uispClientsLayer.addTo(map);
-  }
-
   /* ---------- icons ---------- */
-  const SITE_COLOR  = { tower: '#08e', ap: '#0c8', ptp_endpoint: '#f80', pop: '#80f', other: '#888' };
-  const STATUS_COLOR = { active: '#0c8', lead: '#08e', suspended: '#fa0', disconnected: '#888' };
-  const LINK_COLOR   = { ptp: '#08e', ptmp: '#0c8', fiber: '#f0a', backhaul: '#f80' };
-  const UISP_STATUS_COLOR = { online: '#0c8', offline: '#d44', unknown: '#888' };
+  const SITE_COLOR    = { tower: '#08e', ap: '#0c8', ptp_endpoint: '#f80', pop: '#80f', other: '#888' };
+  const STATUS_COLOR  = { active: '#0c8', lead: '#08e', suspended: '#fa0', disconnected: '#888' };
+  const LINK_COLOR    = { ptp: '#08e', ptmp: '#0c8', fiber: '#f0a', backhaul: '#f80' };
+  const DEVICE_COLOR  = { online: '#0c8', offline: '#d44', unknown: '#888', retired: '#555' };
+  const BAND_COLOR    = { '2.4GHz': '#f80', '5GHz': '#08e', '6GHz': '#80f', '60GHz': '#f0a', 'other': '#888' };
 
-  function dotIcon(color, size) {
+  // Optional `badgeColor` paints a small notification badge on the
+  // top-right corner of the dot — used to flag e.g. a customer marker
+  // whose sector AP is offline without disturbing the existing
+  // billing-status colour scheme.
+  function dotIcon(color, size, badgeColor) {
     const s = size || 14;
+    const badge = badgeColor
+      ? '<span style="position:absolute;top:-2px;right:-2px;width:7px;height:7px;border-radius:50%;background:'
+        + badgeColor + ';border:1.5px solid #fff;box-shadow:0 0 2px rgba(0,0,0,.6);"></span>'
+      : '';
     return L.divIcon({
       className: 'wf-marker',
-      html: '<span style="display:block;width:' + s + 'px;height:' + s + 'px;border-radius:50%;background:' + color
-          + ';border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.5);"></span>',
-      iconSize: [s + 4, s + 4],
-      iconAnchor: [(s + 4) / 2, (s + 4) / 2],
-    });
-  }
-
-  function diamondIcon(color, size) {
-    const s = size || 18;
-    return L.divIcon({
-      className: 'wf-uisp-marker',
-      html: '<span style="display:block;width:' + s + 'px;height:' + s + 'px;background:' + color
-          + ';border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.5);transform:rotate(45deg);"></span>',
+      html: '<span style="position:relative;display:block;width:' + s + 'px;height:' + s
+          + 'px;border-radius:50%;background:' + color
+          + ';border:2px solid #fff;box-shadow:0 0 4px rgba(0,0,0,.5);">' + badge + '</span>',
       iconSize: [s + 6, s + 6],
       iconAnchor: [(s + 6) / 2, (s + 6) / 2],
     });
   }
 
-  function ringIcon(color, size) {
-    const s = size || 11;
-    return L.divIcon({
-      className: 'wf-uisp-marker',
-      html: '<span style="display:block;width:' + s + 'px;height:' + s + 'px;border-radius:50%;background:transparent;border:3px solid '
-          + color + ';box-shadow:0 0 3px rgba(0,0,0,.5);"></span>',
-      iconSize: [s + 6, s + 6],
-      iconAnchor: [(s + 6) / 2, (s + 6) / 2],
-    });
-  }
-
-  function pillHTML(text, status) {
-    const color = UISP_STATUS_COLOR[status] || '#888';
-    return '<span class="map-uisp-pill ' + escapeHtml(status || 'unknown') + '" style="background:' + color
-         + ';color:#fff;padding:1px 6px;border-radius:8px;font-size:10px;">' + escapeHtml(text) + '</span>';
-  }
+  // Customer marker badge — flags network-side problems even when the
+  // billing status is fine. retired/online/null all leave the marker
+  // alone (no badge).
+  const CLIENT_BADGE_COLOR = { offline: '#d44', unknown: '#aaa' };
 
   /* ---------- state ---------- */
   let mode = 'pan';            // 'pan' | 'add_site' | 'add_link'
   let pendingLinkFrom = null;  // first site clicked when adding a link
   const siteIndex = new Map(); // id -> {data, marker}
   const linkLines = new Map(); // id -> polyline
-
-  /* UISP indexes — populated before rendering so popups can cross-reference. */
-  const uispSiteById          = new Map(); // uisp_id -> uisp site row
-  const uispDeviceById        = new Map(); // uisp_id -> uisp device row
-  const uispClientById        = new Map(); // uisp_id -> uisp client row
-  const linkedSiteByUispId    = new Map(); // uisp_id -> manual site row
-  const linkedClientByUispId  = new Map(); // uisp_client_id -> manual client row
-
-  function devicesForUispSite(uispSiteId) {
-    const out = [];
-    uispDeviceById.forEach(d => { if (d.uisp_site_id === uispSiteId) out.push(d); });
-    return out;
-  }
-
-  function uispBadgeForSite(s) {
-    if (!s.uisp_id) return '';
-    const linked = uispSiteById.get(s.uisp_id);
-    let html = '<div style="margin-top:6px;border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;">'
-             + '<small>UISP: <code>' + escapeHtml(s.uisp_id) + '</code></small>';
-    if (!linked) {
-      html += ' ' + pillHTML('not in cache', 'unknown');
-    } else {
-      const devs = devicesForUispSite(s.uisp_id);
-      const on = devs.filter(d => d.status === 'online').length;
-      const off = devs.filter(d => d.status === 'offline').length;
-      const un = devs.length - on - off;
-      html += '<br><small>'
-           + (on  ? pillHTML(on + ' online',   'online')   + ' ' : '')
-           + (off ? pillHTML(off + ' offline', 'offline')  + ' ' : '')
-           + (un  ? pillHTML(un + ' unknown',  'unknown')  + ' ' : '')
-           + (devs.length === 0 ? '<span class="muted">no devices in cache</span>' : '')
-           + '</small>';
-    }
-    html += '<form data-map-form="unlink_site" style="display:inline;margin-left:6px;">'
-         +    '<input type="hidden" name="site_id" value="' + s.id + '">'
-         +    '<button type="submit" class="btn btn-ghost btn-sm">Unlink</button>'
-         +  '</form>'
-         + '</div>';
-    return html;
-  }
-
-  function uispBadgeForClient(c) {
-    if (!c.uisp_client_id) return '';
-    const linked = uispClientById.get(c.uisp_client_id);
-    let html = '<div style="margin-top:6px;border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;">'
-             + '<small>UISP: <code>' + escapeHtml(c.uisp_client_id) + '</code></small>';
-    if (linked) {
-      html += '<br><small>' + pillHTML(linked.status || 'unknown', /online|active/i.test(linked.status || '') ? 'online' : 'unknown') + '</small>';
-    } else {
-      html += ' ' + pillHTML('not in cache', 'unknown');
-    }
-    html += '<form data-map-form="unlink_client" style="display:inline;margin-left:6px;">'
-         +    '<input type="hidden" name="user_id" value="' + c.id + '">'
-         +    '<button type="submit" class="btn btn-ghost btn-sm">Unlink</button>'
-         +  '</form>'
-         + '</div>';
-    return html;
-  }
-
-  function unlinkedManualSitesOptions() {
-    return boot.sites.filter(s => !s.uisp_id)
-      .map(s => '<option value="' + s.id + '">' + escapeHtml(s.name + ' (' + s.type + ')') + '</option>')
-      .join('');
-  }
-  function unlinkedManualClientsOptions() {
-    return boot.clients.filter(u => !u.uisp_client_id)
-      .map(u => '<option value="' + u.id + '">' + escapeHtml((u.account_no || ('#' + u.id)) + ' · ' + (u.name || u.username || '')) + '</option>')
-      .join('');
-  }
 
   /* ---------- mode toggling ---------- */
   function setMode(next) {
@@ -210,19 +116,102 @@
   document.getElementById('toggle-coverage').addEventListener('change', (e) => {
     e.target.checked ? coverageLayer.addTo(map) : map.removeLayer(coverageLayer);
   });
+  document.getElementById('toggle-sectors').addEventListener('change', (e) => {
+    e.target.checked ? sectorsLayer.addTo(map) : map.removeLayer(sectorsLayer);
+  });
 
-  /* UISP toggles (only present if UISP is enabled) */
-  function bindUispToggle(id, layer) {
-    const el = document.getElementById(id);
-    if (!el) return;
-    el.addEventListener('change', (e) => {
-      e.target.checked ? layer.addTo(map) : map.removeLayer(layer);
-    });
+  /* ---------- indexes (devices + sectors keyed by site/tower) ---------- */
+  const devicesBySite = new Map(); // site_id -> [device, ...]
+  (boot.devices || []).forEach((d) => {
+    if (d.site_id == null) return;
+    const sid = parseInt(d.site_id, 10);
+    if (!devicesBySite.has(sid)) devicesBySite.set(sid, []);
+    devicesBySite.get(sid).push(d);
+  });
+  const sectorsByTower = new Map(); // tower_id -> [sector, ...]
+  (boot.sectors || []).forEach((s) => {
+    const tid = parseInt(s.tower_id, 10);
+    if (!sectorsByTower.has(tid)) sectorsByTower.set(tid, []);
+    sectorsByTower.get(tid).push(s);
+  });
+
+  /* ---------- outage indexes ---------- */
+  const outageSectorIds  = new Set((boot.outages && boot.outages.sector_ids) || []);
+  const outageTowerIds   = new Set((boot.outages && boot.outages.tower_ids)  || []);
+  const outageBySectorId = (boot.outages && boot.outages.by_sector_id) || {};
+
+  /* ---------- geometry: cone polygon from azimuth + beamwidth + range ---------- */
+  // Walks an arc on the WGS84 sphere from (azimuth - beamwidth/2) to
+  // (azimuth + beamwidth/2). Good enough for sectors a few km wide;
+  // accuracy degrades past tens of km but that's not what sectors are.
+  const EARTH_R = 6371000;
+
+  function destination(lat, lng, bearingDeg, distanceM) {
+    const br   = bearingDeg * Math.PI / 180;
+    const lat1 = lat * Math.PI / 180;
+    const lng1 = lng * Math.PI / 180;
+    const dr   = distanceM / EARTH_R;
+    const lat2 = Math.asin(Math.sin(lat1) * Math.cos(dr)
+                         + Math.cos(lat1) * Math.sin(dr) * Math.cos(br));
+    const lng2 = lng1 + Math.atan2(
+      Math.sin(br) * Math.sin(dr) * Math.cos(lat1),
+      Math.cos(dr) - Math.sin(lat1) * Math.sin(lat2)
+    );
+    return [lat2 * 180 / Math.PI, lng2 * 180 / Math.PI];
   }
-  bindUispToggle('toggle-uisp-sites',   uispSitesLayer);
-  bindUispToggle('toggle-uisp-devices', uispDevicesLayer);
-  bindUispToggle('toggle-uisp-links',   uispLinksLayer);
-  bindUispToggle('toggle-uisp-clients', uispClientsLayer);
+
+  function sectorPolygon(towerLat, towerLng, azimuth, beamwidth, rangeM) {
+    const half  = beamwidth / 2;
+    const steps = Math.max(6, Math.ceil(beamwidth / 5));
+    const pts = [[towerLat, towerLng]];
+    for (let i = 0; i <= steps; i++) {
+      const ang = azimuth - half + (beamwidth * i / steps);
+      pts.push(destination(towerLat, towerLng, ang, rangeM));
+    }
+    pts.push([towerLat, towerLng]);
+    return pts;
+  }
+
+  /* ---------- popup helpers (devices + sectors at a site) ---------- */
+  function deviceListHTML(siteId) {
+    const list = devicesBySite.get(siteId) || [];
+    if (!list.length) return '';
+    const rows = list.map((d) => {
+      const c = DEVICE_COLOR[d.status] || DEVICE_COLOR.unknown;
+      const pill = '<span style="background:' + c + ';color:#fff;padding:0 5px;border-radius:6px;font-size:10px;">'
+                 + escapeHtml(d.status) + '</span>';
+      const meta = [d.role, d.vendor + (d.model ? ' ' + d.model : '')].filter(Boolean).join(' &middot; ');
+      return '<li><a href="/admin/devices.php?search=' + encodeURIComponent(d.name) + '" style="color:inherit;">'
+           + escapeHtml(d.name) + '</a> ' + pill + '<br><small class="muted">' + escapeHtml(meta) + '</small></li>';
+    }).join('');
+    return '<div style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;">'
+         + '<small><strong>Devices (' + list.length + ')</strong></small>'
+         + '<ul style="margin:4px 0 0;padding-left:14px;">' + rows + '</ul>'
+         + '</div>';
+  }
+
+  function sectorListHTML(towerId) {
+    const list = sectorsByTower.get(towerId) || [];
+    if (!list.length) return '';
+    const rows = list.map((s) => {
+      const c = BAND_COLOR[s.band] || BAND_COLOR.other;
+      const dot = '<span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:' + c + ';"></span>';
+      const az  = s.azimuth_deg   != null ? s.azimuth_deg   + '&deg;' : '?';
+      const bw  = s.beamwidth_deg != null ? s.beamwidth_deg + '&deg;' : '?';
+      const fq  = s.frequency_mhz != null ? s.frequency_mhz + ' MHz'
+                + (s.channel_width_mhz ? ' @ ' + s.channel_width_mhz : '')
+                : '';
+      return '<li>' + dot + ' <a href="/admin/sectors.php?tower_id=' + towerId + '" style="color:inherit;">'
+           + escapeHtml(s.name) + '</a><br><small class="muted">'
+           + escapeHtml(s.band) + ' &middot; ' + az + ' / ' + bw
+           + (fq ? ' &middot; ' + escapeHtml(fq) : '')
+           + '</small></li>';
+    }).join('');
+    return '<div style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.1);padding-top:6px;">'
+         + '<small><strong>Sectors (' + list.length + ')</strong></small>'
+         + '<ul style="margin:4px 0 0;padding-left:14px;">' + rows + '</ul>'
+         + '</div>';
+  }
 
   /* ---------- render sites ---------- */
   function siteTypeLabel(t) {
@@ -230,10 +219,21 @@
   }
 
   function renderSite(s) {
+    const inOutage = outageTowerIds.has(s.id);
+    const badge    = inOutage ? '#d44' : null;
     const marker = L.marker([s.lat, s.lng], {
       draggable: true,
-      icon: dotIcon(SITE_COLOR[s.type] || '#888', 16),
+      icon: dotIcon(SITE_COLOR[s.type] || '#888', 16, badge),
+      zIndexOffset: inOutage ? 1000 : 0,
     });
+    if (inOutage) {
+      // Pulsing red halo to draw the eye on a busy map.
+      const halo = L.circleMarker([s.lat, s.lng], {
+        radius: 18, color: '#d44', weight: 2, fillColor: '#d44',
+        fillOpacity: 0.15, opacity: 0.85, interactive: false,
+      });
+      halo.addTo(sitesLayer);
+    }
     marker.bindPopup(sitePopupHTML(s));
     marker.on('dragend', async (e) => {
       const ll = e.target.getLatLng();
@@ -275,7 +275,8 @@
       +     '<button type="button" class="btn btn-ghost btn-sm" data-edit-site="' + s.id + '">Edit</button>'
       +     '<button type="button" class="btn btn-danger btn-sm" data-delete-site="' + s.id + '">Delete</button>'
       +   '</div>'
-      +   uispBadgeForSite(s)
+      +   deviceListHTML(s.id)
+      +   (s.type === 'tower' ? sectorListHTML(s.id) : '')
       + '</div>';
   }
 
@@ -338,9 +339,10 @@
   /* ---------- render clients ---------- */
   function renderClient(c) {
     if (c.lat == null || c.lng == null) return;
+    const badge = CLIENT_BADGE_COLOR[c.network_status] || null;
     const marker = L.marker([c.lat, c.lng], {
       draggable: true,
-      icon: dotIcon(STATUS_COLOR[c.status] || '#888', 11),
+      icon: dotIcon(STATUS_COLOR[c.status] || '#888', 11, badge),
     });
     marker.bindPopup(clientPopupHTML(c));
     marker.on('dragend', async (e) => {
@@ -364,130 +366,20 @@
       +   (c.address ? '<small>' + escapeHtml(c.address) + '</small><br>' : '')
       +   '<span style="display:inline-block;background:' + (STATUS_COLOR[c.status] || '#888')
       +     ';color:#fff;padding:1px 7px;border-radius:8px;font-size:11px;text-transform:uppercase;">' + escapeHtml(c.status) + '</span>'
+      +   (c.sector_label
+            ? '<div style="margin-top:6px;font-size:12px;"><span class="muted">Sector:</span> '
+              + '<a href="/admin/sectors.php?search=' + encodeURIComponent(c.sector_label.split(' · ')[0])
+              + '" style="color:inherit;">' + escapeHtml(c.sector_label) + '</a></div>'
+            : '')
+      +   (c.network_status
+            ? '<div style="margin-top:2px;font-size:12px;"><span class="muted">AP:</span> '
+              + '<span style="background:' + (DEVICE_COLOR[c.network_status] || '#888')
+              + ';color:#fff;padding:0 6px;border-radius:6px;font-size:10px;">'
+              + escapeHtml(c.network_status) + '</span></div>'
+            : '')
       +   '<div class="row" style="margin-top:8px;">'
       +     '<a class="btn btn-ghost btn-sm" href="/admin/client-edit.php?id=' + c.id + '">Open record</a>'
       +   '</div>'
-      +   uispBadgeForClient(c)
-      + '</div>';
-  }
-
-  /* ---------- UISP renderers ---------- */
-  function renderUispSite(s) {
-    if (s.lat == null || s.lng == null) return;
-    if (linkedSiteByUispId.has(s.uisp_id)) return; // manual marker covers it
-
-    const m = L.marker([s.lat, s.lng], { icon: diamondIcon('#80f', 18) });
-    m.bindPopup(uispSitePopupHTML(s));
-    m.addTo(uispSitesLayer);
-  }
-
-  function uispSitePopupHTML(s) {
-    const opts = unlinkedManualSitesOptions();
-    const linkForm = opts
-      ? '<form data-map-form="link_site" class="map-popup" style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.1);padding-top:8px;">'
-        + '<input type="hidden" name="uisp_id" value="' + escapeHtml(s.uisp_id) + '">'
-        + '<label>Adopt as manual site<select name="site_id" required>'
-        +   '<option value="">— pick a manual site —</option>' + opts
-        + '</select></label>'
-        + '<button type="submit" class="btn btn-ghost btn-sm">Link</button>'
-        + '</form>'
-      : '';
-    return '<div class="map-popup">'
-      + '<strong>' + escapeHtml(s.name) + '</strong><br>'
-      + '<small>UISP site</small>'
-      + (s.address ? '<p style="margin:6px 0 0;">' + escapeHtml(s.address) + '</p>' : '')
-      + (s.is_stale ? '<div style="margin-top:6px;">' + pillHTML('stale', 'unknown') + '</div>' : '')
-      + '<div style="margin-top:6px;"><small>UISP id: <code>' + escapeHtml(s.uisp_id) + '</code></small></div>'
-      + linkForm
-      + '</div>';
-  }
-
-  function renderUispDevice(d) {
-    let lat = d.lat, lng = d.lng;
-    if (lat == null || lng == null) {
-      const parent = uispSiteById.get(d.uisp_site_id);
-      if (parent) { lat = parent.lat; lng = parent.lng; }
-    }
-    if (lat == null || lng == null) return;
-
-    const color = UISP_STATUS_COLOR[d.status] || UISP_STATUS_COLOR.unknown;
-    const m = L.marker([lat, lng], { icon: ringIcon(color, 11) });
-    m.bindPopup(uispDevicePopupHTML(d));
-    m.addTo(uispDevicesLayer);
-  }
-
-  function uispDevicePopupHTML(d) {
-    return '<div class="map-popup">'
-      + '<strong>' + escapeHtml(d.name) + '</strong><br>'
-      + '<small>' + escapeHtml(d.type || 'device') + (d.role ? ' · ' + escapeHtml(d.role) : '') + '</small>'
-      + '<div style="margin:6px 0;">' + pillHTML(d.status || 'unknown', d.status) + (d.is_stale ? ' ' + pillHTML('stale', 'unknown') : '') + '</div>'
-      + (d.model        ? '<small>Model: ' + escapeHtml(d.model) + '</small><br>' : '')
-      + (d.mac          ? '<small>MAC: '   + escapeHtml(d.mac)   + '</small><br>' : '')
-      + (d.ip           ? '<small>IP: '    + escapeHtml(d.ip)    + '</small><br>' : '')
-      + (d.signal_dbm != null ? '<small>Signal: ' + d.signal_dbm + ' dBm</small><br>' : '')
-      + (d.last_seen_at ? '<small>Last seen: ' + escapeHtml(d.last_seen_at) + '</small>' : '')
-      + '</div>';
-  }
-
-  function renderUispDataLink(l) {
-    const a = uispDeviceById.get(l.from_device_uisp_id);
-    const b = uispDeviceById.get(l.to_device_uisp_id);
-    if (!a || !b) return;
-    const aSite = a.uisp_site_id ? uispSiteById.get(a.uisp_site_id) : null;
-    const bSite = b.uisp_site_id ? uispSiteById.get(b.uisp_site_id) : null;
-    const fromLat = a.lat != null ? a.lat : (aSite ? aSite.lat : null);
-    const fromLng = a.lng != null ? a.lng : (aSite ? aSite.lng : null);
-    const toLat   = b.lat != null ? b.lat : (bSite ? bSite.lat : null);
-    const toLng   = b.lng != null ? b.lng : (bSite ? bSite.lng : null);
-    if (fromLat == null || fromLng == null || toLat == null || toLng == null) return;
-
-    const ok  = /active|connected|up/i.test(l.status || '');
-    const bad = /inactive|disconnected|offline|down/i.test(l.status || '');
-    const color = ok ? '#0c8' : bad ? '#d44' : '#bb2';
-
-    const line = L.polyline([[fromLat, fromLng], [toLat, toLng]], {
-      color: color, weight: 2, opacity: 0.85, dashArray: '5 4',
-    });
-    line.bindPopup(
-      '<div class="map-popup">'
-      + '<strong>UISP link</strong><br>'
-      + '<small>' + escapeHtml(a.name) + ' &harr; ' + escapeHtml(b.name) + '</small><br>'
-      + (l.frequency ? '<small>' + escapeHtml(l.frequency) + (l.capacity_mbps ? ' · ' + l.capacity_mbps + ' Mbps' : '') + '</small><br>' : '')
-      + '<div style="margin-top:6px;">' + pillHTML(l.status || 'unknown', ok ? 'online' : bad ? 'offline' : 'unknown') + '</div>'
-      + '</div>'
-    );
-    line.addTo(uispLinksLayer);
-  }
-
-  function renderUispClient(c) {
-    if (c.lat == null || c.lng == null) return;
-    if (linkedClientByUispId.has(c.uisp_id)) return; // manual marker covers it
-
-    const m = L.marker([c.lat, c.lng], { icon: ringIcon('#08e', 9) });
-    m.bindPopup(uispClientPopupHTML(c));
-    m.addTo(uispClientsLayer);
-  }
-
-  function uispClientPopupHTML(c) {
-    const opts = unlinkedManualClientsOptions();
-    const linkForm = opts
-      ? '<form data-map-form="link_client" class="map-popup" style="margin-top:8px;border-top:1px solid rgba(255,255,255,0.1);padding-top:8px;">'
-        + '<input type="hidden" name="uisp_id" value="' + escapeHtml(c.uisp_id) + '">'
-        + '<label>Adopt as portal client<select name="user_id" required>'
-        +   '<option value="">— pick a portal client —</option>' + opts
-        + '</select></label>'
-        + '<button type="submit" class="btn btn-ghost btn-sm">Link</button>'
-        + '</form>'
-      : '';
-    const ok = /active|online/i.test(c.status || '');
-    return '<div class="map-popup">'
-      + '<strong>' + escapeHtml(c.name) + '</strong><br>'
-      + (c.account_no   ? '<small>' + escapeHtml(c.account_no)   + '</small><br>' : '')
-      + (c.email        ? '<small>' + escapeHtml(c.email)        + '</small><br>' : '')
-      + (c.address_full ? '<small>' + escapeHtml(c.address_full) + '</small><br>' : '')
-      + '<div style="margin-top:6px;">' + pillHTML(c.status || 'unknown', ok ? 'online' : 'unknown') + (c.is_stale ? ' ' + pillHTML('stale', 'unknown') : '') + '</div>'
-      + '<div style="margin-top:6px;"><small>UISP id: <code>' + escapeHtml(c.uisp_id) + '</code></small></div>'
-      + linkForm
       + '</div>';
   }
 
@@ -615,45 +507,81 @@
     setTimeout(() => { if (geoStatus.textContent === msg) geoStatus.textContent = ''; }, 4000);
   }
 
-  /* ---------- Sync UISP button ---------- */
-  const uispSyncBtn = document.getElementById('uisp-sync-btn');
-  const uispSyncStatusEl = document.getElementById('uisp-sync-status');
-  if (uispSyncBtn) {
-    uispSyncBtn.addEventListener('click', async () => {
-      uispSyncBtn.disabled = true;
-      if (uispSyncStatusEl) uispSyncStatusEl.textContent = 'Syncing UISP…';
-      const r = await postAction('uisp_sync', {});
-      if (r.ok) {
-        if (uispSyncStatusEl) uispSyncStatusEl.textContent = 'Synced — reloading…';
-        setTimeout(() => location.reload(), 800);
-      } else {
-        if (uispSyncStatusEl) uispSyncStatusEl.textContent = 'Sync failed';
-        alert(r.error || (r.errors && r.errors.join(' | ')) || 'Sync failed');
-        uispSyncBtn.disabled = false;
+  /* ---------- render sectors ---------- */
+  // A sector cone is anchored on its tower's lat/lng. Range falls back
+  // to the tower's coverage_radius_m, then a 1500 m default — sectors
+  // don't carry their own range yet (Phase 4 visualisation, not config).
+  const SECTOR_DEFAULT_RANGE_M = 1500;
+
+  function renderSector(sector) {
+    const tower = siteIndex.get(sector.tower_id);
+    if (!tower) return;
+    const az = sector.azimuth_deg;
+    const bw = sector.beamwidth_deg;
+    if (az == null || bw == null) return; // can't draw a cone without a direction
+
+    const range = (tower.data.coverage_radius_m && tower.data.coverage_radius_m > 0)
+                ? Number(tower.data.coverage_radius_m)
+                : SECTOR_DEFAULT_RANGE_M;
+    const bandColor = BAND_COLOR[sector.band] || BAND_COLOR.other;
+    const inOutage  = outageSectorIds.has(sector.id);
+
+    // Outage tints the cone red and bumps the outline weight so it
+    // pops on a busy map. Healthy sectors keep their band colour.
+    const stroke = inOutage ? '#d44' : bandColor;
+    const fill   = inOutage ? '#d44' : bandColor;
+
+    const poly = L.polygon(
+      sectorPolygon(tower.data.lat, tower.data.lng, Number(az), Number(bw), range),
+      {
+        color: stroke,
+        weight: inOutage ? 3 : 1.5,
+        fillColor: fill,
+        fillOpacity: inOutage ? 0.25 : 0.15,
+        opacity: inOutage ? 0.95 : 0.7,
       }
-    });
+    );
+    poly.bindPopup(sectorPopupHTML(sector, tower.data.name));
+    poly.addTo(sectorsLayer);
   }
 
-  /* ---------- bootstrap ----------
-     Order matters: index UISP and "linked" maps before rendering anything,
-     so manual popups can show UISP status pills and UISP renderers can
-     skip entries that already have a manual marker. */
-  if (uispEnabled && boot.uisp) {
-    (boot.uisp.sites   || []).forEach(s => uispSiteById.set(s.uisp_id, s));
-    (boot.uisp.devices || []).forEach(d => uispDeviceById.set(d.uisp_id, d));
-    (boot.uisp.clients || []).forEach(c => uispClientById.set(c.uisp_id, c));
+  function sectorPopupHTML(s, towerName) {
+    const fq = s.frequency_mhz != null
+      ? s.frequency_mhz + ' MHz' + (s.channel_width_mhz ? ' @ ' + s.channel_width_mhz + ' MHz wide' : '')
+      : null;
+    const outage = outageBySectorId[s.id];
+    const outageBlock = outage
+      ? '<div style="margin:6px 0;padding:6px 8px;background:rgba(220,68,68,0.18);border-left:3px solid #d44;font-size:12px;">'
+        + '<strong>Active outage</strong><br>'
+        + '<small>Started: ' + escapeHtml(outage.started_at) + '</small><br>'
+        + (outage.cause ? '<small>Cause: ' + escapeHtml(outage.cause) + '</small><br>' : '')
+        + '<small>' + outage.affected_count + ' customer'
+          + (outage.affected_count === 1 ? '' : 's') + ' affected</small>'
+        + '</div>'
+      : '';
+    return ''
+      + '<div class="map-popup">'
+      +   '<strong>' + escapeHtml(s.name) + '</strong><br>'
+      +   '<small>' + escapeHtml(towerName) + ' &middot; ' + escapeHtml(s.band) + '</small>'
+      +   outageBlock
+      +   '<div style="margin-top:6px;font-size:12px;">'
+      +     '<div>Azimuth: ' + (s.azimuth_deg   != null ? s.azimuth_deg   + '&deg;' : '—') + '</div>'
+      +     '<div>Beam: '    + (s.beamwidth_deg != null ? s.beamwidth_deg + '&deg;' : '—') + '</div>'
+      +     (fq ? '<div>Freq: ' + escapeHtml(fq) + '</div>' : '')
+      +     (s.tx_power_dbm != null ? '<div>TX: ' + s.tx_power_dbm + ' dBm</div>' : '')
+      +     (s.ap_device_name ? '<div>AP: ' + escapeHtml(s.ap_device_name) + '</div>' : '')
+      +     (s.max_clients != null ? '<div>Max clients: ' + s.max_clients + '</div>' : '')
+      +   '</div>'
+      +   '<div class="row" style="margin-top:8px;">'
+      +     '<a class="btn btn-ghost btn-sm" href="/admin/sectors.php?tower_id=' + s.tower_id + '">Open record</a>'
+      +     (outage ? '<a class="btn btn-ghost btn-sm" href="/admin/outages.php">Outages</a>' : '')
+      +   '</div>'
+      + '</div>';
   }
-  boot.sites.forEach(s   => { if (s.uisp_id)        linkedSiteByUispId  .set(s.uisp_id, s); });
-  boot.clients.forEach(c => { if (c.uisp_client_id) linkedClientByUispId.set(c.uisp_client_id, c); });
 
+  /* ---------- bootstrap ---------- */
   boot.sites.forEach(renderSite);
   boot.site_links.forEach(renderLink);
   boot.clients.forEach(renderClient);
-
-  if (uispEnabled && boot.uisp) {
-    (boot.uisp.sites      || []).forEach(renderUispSite);
-    (boot.uisp.devices    || []).forEach(renderUispDevice);
-    (boot.uisp.data_links || []).forEach(renderUispDataLink);
-    (boot.uisp.clients    || []).forEach(renderUispClient);
-  }
+  (boot.sectors || []).forEach(renderSector);
 })();

@@ -8,6 +8,8 @@ $active_key = 'clients';
 require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/products.php';
 require_once __DIR__ . '/../auth/sites.php';
+require_once __DIR__ . '/../auth/sectors.php';
+require_once __DIR__ . '/../auth/outages.php';
 
 $id     = (int)($_GET['id'] ?? 0);
 $client = $id ? find_user_by_id($id) : null;
@@ -71,6 +73,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'payment_method'    => $_POST['payment_method']         ?? 'eft',
             'product_id'        => $_POST['product_id']             ?? '',
             'package'           => trim($_POST['package']           ?? ''),
+            'site_id'           => $_POST['site_id']                ?? '',
+            'sector_id'         => $_POST['sector_id']              ?? '',
             'equipment_mac'     => trim($_POST['equipment_mac']     ?? ''),
             'equipment_ip'      => trim($_POST['equipment_ip']      ?? ''),
             'equipment_serial'  => trim($_POST['equipment_serial']  ?? ''),
@@ -250,6 +254,97 @@ $v = fn($k, $d = '') => htmlspecialchars((string)($client[$k] ?? $d), ENT_QUOTES
       </div>
     </div>
   </div>
+
+  <div class="portal-card">
+    <h2>Network</h2>
+    <div class="form form-grid">
+      <div class="field"><label>Tower / site</label>
+        <select name="site_id">
+          <option value="">— none —</option>
+          <?php
+          $all_sites      = sites_all(false);
+          $current_site   = (int)($client['site_id'] ?? 0);
+          foreach ($all_sites as $s):
+              if (!$s['is_active'] && (int)$s['id'] !== $current_site) continue;
+          ?>
+            <option value="<?= (int)$s['id'] ?>" <?= $current_site === (int)$s['id'] ? 'selected' : '' ?>>
+              <?= htmlspecialchars($s['name']) ?> (<?= htmlspecialchars($s['type']) ?>)<?= $s['is_active'] ? '' : ' — inactive' ?>
+            </option>
+          <?php endforeach; ?>
+        </select>
+      </div>
+      <div class="field"><label>Sector</label>
+        <select name="sector_id">
+          <option value="">— none —</option>
+          <?php
+          $all_sectors    = sectors_all();
+          $current_sector = (int)($client['sector_id'] ?? 0);
+          foreach ($all_sectors as $sec):
+          ?>
+            <option value="<?= (int)$sec['id'] ?>" <?= $current_sector === (int)$sec['id'] ? 'selected' : '' ?>>
+              <?= htmlspecialchars($sec['name']) ?>
+              <?php if (!empty($sec['tower_name'])): ?>
+                &middot; <?= htmlspecialchars($sec['tower_name']) ?>
+              <?php endif; ?>
+              <?php if (!empty($sec['frequency_mhz'])): ?>
+                &middot; <?= (int)$sec['frequency_mhz'] ?> MHz
+              <?php endif; ?>
+            </option>
+          <?php endforeach; ?>
+        </select>
+        <p class="muted small" style="margin:6px 0 0;">Manage sectors under <a href="/admin/sectors.php">Sectors</a>. Tower and sector are independent — picking a sector that lives on a different tower than the one above is allowed (the customer might be on a CPE attached directly to a non-tower AP).</p>
+      </div>
+    </div>
+  </div>
+
+  <?php
+    // Past outages affecting this customer's sector — the same hits
+    // that would have shown them an outage banner on /account/. Useful
+    // for support staff investigating "why was my service down on Tue?"
+    $client_sector_id = !empty($client['sector_id']) ? (int)$client['sector_id'] : 0;
+    $client_outage_active   = $client_sector_id ? outage_active('sector', $client_sector_id) : null;
+    $client_outage_history  = $client_sector_id
+        ? outages_all(['scope' => 'sector', 'status' => 'resolved'], 5)
+        : [];
+    if ($client_sector_id && $client_outage_history) {
+        $client_outage_history = array_values(array_filter(
+            $client_outage_history,
+            fn($o) => (int)$o['scope_id'] === $client_sector_id
+        ));
+    }
+  ?>
+  <?php if ($client_sector_id): ?>
+  <div class="portal-card">
+    <h2>Network activity</h2>
+    <?php if ($client_outage_active): ?>
+      <div class="alert alert-warning" style="margin-bottom:14px;">
+        <strong>Active outage on this customer's sector.</strong>
+        Started <?= htmlspecialchars((string)$client_outage_active['started_at']) ?>
+        <?php if (!empty($client_outage_active['cause'])): ?>
+          &middot; <?= htmlspecialchars((string)$client_outage_active['cause']) ?>
+        <?php endif; ?>
+        <span class="alert-meta"><?= (int)$client_outage_active['affected_count'] ?> customer<?= (int)$client_outage_active['affected_count'] === 1 ? '' : 's' ?> on this sector.</span>
+      </div>
+    <?php endif; ?>
+    <?php if ($client_outage_history): ?>
+      <table class="data-table">
+        <thead><tr><th>Started</th><th>Resolved</th><th>Cause</th><th style="text-align:right;">Affected</th></tr></thead>
+        <tbody>
+          <?php foreach ($client_outage_history as $o): ?>
+            <tr>
+              <td><small><?= htmlspecialchars((string)$o['started_at']) ?></small></td>
+              <td><small><?= htmlspecialchars((string)($o['resolved_at'] ?? '')) ?></small></td>
+              <td><small><?= htmlspecialchars((string)($o['cause'] ?? '—')) ?></small></td>
+              <td style="text-align:right;"><?= (int)$o['affected_count'] ?></td>
+            </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    <?php elseif (!$client_outage_active): ?>
+      <p class="muted" style="margin:0;">No outage history on this customer's sector yet.</p>
+    <?php endif; ?>
+  </div>
+  <?php endif; ?>
 
   <div class="portal-card">
     <h2>Equipment / CPE</h2>

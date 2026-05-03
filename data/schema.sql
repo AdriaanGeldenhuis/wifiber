@@ -29,11 +29,11 @@ CREATE TABLE IF NOT EXISTS users (
   package              VARCHAR(80)  NOT NULL DEFAULT '',
   product_id           INT UNSIGNED DEFAULT NULL,
   site_id              INT UNSIGNED DEFAULT NULL,
+  sector_id            INT UNSIGNED DEFAULT NULL,
   equipment_mac        VARCHAR(20)  NOT NULL DEFAULT '',
   equipment_ip         VARCHAR(45)  NOT NULL DEFAULT '',
   equipment_serial     VARCHAR(60)  NOT NULL DEFAULT '',
   equipment_model      VARCHAR(80)  NOT NULL DEFAULT '',
-  uisp_client_id       VARCHAR(64)  DEFAULT NULL,
   notes                TEXT         DEFAULT NULL,
   password_hash        VARCHAR(255) NOT NULL,
   totp_secret          VARCHAR(64)  DEFAULT NULL,
@@ -45,10 +45,10 @@ CREATE TABLE IF NOT EXISTS users (
   PRIMARY KEY (id),
   UNIQUE KEY uniq_username (username),
   UNIQUE KEY uniq_account_no (account_no),
-  UNIQUE KEY uniq_users_uisp_client (uisp_client_id),
   KEY idx_role (role),
   KEY idx_user_product (product_id),
-  KEY idx_user_site    (site_id)
+  KEY idx_user_site    (site_id),
+  KEY idx_user_sector  (sector_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS sites (
@@ -63,11 +63,9 @@ CREATE TABLE IF NOT EXISTS sites (
   color             VARCHAR(20)   DEFAULT NULL,
   notes             TEXT          DEFAULT NULL,
   is_active         TINYINT(1)    NOT NULL DEFAULT 1,
-  uisp_id           VARCHAR(64)   DEFAULT NULL,
   created_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  UNIQUE KEY uniq_sites_uisp_id (uisp_id),
   KEY idx_parent (parent_id),
   KEY idx_type   (type),
   KEY idx_active (is_active)
@@ -83,10 +81,8 @@ CREATE TABLE IF NOT EXISTS site_links (
   frequency     VARCHAR(20)  DEFAULT NULL,
   color         VARCHAR(20)  DEFAULT NULL,
   notes         TEXT         DEFAULT NULL,
-  uisp_id       VARCHAR(64)  DEFAULT NULL,
   created_at    DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  UNIQUE KEY uniq_site_links_uisp_id (uisp_id),
   KEY idx_from (from_site_id),
   KEY idx_to   (to_site_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
@@ -283,82 +279,130 @@ CREATE TABLE IF NOT EXISTS rate_limit (
   KEY idx_window (window_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
--- ---------------------------------------------------------------- UISP cache
--- Mirrors entities pulled from UISP's NMS + CRM APIs. Populated by
--- bin/uisp-sync.php (and the manual "Sync now" button on /admin/uisp.php).
--- Rows that disappear from UISP are marked is_stale = 1, never hard-deleted,
--- so any manual sites/users linked via uisp_id keep working.
-
-CREATE TABLE IF NOT EXISTS uisp_sites (
-  uisp_id        VARCHAR(64)   NOT NULL,
-  name           VARCHAR(160)  NOT NULL,
-  address        VARCHAR(255)  DEFAULT NULL,
-  lat            DECIMAL(10,7) DEFAULT NULL,
-  lng            DECIMAL(10,7) DEFAULT NULL,
-  height_m       DECIMAL(6,2)  DEFAULT NULL,
-  status         VARCHAR(32)   DEFAULT NULL,
-  raw_json       JSON          DEFAULT NULL,
-  last_seen_at   DATETIME      DEFAULT NULL,
-  synced_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  is_stale       TINYINT(1)    NOT NULL DEFAULT 0,
-  PRIMARY KEY (uisp_id),
-  KEY idx_uisp_site_synced (synced_at),
-  KEY idx_uisp_site_stale  (is_stale)
+CREATE TABLE IF NOT EXISTS devices (
+  id            INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  site_id       INT UNSIGNED  DEFAULT NULL,
+  name          VARCHAR(120)  NOT NULL,
+  vendor        ENUM('mikrotik','ubiquiti','cambium','mimosa','other') NOT NULL DEFAULT 'other',
+  model         VARCHAR(80)   NOT NULL DEFAULT '',
+  role          ENUM('ap','cpe','router','switch','backhaul','ups','other') NOT NULL DEFAULT 'other',
+  serial        VARCHAR(80)   NOT NULL DEFAULT '',
+  mac           VARCHAR(20)   NOT NULL DEFAULT '',
+  mgmt_ip       VARCHAR(45)   NOT NULL DEFAULT '',
+  mgmt_port     SMALLINT UNSIGNED DEFAULT NULL,
+  firmware      VARCHAR(60)   NOT NULL DEFAULT '',
+  status        ENUM('online','offline','unknown','retired') NOT NULL DEFAULT 'unknown',
+  last_seen_at  DATETIME      DEFAULT NULL,
+  notes         TEXT          DEFAULT NULL,
+  created_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_dev_site   (site_id),
+  KEY idx_dev_status (status),
+  KEY idx_dev_role   (role),
+  KEY idx_dev_vendor (vendor),
+  KEY idx_dev_mac    (mac),
+  KEY idx_dev_serial (serial),
+  CONSTRAINT fk_devices_site
+    FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS uisp_devices (
-  uisp_id        VARCHAR(64)   NOT NULL,
-  uisp_site_id   VARCHAR(64)   DEFAULT NULL,
-  name           VARCHAR(160)  NOT NULL DEFAULT '',
-  type           VARCHAR(40)   DEFAULT NULL,
-  model          VARCHAR(80)   DEFAULT NULL,
-  mac            VARCHAR(20)   DEFAULT NULL,
-  ip             VARCHAR(45)   DEFAULT NULL,
-  role           VARCHAR(40)   DEFAULT NULL,
-  status         ENUM('online','offline','unknown') NOT NULL DEFAULT 'unknown',
-  signal_dbm     SMALLINT      DEFAULT NULL,
-  lat            DECIMAL(10,7) DEFAULT NULL,
-  lng            DECIMAL(10,7) DEFAULT NULL,
-  raw_json       JSON          DEFAULT NULL,
-  last_seen_at   DATETIME      DEFAULT NULL,
-  synced_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  is_stale       TINYINT(1)    NOT NULL DEFAULT 0,
-  PRIMARY KEY (uisp_id),
-  KEY idx_uisp_dev_site   (uisp_site_id),
-  KEY idx_uisp_dev_status (status),
-  KEY idx_uisp_dev_stale  (is_stale)
+CREATE TABLE IF NOT EXISTS device_health (
+  id              INT UNSIGNED   NOT NULL AUTO_INCREMENT,
+  device_id       INT UNSIGNED   NOT NULL,
+  polled_at       DATETIME       NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  status          ENUM('online','offline','unknown') NOT NULL DEFAULT 'unknown',
+  uptime_seconds  INT UNSIGNED   DEFAULT NULL,
+  cpu_pct         DECIMAL(5,2)   DEFAULT NULL,
+  mem_pct         DECIMAL(5,2)   DEFAULT NULL,
+  rtt_ms          DECIMAL(7,2)   DEFAULT NULL,
+  signal_dbm      SMALLINT       DEFAULT NULL,
+  noise_dbm       SMALLINT       DEFAULT NULL,
+  ccq_pct         DECIMAL(5,2)   DEFAULT NULL,
+  tx_rate_mbps    DECIMAL(8,2)   DEFAULT NULL,
+  rx_rate_mbps    DECIMAL(8,2)   DEFAULT NULL,
+  client_count    SMALLINT UNSIGNED DEFAULT NULL,
+  PRIMARY KEY (id),
+  KEY idx_dh_device (device_id, polled_at),
+  KEY idx_dh_polled (polled_at),
+  CONSTRAINT fk_dh_device
+    FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS uisp_data_links (
-  uisp_id              VARCHAR(64)   NOT NULL,
-  from_device_uisp_id  VARCHAR(64)   DEFAULT NULL,
-  to_device_uisp_id    VARCHAR(64)   DEFAULT NULL,
-  frequency            VARCHAR(40)   DEFAULT NULL,
-  capacity_mbps        DECIMAL(8,2)  DEFAULT NULL,
-  status               VARCHAR(32)   DEFAULT NULL,
-  raw_json             JSON          DEFAULT NULL,
-  synced_at            DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  is_stale             TINYINT(1)    NOT NULL DEFAULT 0,
-  PRIMARY KEY (uisp_id),
-  KEY idx_uisp_dl_from  (from_device_uisp_id),
-  KEY idx_uisp_dl_to    (to_device_uisp_id),
-  KEY idx_uisp_dl_stale (is_stale)
+CREATE TABLE IF NOT EXISTS sectors (
+  id                INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  tower_id          INT UNSIGNED  NOT NULL,
+  ap_device_id      INT UNSIGNED  DEFAULT NULL,
+  name              VARCHAR(120)  NOT NULL,
+  azimuth_deg       SMALLINT UNSIGNED DEFAULT NULL,
+  beamwidth_deg     SMALLINT UNSIGNED DEFAULT NULL,
+  band              ENUM('2.4GHz','5GHz','6GHz','60GHz','other') NOT NULL DEFAULT '5GHz',
+  frequency_mhz     SMALLINT UNSIGNED DEFAULT NULL,
+  channel_width_mhz SMALLINT UNSIGNED DEFAULT NULL,
+  tx_power_dbm      TINYINT       DEFAULT NULL,
+  max_clients       SMALLINT UNSIGNED DEFAULT NULL,
+  notes             TEXT          DEFAULT NULL,
+  created_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at        DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_sec_tower  (tower_id),
+  KEY idx_sec_device (ap_device_id),
+  KEY idx_sec_band   (band),
+  KEY idx_sec_freq   (frequency_mhz),
+  CONSTRAINT fk_sec_tower
+    FOREIGN KEY (tower_id) REFERENCES sites(id) ON DELETE CASCADE,
+  CONSTRAINT fk_sec_device
+    FOREIGN KEY (ap_device_id) REFERENCES devices(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
-CREATE TABLE IF NOT EXISTS uisp_clients (
-  uisp_id           VARCHAR(64)   NOT NULL,
-  account_no        VARCHAR(40)   DEFAULT NULL,
-  name              VARCHAR(160)  NOT NULL DEFAULT '',
-  email             VARCHAR(160)  DEFAULT NULL,
-  address_full      VARCHAR(400)  DEFAULT NULL,
-  lat               DECIMAL(10,7) DEFAULT NULL,
-  lng               DECIMAL(10,7) DEFAULT NULL,
-  status            VARCHAR(32)   DEFAULT NULL,
-  services_summary  JSON          DEFAULT NULL,
-  raw_json          JSON          DEFAULT NULL,
-  synced_at         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-  is_stale          TINYINT(1)    NOT NULL DEFAULT 0,
-  PRIMARY KEY (uisp_id),
-  KEY idx_uisp_client_status (status),
-  KEY idx_uisp_client_stale  (is_stale)
+CREATE TABLE IF NOT EXISTS outages (
+  id              INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  scope           ENUM('device','sector','tower','core') NOT NULL,
+  scope_id        INT UNSIGNED  DEFAULT NULL,
+  scope_label     VARCHAR(160)  NOT NULL DEFAULT '',
+  status          ENUM('active','resolved') NOT NULL DEFAULT 'active',
+  affected_count  SMALLINT UNSIGNED NOT NULL DEFAULT 0,
+  cause           VARCHAR(255)  DEFAULT NULL,
+  notes           TEXT          DEFAULT NULL,
+  started_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  resolved_at     DATETIME      DEFAULT NULL,
+  created_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at      DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_outage_status_started (status, started_at),
+  KEY idx_outage_scope (scope, scope_id),
+  KEY idx_outage_resolved (resolved_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS wireless_links (
+  id                 INT UNSIGNED  NOT NULL AUTO_INCREMENT,
+  ap_device_id       INT UNSIGNED  NOT NULL,
+  cpe_device_id      INT UNSIGNED  DEFAULT NULL,
+  sector_id          INT UNSIGNED  DEFAULT NULL,
+  customer_id        INT UNSIGNED  DEFAULT NULL,
+  signal_dbm         SMALLINT      DEFAULT NULL,
+  noise_dbm          SMALLINT      DEFAULT NULL,
+  snr_db             SMALLINT      DEFAULT NULL,
+  ccq_pct            DECIMAL(5,2)  DEFAULT NULL,
+  tx_rate_mbps       DECIMAL(8,2)  DEFAULT NULL,
+  rx_rate_mbps       DECIMAL(8,2)  DEFAULT NULL,
+  distance_km        DECIMAL(6,3)  DEFAULT NULL,
+  health_score       TINYINT UNSIGNED DEFAULT NULL,
+  last_evaluated_at  DATETIME      DEFAULT NULL,
+  created_at         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at         DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  UNIQUE KEY uniq_link_ap_cpe (ap_device_id, cpe_device_id),
+  KEY idx_wl_ap     (ap_device_id),
+  KEY idx_wl_cpe    (cpe_device_id),
+  KEY idx_wl_sector (sector_id),
+  KEY idx_wl_user   (customer_id),
+  CONSTRAINT fk_wl_ap
+    FOREIGN KEY (ap_device_id)  REFERENCES devices(id) ON DELETE CASCADE,
+  CONSTRAINT fk_wl_cpe
+    FOREIGN KEY (cpe_device_id) REFERENCES devices(id) ON DELETE SET NULL,
+  CONSTRAINT fk_wl_sector
+    FOREIGN KEY (sector_id)     REFERENCES sectors(id) ON DELETE SET NULL,
+  CONSTRAINT fk_wl_user
+    FOREIGN KEY (customer_id)   REFERENCES users(id)   ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

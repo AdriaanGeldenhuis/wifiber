@@ -11,7 +11,9 @@ $page_title = 'Network map';
 $active_key = 'map';
 require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/sites.php';
-require_once __DIR__ . '/../auth/uisp_sync.php';
+require_once __DIR__ . '/../auth/devices.php';
+require_once __DIR__ . '/../auth/sectors.php';
+require_once __DIR__ . '/../auth/outages.php';
 
 $is_ajax = !empty($_GET['ajax']);
 $reply   = function (array $payload) use ($is_ajax) {
@@ -119,65 +121,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 break;
             }
 
-            case 'uisp_sync': {
-                $r = uisp_sync_all();
-                $reply([
-                    'ok'      => !empty($r['ok']),
-                    'message' => !empty($r['ok']) ? 'Sync OK.' : 'Sync failed: ' . implode(' | ', $r['errors'] ?? []),
-                    'counts'  => $r['counts'] ?? null,
-                    'errors'  => $r['errors'] ?? null,
-                ]);
-                break;
-            }
-
-            case 'link_site': {
-                $site_id = (int)($_POST['site_id'] ?? 0);
-                $uisp_id = trim((string)($_POST['uisp_id'] ?? ''));
-                if ($site_id <= 0 || $uisp_id === '') {
-                    $reply(['ok' => false, 'error' => 'Pick a site and a UISP id.']);
-                }
-                pdo()->prepare("UPDATE sites SET uisp_id = ? WHERE id = ?")->execute([$uisp_id, $site_id]);
-                audit_log('uisp.link_site', [
-                    'target_type' => 'site', 'target_id' => $site_id,
-                    'meta' => ['uisp_id' => $uisp_id],
-                ]);
-                $reply(['ok' => true, 'message' => 'Linked to UISP.']);
-                break;
-            }
-
-            case 'unlink_site': {
-                $site_id = (int)($_POST['site_id'] ?? 0);
-                if ($site_id <= 0) $reply(['ok' => false, 'error' => 'No site id.']);
-                pdo()->prepare("UPDATE sites SET uisp_id = NULL WHERE id = ?")->execute([$site_id]);
-                audit_log('uisp.unlink_site', ['target_type' => 'site', 'target_id' => $site_id]);
-                $reply(['ok' => true, 'message' => 'Unlinked.']);
-                break;
-            }
-
-            case 'link_client': {
-                $user_id = (int)($_POST['user_id'] ?? 0);
-                $uisp_id = trim((string)($_POST['uisp_id'] ?? ''));
-                if ($user_id <= 0 || $uisp_id === '') {
-                    $reply(['ok' => false, 'error' => 'Pick a client and a UISP id.']);
-                }
-                pdo()->prepare("UPDATE users SET uisp_client_id = ? WHERE id = ?")->execute([$uisp_id, $user_id]);
-                audit_log('uisp.link_client', [
-                    'target_type' => 'user', 'target_id' => $user_id,
-                    'meta' => ['uisp_client_id' => $uisp_id],
-                ]);
-                $reply(['ok' => true, 'message' => 'Linked to UISP.']);
-                break;
-            }
-
-            case 'unlink_client': {
-                $user_id = (int)($_POST['user_id'] ?? 0);
-                if ($user_id <= 0) $reply(['ok' => false, 'error' => 'No user id.']);
-                pdo()->prepare("UPDATE users SET uisp_client_id = NULL WHERE id = ?")->execute([$user_id]);
-                audit_log('uisp.unlink_client', ['target_type' => 'user', 'target_id' => $user_id]);
-                $reply(['ok' => true, 'message' => 'Unlinked.']);
-                break;
-            }
-
             default:
                 $reply(['ok' => false, 'error' => 'Unknown action.']);
         }
@@ -186,31 +129,61 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 }
 
-// Auto-sync on page load if cache is older than the configured interval.
-// uisp_sync_all() is itself rate-limited (60s lock), so concurrent loads
-// don't pile up. Failures are non-fatal — we just flag $uisp_offline so
-// the map renders the cached snapshot with a banner.
-$uisp_offline = false;
-if (uisp_should_auto_sync()) {
-    try {
-        $r = uisp_sync_all();
-        if (empty($r['ok'])) $uisp_offline = true;
-    } catch (Throwable $e) {
-        error_log('UISP auto-sync threw: ' . $e->getMessage());
-        $uisp_offline = true;
-    }
-}
-
 $sites    = sites_all(false);
 $links    = site_links_all();
 $clients  = array_values(array_filter(load_users(), fn($u) => ($u['role'] ?? '') === 'client'));
+$devices  = devices_all();
+$sectors  = sectors_all();
+$active_outages = outages_all(['status' => 'active'], 500);
 
-$uisp_cfg     = uisp_config();
-$uisp_enabled = uisp_is_configured();
-$uisp_sites_c   = $uisp_enabled ? uisp_sites_cached()      : [];
-$uisp_devices_c = $uisp_enabled ? uisp_devices_cached()    : [];
-$uisp_links_c   = $uisp_enabled ? uisp_data_links_cached() : [];
-$uisp_clients_c = $uisp_enabled ? uisp_clients_cached()    : [];
+// Index active outage scope_ids so the JS can highlight affected
+// sectors and (transitively) towers without iterating per render.
+$outage_sector_ids = [];
+$outage_tower_ids  = [];
+$outage_by_sector  = [];
+foreach ($active_outages as $o) {
+    if ($o['scope'] === 'sector' && $o['scope_id']) {
+        $outage_sector_ids[] = (int)$o['scope_id'];
+        $outage_by_sector[(int)$o['scope_id']] = [
+            'id'             => (int)$o['id'],
+            'started_at'     => $o['started_at'],
+            'cause'          => $o['cause'],
+            'affected_count' => (int)$o['affected_count'],
+        ];
+    } elseif ($o['scope'] === 'tower' && $o['scope_id']) {
+        $outage_tower_ids[] = (int)$o['scope_id'];
+    }
+}
+// A tower is also "affected" if any of its sectors are in outage,
+// even without a tower-scope outage row of its own.
+foreach ($sectors as $sec) {
+    if (in_array((int)$sec['id'], $outage_sector_ids, true)) {
+        $outage_tower_ids[] = (int)$sec['tower_id'];
+    }
+}
+$outage_tower_ids = array_values(array_unique($outage_tower_ids));
+
+// Build a sector-id → "Name · Tower" lookup so each client marker can
+// surface the sector label in its popup without a per-client query.
+$sector_label_by_id = [];
+foreach ($sectors as $sec) {
+    $label = $sec['name'];
+    if (!empty($sec['tower_name'])) $label .= ' · ' . $sec['tower_name'];
+    $sector_label_by_id[(int)$sec['id']] = $label;
+}
+
+// Build sector-id → AP-device status so customer markers can surface a
+// "your sector AP is down" badge without the JS doing two lookups.
+$device_status_by_id = [];
+foreach ($devices as $d) {
+    $device_status_by_id[(int)$d['id']] = $d['status'];
+}
+$sector_ap_status_by_id = [];
+foreach ($sectors as $sec) {
+    if ($sec['ap_device_id'] !== null && isset($device_status_by_id[(int)$sec['ap_device_id']])) {
+        $sector_ap_status_by_id[(int)$sec['id']] = $device_status_by_id[(int)$sec['ap_device_id']];
+    }
+}
 
 $map_data = [
     'csrf'       => csrf_token(),
@@ -221,7 +194,6 @@ $map_data = [
         'lat' => $s['lat'], 'lng' => $s['lng'],
         'coverage_radius_m' => $s['coverage_radius_m'],
         'notes' => $s['notes'],
-        'uisp_id' => $s['uisp_id'] ?? null,
     ], $sites),
     'site_links' => array_map(fn($l) => [
         'id' => $l['id'], 'from_site_id' => $l['from_site_id'], 'to_site_id' => $l['to_site_id'],
@@ -237,57 +209,40 @@ $map_data = [
         'address'        => $c['address']    ?? '',
         'lat'            => $c['lat']        !== null ? (float)$c['lat'] : null,
         'lng'            => $c['lng']        !== null ? (float)$c['lng'] : null,
-        'uisp_client_id' => $c['uisp_client_id'] ?? null,
+        'sector_id'      => !empty($c['sector_id']) ? (int)$c['sector_id'] : null,
+        'sector_label'   => !empty($c['sector_id']) ? ($sector_label_by_id[(int)$c['sector_id']] ?? null) : null,
+        'network_status' => !empty($c['sector_id']) ? ($sector_ap_status_by_id[(int)$c['sector_id']] ?? null) : null,
     ], $clients),
-    'uisp' => [
-        'enabled'      => $uisp_enabled,
-        'offline'      => $uisp_offline,
-        'last_sync_at' => $uisp_cfg['last_sync_at'] ?? null,
-        'sites' => array_map(fn($s) => [
-            'uisp_id' => $s['uisp_id'],
-            'name'    => $s['name'],
-            'address' => $s['address'],
-            'lat'     => $s['lat'] !== null ? (float)$s['lat'] : null,
-            'lng'     => $s['lng'] !== null ? (float)$s['lng'] : null,
-            'status'  => $s['status'],
-            'is_stale'=> (int)$s['is_stale'],
-        ], $uisp_sites_c),
-        'devices' => array_map(fn($d) => [
-            'uisp_id'      => $d['uisp_id'],
-            'uisp_site_id' => $d['uisp_site_id'],
-            'name'         => $d['name'],
-            'type'         => $d['type'],
-            'model'        => $d['model'],
-            'mac'          => $d['mac'],
-            'ip'           => $d['ip'],
-            'role'         => $d['role'],
-            'status'       => $d['status'],
-            'signal_dbm'   => $d['signal_dbm'] !== null ? (int)$d['signal_dbm'] : null,
-            'lat'          => $d['lat'] !== null ? (float)$d['lat'] : null,
-            'lng'          => $d['lng'] !== null ? (float)$d['lng'] : null,
-            'last_seen_at' => $d['last_seen_at'],
-            'is_stale'     => (int)$d['is_stale'],
-        ], $uisp_devices_c),
-        'data_links' => array_map(fn($l) => [
-            'uisp_id'             => $l['uisp_id'],
-            'from_device_uisp_id' => $l['from_device_uisp_id'],
-            'to_device_uisp_id'   => $l['to_device_uisp_id'],
-            'frequency'           => $l['frequency'],
-            'capacity_mbps'       => $l['capacity_mbps'] !== null ? (float)$l['capacity_mbps'] : null,
-            'status'              => $l['status'],
-            'is_stale'            => (int)$l['is_stale'],
-        ], $uisp_links_c),
-        'clients' => array_map(fn($c) => [
-            'uisp_id'      => $c['uisp_id'],
-            'name'         => $c['name'],
-            'email'        => $c['email'],
-            'account_no'   => $c['account_no'],
-            'address_full' => $c['address_full'],
-            'lat'          => $c['lat'] !== null ? (float)$c['lat'] : null,
-            'lng'          => $c['lng'] !== null ? (float)$c['lng'] : null,
-            'status'       => $c['status'],
-            'is_stale'     => (int)$c['is_stale'],
-        ], $uisp_clients_c),
+    'devices' => array_map(fn($d) => [
+        'id'           => (int)$d['id'],
+        'site_id'      => $d['site_id'],
+        'name'         => $d['name'],
+        'vendor'       => $d['vendor'],
+        'model'        => $d['model'],
+        'role'         => $d['role'],
+        'mgmt_ip'      => $d['mgmt_ip'],
+        'status'       => $d['status'],
+        'last_seen_at' => $d['last_seen_at'],
+    ], $devices),
+    'sectors' => array_map(fn($s) => [
+        'id'                => (int)$s['id'],
+        'tower_id'          => (int)$s['tower_id'],
+        'ap_device_id'      => $s['ap_device_id'],
+        'ap_device_name'    => $s['ap_device_name'] ?? null,
+        'name'              => $s['name'],
+        'azimuth_deg'       => $s['azimuth_deg'],
+        'beamwidth_deg'     => $s['beamwidth_deg'],
+        'band'              => $s['band'],
+        'frequency_mhz'     => $s['frequency_mhz'],
+        'channel_width_mhz' => $s['channel_width_mhz'],
+        'tx_power_dbm'      => $s['tx_power_dbm'],
+        'max_clients'       => $s['max_clients'],
+    ], $sectors),
+    'outages' => [
+        'sector_ids'    => $outage_sector_ids,
+        'tower_ids'     => $outage_tower_ids,
+        'by_sector_id'  => $outage_by_sector,
+        'active_count'  => count($active_outages),
     ],
 ];
 ?>
@@ -344,33 +299,9 @@ $map_data = [
   .map-popup .row { display:flex; gap:6px; }
   .map-popup .row > * { flex:1; }
   .map-mode-active { box-shadow:0 0 0 2px var(--accent, #0cf) inset; }
-
-  /* UISP banner / status pill */
-  .map-uisp-banner {
-    padding: 6px 14px;
-    background: rgba(255, 80, 80, 0.18);
-    border-bottom: 1px solid rgba(255, 80, 80, 0.4);
-    color: #fff; font-size: 12px;
-    flex-shrink: 0;
-  }
-  .map-uisp-pill {
-    display:inline-flex; align-items:center; gap:5px;
-    padding:1px 6px; border-radius:8px; font-size:10px;
-    background: rgba(255,255,255,0.08); color: var(--text,#fff);
-  }
-  .map-uisp-pill.online    { background: rgba(0,200,128,0.25); }
-  .map-uisp-pill.offline   { background: rgba(220,80,80,0.30); }
-  .map-uisp-pill.unknown   { background: rgba(180,180,180,0.30); }
-  .map-uisp-pill.stale     { background: rgba(255,180,80,0.30); }
 </style>
 
 <div class="map-fs">
-  <?php if ($uisp_enabled && $uisp_offline): ?>
-    <div class="map-uisp-banner" id="uisp-offline-banner">
-      UISP is unreachable — showing the last cached snapshot.
-      <a href="/admin/uisp.php" style="color:#fff;text-decoration:underline;">Check connection</a>
-    </div>
-  <?php endif; ?>
   <div class="map-bar">
     <h1>Network map</h1>
 
@@ -388,18 +319,9 @@ $map_data = [
       <label class="inline-check"><input type="checkbox" id="toggle-sites"    checked> Sites</label>
       <label class="inline-check"><input type="checkbox" id="toggle-links"    checked> Links</label>
       <label class="inline-check"><input type="checkbox" id="toggle-clients"  checked> Clients</label>
+      <label class="inline-check"><input type="checkbox" id="toggle-sectors"  checked> Sectors</label>
       <label class="inline-check"><input type="checkbox" id="toggle-coverage">       Rings</label>
     </div>
-
-    <?php if ($uisp_enabled): ?>
-      <div class="sep"></div>
-      <div class="group" title="UISP overlay layers">
-        <label class="inline-check"><input type="checkbox" id="toggle-uisp-sites"   checked> UISP sites</label>
-        <label class="inline-check"><input type="checkbox" id="toggle-uisp-devices" checked> Devices</label>
-        <label class="inline-check"><input type="checkbox" id="toggle-uisp-links"   checked> UISP links</label>
-        <label class="inline-check"><input type="checkbox" id="toggle-uisp-clients" checked> UISP clients</label>
-      </div>
-    <?php endif; ?>
 
     <div class="sep"></div>
 
@@ -407,9 +329,11 @@ $map_data = [
       <span>Sites <strong id="count-sites"><?= count($sites) ?></strong></span>
       <span>Links <strong id="count-links"><?= count($links) ?></strong></span>
       <span>Clients <strong id="count-clients"><?= count($clients) ?></strong></span>
+      <span>Devices <strong id="count-devices"><?= count($devices) ?></strong></span>
+      <span>Sectors <strong id="count-sectors"><?= count($sectors) ?></strong></span>
       <span>Unplaced <strong id="count-unplaced"><?= count(array_filter($clients, fn($c) => $c['lat'] === null || $c['lng'] === null)) ?></strong></span>
-      <?php if ($uisp_enabled): ?>
-        <span>UISP devices <strong id="count-uisp-devices"><?= count($uisp_devices_c) ?></strong></span>
+      <?php if (count($active_outages) > 0): ?>
+        <span style="color:#d44;"><a href="/admin/outages.php" style="color:inherit;">Outages <strong><?= count($active_outages) ?></strong></a></span>
       <?php endif; ?>
     </div>
 
@@ -418,13 +342,6 @@ $map_data = [
     <div class="group">
       <button id="geocode-all-btn" type="button" class="btn btn-ghost btn-sm">Geocode unplaced</button>
       <span id="geocode-status"></span>
-      <?php if ($uisp_enabled): ?>
-        <button id="uisp-sync-btn" type="button" class="btn btn-ghost btn-sm" title="Refresh UISP cache">Sync UISP</button>
-        <span id="uisp-sync-status" class="muted"
-              <?php if (!empty($uisp_cfg['last_sync_at'])): ?>title="Last sync: <?= htmlspecialchars((string)$uisp_cfg['last_sync_at']) ?>"<?php endif; ?>></span>
-      <?php else: ?>
-        <a href="/admin/uisp.php" class="btn btn-ghost btn-sm">Connect UISP</a>
-      <?php endif; ?>
     </div>
 
     <div class="map-legend" style="margin-left:auto;">
@@ -436,6 +353,7 @@ $map_data = [
       <span><i style="background:#08e;"></i>lead</span>
       <span><i style="background:#fa0;"></i>suspended</span>
       <span><i style="background:#888;"></i>disconnected</span>
+      <span class="pipe"><i style="background:#d44;width:6px;height:6px;"></i>AP down</span>
     </div>
   </div>
 
