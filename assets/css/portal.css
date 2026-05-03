@@ -361,6 +361,89 @@ code   { background: var(--bg-elev); padding: 2px 6px; border-radius: 4px; font-
   flex-wrap: wrap;
 }
 
+/* ---------- Image library ---------- */
+.image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 16px;
+}
+.image-tile {
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.image-thumb {
+  display: block;
+  height: 130px;
+  background-size: cover;
+  background-position: center;
+  background-color: #000;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+.image-meta { font-size: .8rem; }
+.copy-url {
+  width: 100%;
+  padding: 6px 8px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-family: ui-monospace, monospace;
+  font-size: .75rem;
+  color: var(--text-dim);
+  margin-top: 4px;
+}
+
+/* ---------- 2FA ---------- */
+.qr-row {
+  display: flex;
+  gap: 24px;
+  align-items: flex-start;
+  flex-wrap: wrap;
+}
+.big-code {
+  display: inline-block;
+  font-family: ui-monospace, 'JetBrains Mono', monospace;
+  font-size: 1.1rem;
+  letter-spacing: .15em;
+  background: var(--bg-elev);
+  color: var(--accent);
+  padding: 10px 14px;
+  border-radius: 8px;
+  border: 1px solid var(--border-strong);
+  margin: 6px 0 10px;
+  user-select: all;
+}
+.recovery-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 10px;
+}
+.recovery-grid code {
+  background: var(--bg-elev);
+  padding: 12px;
+  text-align: center;
+  font-size: 1rem;
+  letter-spacing: .15em;
+  border: 1px solid var(--border-strong);
+  user-select: all;
+}
+
+/* ---------- Inline checkbox in forms ---------- */
+.inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: .82rem;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.inline-check input { width: 14px; height: 14px; accent-color: var(--accent); }
+
 /* portal link in public site header */
 .portal-link {
   color: var(--text-dim);

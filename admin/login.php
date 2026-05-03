@@ -1,19 +1,17 @@
 <?php
 require_once __DIR__ . '/../auth/helpers.php';
+require_once __DIR__ . '/../auth/totp.php';
 
 $portal = 'admin';
 $page_title = 'Sign in';
 
-// Force setup first if no admin exists
 if (!any_admin_exists()) {
     header('Location: /admin/setup.php');
     exit;
 }
 
-// IP allowlist (admin-only)
 require_admin_ip();
 
-// Already logged in?
 $user = current_user();
 if ($user && ($user['role'] ?? '') === 'admin') {
     header('Location: /admin/');
@@ -32,12 +30,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     if (is_locked_out(client_ip())) {
         $error = 'Too many failed attempts. Try again in 15 minutes.';
     } else {
-        $user = attempt_login($username, $password, 'admin');
-        if ($user) {
+        // Manual two-step: verify creds without finalising the session yet
+        $candidate = find_user_by_username($username);
+        $valid = $candidate
+              && ($candidate['role'] ?? '') === 'admin'
+              && password_verify($password, $candidate['password_hash'] ?? '');
+        if (!$valid) {
+            record_login_fail(client_ip());
+            $error = 'Invalid username or password.';
+        } else {
+            // Step 2: if 2FA is enabled, divert to the TOTP page
+            if (!empty($candidate['totp_enabled']) && !empty($candidate['totp_secret'])) {
+                session_regenerate_id(true);
+                $_SESSION['totp_pending_id']      = (int)$candidate['id'];
+                $_SESSION['totp_pending_expires'] = time() + 300; // 5 minute window
+                header('Location: /admin/login-2fa.php');
+                exit;
+            }
+            // Otherwise finalise login the same way attempt_login does
+            reset_login_fails(client_ip());
+            session_regenerate_id(true);
+            $_SESSION['user_id']      = (int)$candidate['id'];
+            $_SESSION['user_role']    = $candidate['role'];
+            $_SESSION['user_name']    = $candidate['name'];
+            $_SESSION['logged_in_at'] = time();
+            update_user((int)$candidate['id'], function (array $u) {
+                $u['last_login'] = date('c');
+                return $u;
+            });
             header('Location: /admin/');
             exit;
         }
-        $error = 'Invalid username or password.';
     }
 }
 

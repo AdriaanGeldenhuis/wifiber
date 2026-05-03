@@ -1,0 +1,28 @@
+{
+    "sections": [
+        {
+            "key": "popi",
+            "title": "POPI Policy",
+            "label": "POPI Policy",
+            "content": "<p>WiFIBER is committed to protecting your personal information in accordance with South Africa's Protection of Personal Information Act (POPIA). We will continuously ensure that we abide by the regulations of the POPI Act.</p>\n<h3>What we collect</h3>\n<p>We collect personal information necessary to provide our internet services, including your name, contact details, address, ID/registration numbers and payment information.</p>\n<h3>How we use it</h3>\n<p>To provision your service, manage your account, process payments, provide support, and communicate operational information about your service. We do not sell your personal information.</p>\n<h3>Sharing</h3>\n<p>We share information only with service providers who help us deliver our services (e.g. payment processors, infrastructure partners) and only as required by law.</p>\n<h3>Your rights</h3>\n<ul>\n<li>Access the personal information we hold about you</li>\n<li>Request correction of inaccurate information</li>\n<li>Request deletion, subject to legal and contractual retention requirements</li>\n<li>Opt out of marketing communications at any time</li>\n</ul>\n<h3>Retention &amp; security</h3>\n<p>We retain personal information only as long as necessary for the purposes for which it was collected, or as required by law. We use appropriate technical and organisational measures to keep your information secure.</p>\n<h3>Contact</h3>\n<p>For any privacy enquiries, contact us at <a href=\"mailto:admin@wifiber.co.za\">admin@wifiber.co.za</a>.</p>"
+        },
+        {
+            "key": "terms",
+            "title": "Terms and Conditions",
+            "label": "Terms & Conditions",
+            "content": "<p>These terms govern your use of WiFIBER's wireless internet services. By signing up, you agree to them.</p>\n<h3>Service description</h3>\n<p>WiFIBER provides wireless broadband internet on an \"as is\" and \"as available\" basis. While we use top-tier equipment and multiple backup systems, we cannot guarantee uninterrupted service in all circumstances.</p>\n<h3>Customer obligations</h3>\n<ul>\n<li>Keep your account details up to date</li>\n<li>Pay subscription fees by the due date</li>\n<li>Use the service lawfully and in line with our fair-use and acceptable-use policies</li>\n<li>Allow reasonable access for installation and maintenance</li>\n</ul>\n<h3>Payment</h3>\n<p>Subscription fees are billed monthly in advance. Late payment may result in service suspension. Reconnection fees may apply.</p>\n<h3>Fair usage</h3>\n<p>All packages are uncapped and unshaped. We reserve the right to manage traffic on our network to maintain quality of service for all customers.</p>\n<h3>Suspension &amp; termination</h3>\n<p>We may suspend or terminate your service for non-payment, breach of these terms, or unlawful use. You may cancel a month-to-month service with 30 days' written notice; contract services are subject to the agreed term.</p>\n<h3>Liability</h3>\n<p>To the extent permitted by law, our liability is limited to the value of the affected service. We are not liable for indirect or consequential losses.</p>\n<h3>Changes</h3>\n<p>We may amend these terms from time to time. Material changes will be communicated to you in advance.</p>"
+        },
+        {
+            "key": "conduct",
+            "title": "Code of Conduct",
+            "label": "Code of Conduct",
+            "content": "<p>Our commitments to customers, partners and the community.</p>\n<h3>Fair business practices</h3>\n<p>We deal honestly with our customers and partners. Pricing is transparent, contracts are clear, and we honour our commitments.</p>\n<h3>Service reliability</h3>\n<p>We invest in redundant infrastructure and proactive monitoring so that your connection stays up.</p>\n<h3>Customer support</h3>\n<p>Real people answer the phone. We aim to resolve most issues on the first call.</p>\n<h3>Privacy &amp; security</h3>\n<p>We protect your data with technical and organisational measures, and we never sell personal information.</p>\n<h3>Network management</h3>\n<p>We are transparent about how we manage our network. We do not block or throttle lawful content.</p>\n<h3>Lawful service use</h3>\n<p>We expect customers to use our services lawfully. We cooperate with authorities where required by law.</p>\n<h3>Employees</h3>\n<p>Our team is expected to uphold these standards in all dealings with customers and the public.</p>"
+        },
+        {
+            "key": "cookies",
+            "title": "Cookie Policy",
+            "label": "Cookie Policy",
+            "content": "<p>This site uses cookies to make it work and to help us understand how it's used.</p>\n<h3>Types of cookies we use</h3>\n<ul>\n<li><strong>Essential cookies</strong> &mdash; needed for the site to function</li>\n<li><strong>Performance cookies</strong> &mdash; help us measure and improve the site</li>\n<li><strong>Functional cookies</strong> &mdash; remember your preferences</li>\n<li><strong>Advertising cookies</strong> &mdash; only if you opt in</li>\n</ul>\n<h3>Managing cookies</h3>\n<p>You can control cookies through your browser settings. Disabling some cookies may affect site functionality.</p>\n<h3>Third-party cookies</h3>\n<p>Some pages may include content from third parties (e.g. embedded maps or analytics) which set their own cookies. Their use is governed by their own policies.</p>\n<h3>Contact</h3>\n<p>Questions about cookies? Email <a href=\"mailto:admin@wifiber.co.za\">admin@wifiber.co.za</a>.</p>"
+        }
+    ]
+}

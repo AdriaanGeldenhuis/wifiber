@@ -303,4 +303,42 @@ function any_admin_exists(): bool {
     return false;
 }
 
+/* ---------------------------------------------------------------- email */
+
+function load_site_settings(): array {
+    $f = DATA_DIR . '/site.json';
+    return is_file($f) ? (json_decode((string)@file_get_contents($f), true) ?: []) : [];
+}
+
+function send_welcome_email(array $user, string $temporary_password, ?string $base_url = null): array {
+    if (empty($user['email']) || !filter_var($user['email'], FILTER_VALIDATE_EMAIL)) {
+        return ['ok' => false, 'reason' => 'no email on file'];
+    }
+    $site      = load_site_settings();
+    $site_name = $site['name']    ?? 'WiFIBER';
+    $support   = $site['email_support'] ?? 'support@wifiber.co.za';
+    $phone     = $site['phone']   ?? '';
+    $base      = $base_url ?? ((!empty($_SERVER['HTTPS']) ? 'https' : 'http') . '://' . ($_SERVER['HTTP_HOST'] ?? 'wifiber.co.za'));
+    $login_url = rtrim($base, '/') . '/account/login.php';
+
+    $name = $user['name'] ?? $user['username'];
+    $body = "Hi {$name},\n\n"
+          . "Welcome to {$site_name}! Your customer portal account is ready.\n\n"
+          . "Sign in at: {$login_url}\n\n"
+          . "Username: {$user['username']}\n"
+          . "Temporary password: {$temporary_password}\n\n"
+          . "Please log in and change your password as soon as you can.\n\n"
+          . "Need a hand? Reply to this email or call us"
+          . ($phone ? " on {$phone}" : '') . ".\n\n"
+          . "— The {$site_name} team\n";
+
+    $headers = "From: {$site_name} <no-reply@" . preg_replace('/^www\./', '', $_SERVER['HTTP_HOST'] ?? 'wifiber.co.za') . ">\r\n"
+             . "Reply-To: {$support}\r\n"
+             . "X-Mailer: WiFIBER-Portal\r\n"
+             . "Content-Type: text/plain; charset=UTF-8\r\n";
+
+    $sent = @mail($user['email'], "Welcome to {$site_name}", $body, $headers);
+    return ['ok' => (bool)$sent, 'reason' => $sent ? 'sent' : 'mail() failed'];
+}
+
 start_session();

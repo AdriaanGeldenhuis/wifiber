@@ -25,12 +25,19 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
             if (strlen($password) < 8)                                       $errors[] = 'Password must be at least 8 characters.';
             if (!$errors) {
                 try {
-                    create_user($username, $password, $role, $name, $email, [
+                    $created = create_user($username, $password, $role, $name, $email, [
                         'phone'   => $_POST['phone']   ?? '',
                         'address' => $_POST['address'] ?? '',
                         'package' => $_POST['package'] ?? '',
                     ]);
-                    flash('success', ucfirst($role) . " '{$username}' created.");
+                    $msg = ucfirst($role) . " '{$username}' created.";
+                    if (!empty($_POST['send_welcome'])) {
+                        $r = send_welcome_email($created, $password);
+                        $msg .= $r['ok']
+                            ? " Welcome email sent to {$created['email']}."
+                            : " (Welcome email could not be sent: {$r['reason']}.)";
+                    }
+                    flash($r['ok'] ?? true ? 'success' : 'error', $msg);
                 } catch (Throwable $e) {
                     flash('error', $e->getMessage());
                 }
@@ -81,7 +88,34 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
                     $u['password_hash'] = password_hash($password, PASSWORD_DEFAULT);
                     return $u;
                 });
-                flash($ok ? 'success' : 'error', $ok ? 'Password updated.' : 'User not found.');
+                $msg = $ok ? 'Password updated.' : 'User not found.';
+                if ($ok && !empty($_POST['send_email'])) {
+                    $u = find_user_by_id($id);
+                    if ($u) {
+                        $r = send_welcome_email($u, $password);
+                        $msg .= $r['ok'] ? " Email sent to {$u['email']}." : " (Email failed: {$r['reason']}.)";
+                    }
+                }
+                flash($ok ? 'success' : 'error', $msg);
+            }
+            header('Location: ' . $self);
+            exit;
+        }
+
+        if ($action === 'send_welcome') {
+            $id = (int)($_POST['id'] ?? 0);
+            $newpw = bin2hex(random_bytes(5));
+            update_user($id, function (array $u) use ($newpw) {
+                $u['password_hash'] = password_hash($newpw, PASSWORD_DEFAULT);
+                return $u;
+            });
+            $u = find_user_by_id($id);
+            if ($u) {
+                $r = send_welcome_email($u, $newpw);
+                flash($r['ok'] ? 'success' : 'error',
+                    $r['ok']
+                        ? "Welcome email sent to {$u['email']}. New temp password: {$newpw}"
+                        : "Could not send email ({$r['reason']}). Temp password set anyway: {$newpw}");
             }
             header('Location: ' . $self);
             exit;
@@ -168,9 +202,23 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
                     <input type="hidden" name="action" value="reset_password">
                     <input type="hidden" name="id" value="<?= (int)$u['id'] ?>">
                     <input type="password" name="password" placeholder="new password (8+ chars)" minlength="8" required>
+                    <?php if ($is_client_view && !empty($u['email'])): ?>
+                      <label class="inline-check">
+                        <input type="checkbox" name="send_email" value="1"> email it to them
+                      </label>
+                    <?php endif; ?>
                     <button class="btn btn-ghost btn-sm" type="submit">Save new password</button>
                   </form>
                 </details>
+
+                <?php if ($is_client_view && !empty($u['email'])): ?>
+                  <form method="post" class="inline-form" onsubmit="return confirm('Generate a new temp password and email it to <?= htmlspecialchars($u['email'], ENT_QUOTES) ?>?');">
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="action" value="send_welcome">
+                    <input type="hidden" name="id" value="<?= (int)$u['id'] ?>">
+                    <button class="btn btn-ghost btn-sm" type="submit">Resend welcome email</button>
+                  </form>
+                <?php endif; ?>
 
                 <?php if ((int)$u['id'] !== (int)$current_user['id']): ?>
                   <form method="post" class="inline-form" onsubmit="return confirm('Delete <?= htmlspecialchars($u['username'], ENT_QUOTES) ?>? This cannot be undone.');">
@@ -215,6 +263,13 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
           </div>
           <div class="field" style="grid-column:1/-1;"><label>Address</label>
             <input type="text" name="address" maxlength="200">
+          </div>
+          <div class="field-check" style="grid-column:1/-1;">
+            <input type="checkbox" id="send_welcome_<?= htmlspecialchars($role) ?>" name="send_welcome" value="1" checked>
+            <label for="send_welcome_<?= htmlspecialchars($role) ?>">
+              Send a welcome email with login details to the email address above.
+              <small class="muted">Leave unticked if you'd rather give them the password yourself.</small>
+            </label>
           </div>
         <?php endif; ?>
         <div class="form-actions">
