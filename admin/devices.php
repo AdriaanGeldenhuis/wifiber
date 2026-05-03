@@ -11,6 +11,7 @@ $active_key = 'devices';
 require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/devices.php';
 require_once __DIR__ . '/../auth/sites.php';
+require_once __DIR__ . '/../auth/wireless.php';
 
 $self = '/admin/devices.php';
 
@@ -50,6 +51,47 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             device_delete($id);
             audit_log('device.delete', ['target_type' => 'device', 'target_id' => $id]);
             flash('success', 'Device deleted.');
+        }
+        header('Location: ' . $self);
+        exit;
+    }
+
+    if ($action === 'save_credentials') {
+        $device_id = (int)($_POST['device_id'] ?? 0);
+        $scheme    = (string)($_POST['scheme'] ?? '');
+        try {
+            if (device_secret_key() === null) {
+                throw new RuntimeException('Set the 32-byte device_key in data/db.php before saving credentials. See data/db.php.example.');
+            }
+            device_credentials_save($device_id, $scheme, [
+                'password'       => $_POST['password']       ?? '',
+                'snmp_community' => $_POST['snmp_community'] ?? '',
+                'api_token'      => $_POST['api_token']      ?? '',
+                'ssh_key'        => $_POST['ssh_key']        ?? '',
+            ], [
+                'username'   => $_POST['username']   ?? '',
+                'port'       => $_POST['port']       ?? null,
+                'verify_tls' => !empty($_POST['verify_tls']),
+                'notes'      => $_POST['cred_notes'] ?? '',
+            ]);
+            audit_log('device.credentials_saved', [
+                'target_type' => 'device', 'target_id' => $device_id,
+                'meta' => ['scheme' => $scheme],
+            ]);
+            flash('success', 'Credentials saved (encrypted at rest).');
+        } catch (Throwable $e) {
+            flash('error', $e->getMessage());
+        }
+        header('Location: ' . $self);
+        exit;
+    }
+
+    if ($action === 'delete_credentials') {
+        $cred_id = (int)($_POST['cred_id'] ?? 0);
+        if ($cred_id) {
+            device_credentials_delete($cred_id);
+            audit_log('device.credentials_deleted', ['meta' => ['cred_id' => $cred_id]]);
+            flash('success', 'Credentials deleted.');
         }
         header('Location: ' . $self);
         exit;
@@ -203,6 +245,73 @@ $status_pill = function (string $status): string {
               <?php if ($d['mgmt_ip']): ?>
                 <button type="button" class="btn btn-ghost btn-sm" data-ping-device="<?= (int)$d['id'] ?>" data-ping-name="<?= htmlspecialchars($d['name'], ENT_QUOTES) ?>" style="margin-right:4px;" title="ICMP ping the management IP and record a health row">Ping</button>
               <?php endif; ?>
+              <details style="display:inline-block;">
+                <summary class="btn btn-ghost btn-sm">Creds</summary>
+                <?php $existing_creds = device_credentials_for((int)$d['id']); ?>
+                <div style="margin-top:12px;">
+                  <?php if ($existing_creds): ?>
+                    <table class="data-table" style="margin-bottom:10px;">
+                      <thead><tr><th>Scheme</th><th>Username</th><th>Port</th><th>Last OK</th><th>Fails</th><th></th></tr></thead>
+                      <tbody>
+                      <?php foreach ($existing_creds as $c): ?>
+                        <tr>
+                          <td><code><?= htmlspecialchars($c['scheme']) ?></code></td>
+                          <td><?= htmlspecialchars($c['username']) ?></td>
+                          <td><?= $c['port'] !== null ? (int)$c['port'] : '<small class="muted">—</small>' ?></td>
+                          <td><small><?= htmlspecialchars((string)($c['last_auth_ok_at'] ?? 'never')) ?></small></td>
+                          <td><?= (int)$c['consecutive_fails'] ?></td>
+                          <td>
+                            <form method="post" class="inline-form" data-confirm="Delete <?= htmlspecialchars($c['scheme'], ENT_QUOTES) ?> credentials?">
+                              <?= csrf_field() ?>
+                              <input type="hidden" name="action" value="delete_credentials">
+                              <input type="hidden" name="cred_id" value="<?= (int)$c['id'] ?>">
+                              <button class="btn btn-danger btn-sm" type="submit">×</button>
+                            </form>
+                          </td>
+                        </tr>
+                      <?php endforeach; ?>
+                      </tbody>
+                    </table>
+                  <?php endif; ?>
+                  <form method="post" class="form form-grid" autocomplete="off">
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="action" value="save_credentials">
+                    <input type="hidden" name="device_id" value="<?= (int)$d['id'] ?>">
+                    <div class="field"><label>Scheme</label>
+                      <select name="scheme">
+                        <?php foreach (CRED_SCHEMES as $s): ?>
+                          <option value="<?= $s ?>"><?= $s ?></option>
+                        <?php endforeach; ?>
+                      </select>
+                    </div>
+                    <div class="field"><label>Username</label>
+                      <input type="text" name="username" autocomplete="off">
+                    </div>
+                    <div class="field"><label>Password (HTTP/HTTPS/SSH)</label>
+                      <input type="password" name="password" autocomplete="new-password">
+                    </div>
+                    <div class="field"><label>SNMP community (snmpv2)</label>
+                      <input type="password" name="snmp_community" autocomplete="new-password">
+                    </div>
+                    <div class="field"><label>API token (api scheme)</label>
+                      <input type="password" name="api_token" autocomplete="new-password">
+                    </div>
+                    <div class="field"><label>Port (override)</label>
+                      <input type="number" min="1" max="65535" name="port">
+                    </div>
+                    <div class="field"><label>Verify TLS?</label>
+                      <input type="checkbox" name="verify_tls" value="1">
+                    </div>
+                    <div class="field"><label>Notes (e.g. cnMaestro base URL)</label>
+                      <input type="text" name="cred_notes" maxlength="255">
+                    </div>
+                    <div class="form-actions" style="grid-column:1/-1;">
+                      <button type="submit" class="btn btn-primary btn-sm">Save credentials</button>
+                      <small class="muted">Secrets are encrypted at rest with libsodium. Leave a field blank to keep its existing ciphertext.</small>
+                    </div>
+                  </form>
+                </div>
+              </details>
               <details style="display:inline-block;">
                 <summary class="btn btn-ghost btn-sm">Edit</summary>
                 <form method="post" class="form form-grid" style="margin-top:12px;">

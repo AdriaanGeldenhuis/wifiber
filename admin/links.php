@@ -1,0 +1,273 @@
+<?php
+/**
+ * Wireless links — every AP↔CPE pairing in one place. Health-coloured
+ * pills, filters, click into /admin/link-view.php for the live UISP-
+ * style dashboard. New links are usually auto-created by the polling
+ * worker on first sighting; the form here is for manually wiring a
+ * link that hasn't been polled yet (e.g. a brand-new install).
+ */
+$page_title = 'Wireless links';
+$active_key = 'links';
+require __DIR__ . '/_layout.php';
+require_once __DIR__ . '/../auth/wireless.php';
+require_once __DIR__ . '/../auth/devices.php';
+require_once __DIR__ . '/../auth/sectors.php';
+
+$self = '/admin/links.php';
+
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    require_csrf();
+    $action = $_POST['action'] ?? '';
+
+    if ($action === 'save') {
+        $id = (int)($_POST['id'] ?? 0);
+        try {
+            $saved = wireless_link_save([
+                'ap_device_id'  => $_POST['ap_device_id']  ?? 0,
+                'cpe_device_id' => $_POST['cpe_device_id'] ?? null,
+                'sector_id'     => $_POST['sector_id']     ?? null,
+                'customer_id'   => $_POST['customer_id']   ?? null,
+                'ssid'          => $_POST['ssid']          ?? '',
+                'ap_mac'        => $_POST['ap_mac']        ?? '',
+                'station_mac'   => $_POST['station_mac']   ?? '',
+            ], $id ?: null);
+            audit_log('wireless_link.save', ['target_type' => 'wireless_link', 'target_id' => $saved]);
+            flash('success', $id ? 'Link updated.' : 'Link added.');
+        } catch (Throwable $e) {
+            flash('error', $e->getMessage());
+        }
+        header('Location: ' . $self);
+        exit;
+    }
+
+    if ($action === 'delete') {
+        $id = (int)($_POST['id'] ?? 0);
+        if ($id) {
+            wireless_link_delete($id);
+            audit_log('wireless_link.delete', ['target_type' => 'wireless_link', 'target_id' => $id]);
+            flash('success', 'Link deleted.');
+        }
+        header('Location: ' . $self);
+        exit;
+    }
+}
+
+$filters = [
+    'sector_id'    => (int)($_GET['sector_id'] ?? 0),
+    'ap_device_id' => (int)($_GET['ap_device_id'] ?? 0),
+    'health_max'   => $_GET['health_max'] ?? '',
+    'search'       => trim((string)($_GET['search'] ?? '')),
+];
+
+$links   = wireless_links_all($filters);
+$devices = devices_all(null);
+$sectors = sectors_all(null);
+
+$ap_devices  = array_values(array_filter($devices, fn ($d) => in_array($d['role'], ['ap', 'backhaul'], true)));
+$cpe_devices = array_values(array_filter($devices, fn ($d) => in_array($d['role'], ['cpe', 'backhaul'], true)));
+
+$health_pill = function (?int $score): string {
+    if ($score === null) {
+        return '<span class="link-pill" style="background:#888;color:#fff;">no data</span>';
+    }
+    [$bg, $label] = match (true) {
+        $score >= 75 => ['#0c8', 'good'],
+        $score >= 50 => ['#e8a814', 'fair'],
+        default      => ['#d44', 'poor'],
+    };
+    return sprintf('<span class="link-pill" style="background:%s;color:#fff;">%d · %s</span>', $bg, $score, $label);
+};
+?>
+
+<style>
+  .link-pill { display:inline-block;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:600;letter-spacing:.02em; }
+  .data-table tr.row-poor td { background:rgba(212,68,68,0.06); }
+  .data-table tr.row-fair td { background:rgba(232,168,20,0.06); }
+</style>
+
+<div class="portal-head">
+  <h1>Wireless links</h1>
+  <p class="portal-sub">Every AP↔CPE pairing in the network, ordered by health (worst first). Click a row to open the live link dashboard. Most links auto-register on first poll — the form below is for pre-staging new installs.</p>
+</div>
+
+<div class="portal-card">
+  <h2>Filter</h2>
+  <form method="get" class="form form-grid">
+    <div class="field"><label>Search</label>
+      <input type="text" name="search" value="<?= htmlspecialchars($filters['search'], ENT_QUOTES) ?>"
+             placeholder="AP / CPE / SSID / customer">
+    </div>
+    <div class="field"><label>Sector</label>
+      <select name="sector_id">
+        <option value="0">— any —</option>
+        <?php foreach ($sectors as $s): ?>
+          <option value="<?= (int)$s['id'] ?>" <?= $filters['sector_id'] === (int)$s['id'] ? 'selected' : '' ?>>
+            <?= htmlspecialchars($s['name']) ?>
+          </option>
+        <?php endforeach; ?>
+      </select>
+    </div>
+    <div class="field"><label>AP device</label>
+      <select name="ap_device_id">
+        <option value="0">— any —</option>
+        <?php foreach ($ap_devices as $d): ?>
+          <option value="<?= (int)$d['id'] ?>" <?= $filters['ap_device_id'] === (int)$d['id'] ? 'selected' : '' ?>>
+            <?= htmlspecialchars($d['name']) ?>
+          </option>
+        <?php endforeach; ?>
+      </select>
+    </div>
+    <div class="field"><label>Max health</label>
+      <select name="health_max">
+        <option value="">— any —</option>
+        <option value="49"  <?= $filters['health_max'] === '49'  ? 'selected' : '' ?>>poor (&lt; 50)</option>
+        <option value="74"  <?= $filters['health_max'] === '74'  ? 'selected' : '' ?>>fair (&lt; 75)</option>
+      </select>
+    </div>
+    <div class="form-actions" style="grid-column:1/-1;">
+      <button type="submit" class="btn btn-primary btn-sm">Apply</button>
+      <a href="<?= $self ?>" class="btn btn-ghost btn-sm">Reset</a>
+    </div>
+  </form>
+</div>
+
+<div class="portal-card">
+  <h2>Links <span class="muted">(<?= count($links) ?>)</span></h2>
+  <?php if (!$links): ?>
+    <div class="empty-state">
+      <div class="empty-icon">📡</div>
+      <h3>No wireless links yet</h3>
+      <p>Add credentials to an AP in <a href="/admin/devices.php">/admin/devices.php</a>, then run
+        <code>php bin/poll-wireless.php</code>. Stations attached to the AP will register here automatically.</p>
+    </div>
+  <?php else: ?>
+    <div class="table-scroll">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Health</th>
+          <th>AP</th>
+          <th>CPE / customer</th>
+          <th>Freq / width</th>
+          <th>Signal (L / R)</th>
+          <th>SNR</th>
+          <th>CCQ</th>
+          <th>TX / RX rate</th>
+          <th>Distance</th>
+          <th>Last sample</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <?php foreach ($links as $l): ?>
+          <?php
+            $row_class = '';
+            if ($l['health_score'] !== null) {
+                if      ($l['health_score'] < 50) $row_class = 'row-poor';
+                elseif  ($l['health_score'] < 75) $row_class = 'row-fair';
+            }
+            $cust = trim(($l['customer_name'] ?? '') . ' ' . ($l['customer_surname'] ?? ''));
+          ?>
+          <tr class="<?= $row_class ?>">
+            <td><?= $health_pill($l['health_score']) ?></td>
+            <td>
+              <strong><?= htmlspecialchars($l['ap_name']) ?></strong>
+              <?php if ($l['ap_model']): ?><br><small class="muted"><?= htmlspecialchars($l['ap_model']) ?></small><?php endif; ?>
+            </td>
+            <td>
+              <?php if ($l['cpe_name']): ?>
+                <strong><?= htmlspecialchars($l['cpe_name']) ?></strong>
+              <?php else: ?>
+                <span class="muted">— unclaimed —</span>
+              <?php endif; ?>
+              <?php if ($cust !== ''): ?><br><small><?= htmlspecialchars($cust) ?></small><?php endif; ?>
+            </td>
+            <td>
+              <?php if ($l['frequency_mhz']): ?>
+                <?= (int)$l['frequency_mhz'] ?> MHz
+                <?php if ($l['channel_width_mhz']): ?>
+                  <br><small class="muted"><?= (int)$l['channel_width_mhz'] ?> MHz wide</small>
+                <?php endif; ?>
+              <?php else: ?><small class="muted">—</small><?php endif; ?>
+            </td>
+            <td>
+              <?php if ($l['signal_dbm'] !== null): ?>
+                <?= (int)$l['signal_dbm'] ?>
+                <?php if ($l['signal_dbm_remote'] ?? null): ?> / <?= (int)$l['signal_dbm_remote'] ?><?php endif; ?>
+                <small class="muted">dBm</small>
+              <?php else: ?><small class="muted">—</small><?php endif; ?>
+            </td>
+            <td>
+              <?php if ($l['snr_db'] !== null): ?>
+                <?= (int)$l['snr_db'] ?> <small class="muted">dB</small>
+              <?php else: ?><small class="muted">—</small><?php endif; ?>
+            </td>
+            <td>
+              <?= $l['ccq_pct'] !== null ? number_format((float)$l['ccq_pct'], 0) . '%' : '<small class="muted">—</small>' ?>
+            </td>
+            <td>
+              <?php if ($l['tx_rate_mbps'] !== null): ?>
+                <?= number_format((float)$l['tx_rate_mbps'], 0) ?> /
+                <?= number_format((float)($l['rx_rate_mbps'] ?? 0), 0) ?>
+                <small class="muted">Mbps</small>
+              <?php else: ?><small class="muted">—</small><?php endif; ?>
+            </td>
+            <td>
+              <?= $l['distance_km'] !== null
+                  ? '<small>' . number_format((float)$l['distance_km'], 2) . ' km</small>'
+                  : '<small class="muted">—</small>' ?>
+            </td>
+            <td>
+              <?= $l['last_evaluated_at']
+                  ? '<small>' . htmlspecialchars((string)$l['last_evaluated_at']) . '</small>'
+                  : '<small class="muted">never</small>' ?>
+            </td>
+            <td>
+              <a class="btn btn-ghost btn-sm" href="/admin/link-view.php?id=<?= (int)$l['id'] ?>">Open</a>
+            </td>
+          </tr>
+        <?php endforeach; ?>
+      </tbody>
+    </table>
+    </div>
+  <?php endif; ?>
+</div>
+
+<div class="portal-card">
+  <h2>Pre-stage a new link</h2>
+  <p class="muted">Use this for a brand-new install where the CPE hasn't been seen by the AP yet. Once the polling worker observes the station MAC the live values fill in automatically.</p>
+  <form method="post" class="form form-grid">
+    <?= csrf_field() ?>
+    <input type="hidden" name="action" value="save">
+    <div class="field"><label>AP device *</label>
+      <select name="ap_device_id" required>
+        <option value="">— pick —</option>
+        <?php foreach ($ap_devices as $d): ?>
+          <option value="<?= (int)$d['id'] ?>"><?= htmlspecialchars($d['name']) ?></option>
+        <?php endforeach; ?>
+      </select>
+    </div>
+    <div class="field"><label>CPE device</label>
+      <select name="cpe_device_id">
+        <option value="">— pick —</option>
+        <?php foreach ($cpe_devices as $d): ?>
+          <option value="<?= (int)$d['id'] ?>"><?= htmlspecialchars($d['name']) ?></option>
+        <?php endforeach; ?>
+      </select>
+    </div>
+    <div class="field"><label>Sector</label>
+      <select name="sector_id">
+        <option value="">— pick —</option>
+        <?php foreach ($sectors as $s): ?>
+          <option value="<?= (int)$s['id'] ?>"><?= htmlspecialchars($s['name']) ?></option>
+        <?php endforeach; ?>
+      </select>
+    </div>
+    <div class="field"><label>SSID</label><input type="text" name="ssid" maxlength="64"></div>
+    <div class="field"><label>AP MAC</label><input type="text" name="ap_mac" maxlength="20"></div>
+    <div class="field"><label>Station MAC</label><input type="text" name="station_mac" maxlength="20"></div>
+    <div class="form-actions" style="grid-column:1/-1;">
+      <button type="submit" class="btn btn-primary btn-sm">Add link</button>
+    </div>
+  </form>
+</div>

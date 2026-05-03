@@ -28,10 +28,12 @@ $nav = [
         ['key' => 'tickets',   'label' => 'Support tickets', 'href' => '/admin/tickets.php'],
     ]],
     ['group' => 'Network', 'items' => [
-        ['key' => 'coverage', 'label' => 'Coverage',    'href' => '/admin/coverage.php'],
-        ['key' => 'map',      'label' => 'Network map', 'href' => '/admin/map.php'],
-        ['key' => 'devices',  'label' => 'Devices',     'href' => '/admin/devices.php'],
-        ['key' => 'sectors',  'label' => 'Sectors',     'href' => '/admin/sectors.php'],
+        ['key' => 'coverage',     'label' => 'Coverage',         'href' => '/admin/coverage.php'],
+        ['key' => 'map',          'label' => 'Network map',      'href' => '/admin/map.php'],
+        ['key' => 'devices',      'label' => 'Devices',          'href' => '/admin/devices.php'],
+        ['key' => 'sectors',      'label' => 'Sectors',          'href' => '/admin/sectors.php'],
+        ['key' => 'links',        'label' => 'Wireless links',   'href' => '/admin/links.php'],
+        ['key' => 'freq-planner', 'label' => 'Frequency planner','href' => '/admin/freq-planner.php'],
     ]],
     ['group' => 'Customers & Billing', 'items' => [
         ['key' => 'clients',  'label' => 'Clients',            'href' => '/admin/clients.php'],

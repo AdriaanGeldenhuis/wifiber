@@ -208,8 +208,9 @@ $device_label = function (?int $id) use ($all_devices): string {
               <?php endif; ?>
             </td>
             <td>
-              <details>
-                <summary class="btn btn-ghost btn-sm">Edit</summary>
+              <a class="btn btn-primary btn-sm" href="/admin/sector-edit.php?id=<?= (int)$s['id'] ?>">Open</a>
+              <details style="margin-top:6px;">
+                <summary class="btn btn-ghost btn-sm">Quick edit</summary>
                 <form method="post" class="form form-grid" style="margin-top:12px;">
                   <?= csrf_field() ?>
                   <input type="hidden" name="action" value="save">
