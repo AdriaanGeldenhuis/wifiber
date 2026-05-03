@@ -17,9 +17,11 @@ const DATA_DIR        = __DIR__ . '/../data';
 const USERS_FILE      = DATA_DIR . '/users.json';
 const THROTTLE_FILE   = DATA_DIR . '/throttle.json';
 const ADMIN_IPS_FILE  = DATA_DIR . '/admin-ips.json';
+const PW_RESETS_FILE  = DATA_DIR . '/password-resets.json';
 
 const MAX_LOGIN_FAILS = 5;
 const LOCKOUT_SECS    = 900;   // 15 min
+const PW_RESET_TTL    = 3600;  // 1 hour
 const SESSION_NAME    = 'wfsess';
 
 /* --------------------------------------------------------------- session */
@@ -98,6 +100,16 @@ function save_users(array $users): bool {
 function find_user_by_username(string $username): ?array {
     foreach (load_users() as $u) {
         if (isset($u['username']) && strcasecmp($u['username'], $username) === 0) return $u;
+    }
+    return null;
+}
+
+function find_user_by_username_or_email(string $needle): ?array {
+    $needle = trim($needle);
+    if ($needle === '') return null;
+    foreach (load_users() as $u) {
+        if (isset($u['username']) && strcasecmp($u['username'], $needle) === 0) return $u;
+        if (!empty($u['email']) && strcasecmp($u['email'], $needle) === 0) return $u;
     }
     return null;
 }
@@ -338,6 +350,105 @@ function send_welcome_email(array $user, string $temporary_password, ?string $ba
              . "Content-Type: text/plain; charset=UTF-8\r\n";
 
     $sent = @mail($user['email'], "Welcome to {$site_name}", $body, $headers);
+    return ['ok' => (bool)$sent, 'reason' => $sent ? 'sent' : 'mail() failed'];
+}
+
+/* ------------------------------------------------------- password reset */
+/*
+ * Tokens use a selector + validator scheme. The full token (selector.validator)
+ * is sent in the email link; only the selector and a SHA-256 hash of the
+ * validator are persisted, so a leaked tokens file cannot be replayed.
+ */
+
+function pw_reset_load(): array {
+    $d = json_load(PW_RESETS_FILE, ['resets' => []]);
+    return $d['resets'] ?? [];
+}
+
+function pw_reset_save(array $resets): bool {
+    return json_save(PW_RESETS_FILE, ['resets' => array_values($resets)]);
+}
+
+function pw_reset_purge_expired(array $resets): array {
+    $now = time();
+    return array_values(array_filter($resets, fn($r) => (int)($r['expires_at'] ?? 0) > $now));
+}
+
+function pw_reset_create_token(int $user_id): string {
+    $resets = pw_reset_purge_expired(pw_reset_load());
+    // One outstanding link per user — drop any older tokens.
+    $resets = array_values(array_filter($resets, fn($r) => (int)($r['user_id'] ?? 0) !== $user_id));
+    $selector  = bin2hex(random_bytes(8));   // 16 hex chars
+    $validator = bin2hex(random_bytes(32));  // 64 hex chars
+    $resets[] = [
+        'selector'       => $selector,
+        'validator_hash' => hash('sha256', $validator),
+        'user_id'        => $user_id,
+        'expires_at'     => time() + PW_RESET_TTL,
+        'created_at'     => date('c'),
+    ];
+    pw_reset_save($resets);
+    return $selector . '.' . $validator;
+}
+
+function pw_reset_lookup(string $token): ?array {
+    $token = trim($token);
+    if ($token === '' || strpos($token, '.') === false) return null;
+    [$selector, $validator] = explode('.', $token, 2);
+    if ($selector === '' || $validator === '') return null;
+    $resets = pw_reset_purge_expired(pw_reset_load());
+    foreach ($resets as $r) {
+        if (!isset($r['selector']) || !hash_equals((string)$r['selector'], $selector)) continue;
+        if (!hash_equals((string)($r['validator_hash'] ?? ''), hash('sha256', $validator))) return null;
+        $user = find_user_by_id((int)($r['user_id'] ?? 0));
+        if (!$user) return null;
+        return ['reset' => $r, 'user' => $user];
+    }
+    return null;
+}
+
+function pw_reset_consume(string $token): ?array {
+    $found = pw_reset_lookup($token);
+    if (!$found) return null;
+    $sel = (string)$found['reset']['selector'];
+    $resets = array_values(array_filter(pw_reset_load(), fn($r) => ($r['selector'] ?? '') !== $sel));
+    pw_reset_save($resets);
+    return $found['user'];
+}
+
+function pw_reset_invalidate_for_user(int $user_id): void {
+    $resets = array_values(array_filter(pw_reset_load(), fn($r) => (int)($r['user_id'] ?? 0) !== $user_id));
+    pw_reset_save($resets);
+}
+
+function send_password_reset_email(array $user, string $token, string $reset_path, ?string $base_url = null): array {
+    if (empty($user['email']) || !filter_var($user['email'], FILTER_VALIDATE_EMAIL)) {
+        return ['ok' => false, 'reason' => 'no email on file'];
+    }
+    $site      = load_site_settings();
+    $site_name = $site['name']    ?? 'WiFIBER';
+    $support   = $site['email_support'] ?? 'support@wifiber.co.za';
+    $phone     = $site['phone']   ?? '';
+    $base      = $base_url ?? ((!empty($_SERVER['HTTPS']) ? 'https' : 'http') . '://' . ($_SERVER['HTTP_HOST'] ?? 'wifiber.co.za'));
+    $reset_url = rtrim($base, '/') . $reset_path . '?token=' . urlencode($token);
+
+    $name = $user['name'] ?? $user['username'];
+    $body = "Hi {$name},\n\n"
+          . "Someone (hopefully you) asked to reset your {$site_name} password.\n\n"
+          . "Click the link below to choose a new one. The link is good for 1 hour:\n"
+          . "{$reset_url}\n\n"
+          . "If you didn't ask for this, you can ignore this email — your\n"
+          . "current password will keep working.\n\n"
+          . "Need a hand? Reply to this email or call us"
+          . ($phone ? " on {$phone}" : '') . ".\n\n"
+          . "— The {$site_name} team\n";
+
+    $headers = "From: {$site_name} <no-reply@" . preg_replace('/^www\./', '', $_SERVER['HTTP_HOST'] ?? 'wifiber.co.za') . ">\r\n"
+             . "Reply-To: {$support}\r\n"
+             . "X-Mailer: WiFIBER-Portal\r\n"
+             . "Content-Type: text/plain; charset=UTF-8\r\n";
+
+    $sent = @mail($user['email'], "Reset your {$site_name} password", $body, $headers);
     return ['ok' => (bool)$sent, 'reason' => $sent ? 'sent' : 'mail() failed'];
 }
 
