@@ -25,6 +25,7 @@ $nav = [
     ['key' => 'coverage',  'label' => 'Coverage',       'href' => '/admin/coverage.php'],
     ['key' => 'map',       'label' => 'Network map',    'href' => '/admin/map.php'],
     ['key' => 'devices',   'label' => 'Devices',        'href' => '/admin/devices.php'],
+    ['key' => 'sectors',   'label' => 'Sectors',        'href' => '/admin/sectors.php'],
     ['key' => 'slides',    'label' => 'Hero slider',    'href' => '/admin/slides.php'],
     ['key' => 'pricing',   'label' => 'Pricing (public)', 'href' => '/admin/pricing.php'],
     ['key' => 'products',  'label' => 'Products (billing)', 'href' => '/admin/products.php'],
