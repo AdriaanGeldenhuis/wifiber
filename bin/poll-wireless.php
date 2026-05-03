@@ -47,10 +47,13 @@ if (PHP_SAPI !== 'cli') {
 
 require __DIR__ . '/../auth/devices.php';
 require __DIR__ . '/../auth/wireless.php';
+require __DIR__ . '/../auth/outages.php';
 require __DIR__ . '/../auth/vendors/airos.php';
 require __DIR__ . '/../auth/vendors/routeros.php';
 require __DIR__ . '/../auth/vendors/cambium.php';
 require __DIR__ . '/../auth/vendors/mimosa.php';
+
+const POLL_WIRELESS_CRED_FAIL_THRESHOLD = 3;
 
 $opts = [
     'dry-run'        => false,
@@ -156,7 +159,27 @@ foreach ($rows as $row) {
         $err_devices++;
         device_credentials_record_attempt((int)$row['cred_id'], false, (string)$result['error']);
         if ($opts['verbose']) fprintf(STDERR, "  #%d %s: %s\n", $row['id'], $row['name'], $result['error']);
+
+        // Auto-open a device-scope outage when credentials have failed
+        // POLL_WIRELESS_CRED_FAIL_THRESHOLD times in a row, so a key
+        // rotation or firmware change doesn't silently stop telemetry.
+        // outage_active() returns the existing one if any so we don't
+        // double-fire.
+        $cred_after = device_credentials_for((int)$row['id'], (string)$row['cred_scheme']);
+        $fails = isset($cred_after[0]) ? (int)$cred_after[0]['consecutive_fails'] : 0;
+        if ($fails === POLL_WIRELESS_CRED_FAIL_THRESHOLD
+            && outage_active('device', (int)$row['id']) === null) {
+            outage_create('device', (int)$row['id'],
+                $row['name'] . ' (credentials)',
+                0,
+                'Vendor adapter auth failed ' . $fails . 'x in a row: ' . $result['error']);
+        }
         continue;
+    }
+
+    // Auto-resolve the cred outage (if any) when a poll succeeds again.
+    if ($active = outage_active('device', (int)$row['id'])) {
+        outage_resolve((int)$active['id'], 'Credentials valid again on next poll.');
     }
 
     device_credentials_record_attempt((int)$row['cred_id'], true);

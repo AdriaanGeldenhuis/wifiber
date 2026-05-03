@@ -17,6 +17,7 @@ $active_key = 'freq-planner';
 require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/wireless.php';
 require_once __DIR__ . '/../auth/sectors.php';
+require_once __DIR__ . '/../auth/totp.php';
 
 $self = '/admin/freq-planner.php';
 
@@ -28,6 +29,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $sector_id = (int)($_POST['sector_id'] ?? 0);
         $freq      = (int)($_POST['frequency_mhz'] ?? 0);
         $width     = (int)($_POST['channel_width_mhz'] ?? 20);
+        if (!totp_require_step_up($user, (string)($_POST['totp_code'] ?? ''))) {
+            flash('error', 'Two-factor code is required for push-to-radio actions.');
+            header('Location: ' . $self);
+            exit;
+        }
         if ($sector_id && $freq) {
             $job_id = wireless_change_job_enqueue('sector', $sector_id, (int)$user['id'], [
                 'frequency_mhz'     => $freq,
@@ -179,12 +185,15 @@ $h = fn ($v) => htmlspecialchars((string)$v, ENT_QUOTES);
           <td style="text-align:left;">
             <?php if ($rec !== null && $rec !== $cur): ?>
               <form method="post" style="display:inline"
-                    onsubmit="return confirm('Queue freq move on <?= $h($s['name']) ?>: <?= $cur ?? '?' ?> → <?= $rec ?> MHz?')">
+                    onsubmit="<?= !empty($user['totp_enabled'])
+                        ? "var c=prompt('Two-factor code:');if(!c)return false;this.totp_code.value=c;"
+                        : '' ?>return confirm('Queue freq move on <?= $h($s['name']) ?>: <?= $cur ?? '?' ?> → <?= $rec ?> MHz?')">
                 <?= csrf_field() ?>
                 <input type="hidden" name="action" value="apply_rec">
                 <input type="hidden" name="sector_id" value="<?= (int)$s['id'] ?>">
                 <input type="hidden" name="frequency_mhz" value="<?= $rec ?>">
                 <input type="hidden" name="channel_width_mhz" value="<?= (int)($s['channel_width_mhz'] ?: 20) ?>">
+                <input type="hidden" name="totp_code" value="">
                 <button class="btn btn-primary btn-sm" type="submit"><?= $rec ?> MHz</button>
               </form>
             <?php elseif ($rec === $cur && $rec !== null): ?>

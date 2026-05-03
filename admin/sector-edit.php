@@ -21,6 +21,7 @@ require_once __DIR__ . '/../auth/sectors.php';
 require_once __DIR__ . '/../auth/sites.php';
 require_once __DIR__ . '/../auth/devices.php';
 require_once __DIR__ . '/../auth/wireless.php';
+require_once __DIR__ . '/../auth/totp.php';
 
 $id = (int)($_GET['id'] ?? 0);
 $self = '/admin/sector-edit.php?id=' . $id;
@@ -83,6 +84,11 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         if (!empty($_POST['ssid']))     $payload['ssid']     = (string)$_POST['ssid'];
         if (!empty($_POST['security'])) $payload['security'] = (string)$_POST['security'];
         if (!empty($_POST['wpa_key']))  $payload['wpa_key']  = (string)$_POST['wpa_key'];
+        if (!totp_require_step_up($user, (string)($_POST['totp_code'] ?? ''))) {
+            flash('error', 'Two-factor code is required for push-to-radio actions.');
+            header('Location: ' . $self);
+            exit;
+        }
         try {
             $job_id = wireless_change_job_enqueue('sector', $id, (int)$user['id'], $payload);
             audit_log('sector.config_queued', [
@@ -250,6 +256,11 @@ $status_pill = function (string $s): string {
     </div>
     <div class="field"><label>New WPA key</label>
       <input type="password" name="wpa_key" autocomplete="new-password"></div>
+    <?php if (!empty($user['totp_enabled'])): ?>
+      <div class="field"><label>Two-factor code *</label>
+        <input type="text" inputmode="numeric" pattern="\d{6}" maxlength="6" name="totp_code" required autocomplete="one-time-code">
+      </div>
+    <?php endif; ?>
     <div class="form-actions" style="grid-column:1/-1;">
       <button type="submit" class="btn btn-primary btn-sm">Queue change</button>
       <small class="muted">Only filled fields are queued. Empty fields don't change the radio.</small>

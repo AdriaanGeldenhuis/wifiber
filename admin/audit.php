@@ -3,6 +3,11 @@ $page_title = 'Audit log';
 $active_key = 'audit';
 require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/csv.php';
+require_once __DIR__ . '/../auth/wireless.php';
+
+$show_wireless = (string)($_GET['q'] ?? '') === 'wireless'
+              || ($_GET['action'] ?? '') === 'wireless'
+              || isset($_GET['wireless']);
 
 $action_filter = trim((string)($_GET['action'] ?? ''));
 $user_filter   = (int)($_GET['user_id'] ?? 0);
@@ -101,6 +106,64 @@ $users_seen = pdo()->query(
     </div>
   </form>
 </div>
+
+<?php
+$wcl_rows = pdo()->prepare(
+    "SELECT l.*, j.payload_json, u.username AS actor_username, d.name AS device_name
+       FROM wireless_change_log l
+       LEFT JOIN wireless_change_jobs j ON j.id = l.job_id
+       LEFT JOIN users u   ON u.id = l.actor_user_id
+       LEFT JOIN devices d ON d.id = l.device_id
+      ORDER BY l.occurred_at DESC, l.id DESC
+      LIMIT 100"
+);
+$wcl_rows->execute();
+$wcl_rows = $wcl_rows->fetchAll();
+?>
+<?php if ($show_wireless || $wcl_rows): ?>
+<div class="portal-card" id="wireless-changes">
+  <h2>Wireless config changes
+    <small class="muted">(<?= count($wcl_rows) ?>, last 100 from <code>wireless_change_log</code>)</small>
+  </h2>
+  <?php if (!$wcl_rows): ?>
+    <small class="muted">No push-to-radio activity yet. Queue one from /admin/sector-edit.php or /admin/freq-planner.php.</small>
+  <?php else: ?>
+    <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>When</th><th>Actor</th><th>Job</th><th>Action</th><th>Device</th><th>Payload</th><th>Result</th><th>Error</th></tr></thead>
+      <tbody>
+        <?php foreach ($wcl_rows as $r): ?>
+          <tr>
+            <td class="muted small"><?= htmlspecialchars(substr((string)$r['occurred_at'], 0, 19)) ?></td>
+            <td>
+              <?= !empty($r['actor_username'])
+                ? '<strong>' . htmlspecialchars($r['actor_username']) . '</strong>'
+                : '<span class="muted">worker</span>' ?>
+            </td>
+            <td>
+              <?php if (!empty($r['job_id'])): ?>
+                <code>#<?= (int)$r['job_id'] ?></code>
+              <?php else: ?><span class="muted">—</span><?php endif; ?>
+            </td>
+            <td><code><?= htmlspecialchars($r['action']) ?></code></td>
+            <td><small><?= htmlspecialchars($r['device_name'] ?? ($r['scope'] . '#' . $r['scope_id'])) ?></small></td>
+            <td class="muted small"><code><?= htmlspecialchars((string)($r['after_json'] ?? $r['payload_json'] ?? '')) ?></code></td>
+            <td>
+              <?php if ($r['success']): ?>
+                <span style="display:inline-block;background:#0c8;color:#fff;padding:1px 7px;border-radius:8px;font-size:11px;text-transform:uppercase;">ok</span>
+              <?php else: ?>
+                <span style="display:inline-block;background:#d44;color:#fff;padding:1px 7px;border-radius:8px;font-size:11px;text-transform:uppercase;">fail</span>
+              <?php endif; ?>
+            </td>
+            <td class="muted small" style="color:#d44;"><?= htmlspecialchars((string)$r['error']) ?></td>
+          </tr>
+        <?php endforeach; ?>
+      </tbody>
+    </table>
+    </div>
+  <?php endif; ?>
+</div>
+<?php endif; ?>
 
 <?php if ($action_filter === '' && $user_filter === 0 && !empty($actions_seen)): ?>
   <div class="portal-card">

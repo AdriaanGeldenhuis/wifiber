@@ -14,6 +14,7 @@ require_once __DIR__ . '/../auth/sites.php';
 require_once __DIR__ . '/../auth/devices.php';
 require_once __DIR__ . '/../auth/sectors.php';
 require_once __DIR__ . '/../auth/outages.php';
+require_once __DIR__ . '/../auth/wireless.php';
 
 // Lightweight poll endpoint — JS calls this every ~30s to refresh
 // device statuses and outage state without reloading the whole map.
@@ -343,6 +344,28 @@ $map_data = [
         'active_count'  => count($active_outages),
     ],
 ];
+
+// Per-site wireless link rollup so the inline JS at the bottom can draw
+// a green/yellow/red ring on each AP site indicating worst link health.
+$wl_rollup = pdo()->query(
+    "SELECT d.site_id,
+            COUNT(*)                                     AS link_count,
+            MIN(wl.health_score)                         AS worst_health,
+            SUM(wl.health_score IS NOT NULL AND wl.health_score < 50) AS degraded
+       FROM wireless_links wl
+       JOIN devices d ON d.id = wl.ap_device_id
+      WHERE d.site_id IS NOT NULL
+      GROUP BY d.site_id"
+)->fetchAll();
+$wl_by_site = [];
+foreach ($wl_rollup as $r) {
+    $wl_by_site[(int)$r['site_id']] = [
+        'count'     => (int)$r['link_count'],
+        'worst'     => $r['worst_health'] !== null ? (int)$r['worst_health'] : null,
+        'degraded'  => (int)$r['degraded'],
+    ];
+}
+$map_data['wireless_link_summary'] = $wl_by_site;
 ?>
 
 <link rel="stylesheet"
@@ -847,5 +870,59 @@ $map_data = [
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
         crossorigin="anonymous"></script>
 <script src="/assets/js/admin-map.js" defer></script>
+
+<script>
+/* Wireless link health overlay — coloured ring on each site that hosts
+   an AP with active wireless_links. Layered onto the same Leaflet
+   instance admin-map.js creates (exposed as window.WIFIBER_MAP). */
+(function () {
+  function init() {
+    if (!window.WIFIBER_MAP || typeof L === 'undefined') {
+      return setTimeout(init, 250);
+    }
+    const dataEl = document.getElementById('map-data');
+    if (!dataEl) return;
+    let boot;
+    try { boot = JSON.parse(dataEl.textContent); } catch (e) { return; }
+    if (!boot || !boot.sites || !boot.wireless_link_summary) return;
+
+    const map = window.WIFIBER_MAP;
+    const layer = L.layerGroup().addTo(map);
+    const siteById = {};
+    boot.sites.forEach(function (s) { siteById[s.id] = s; });
+
+    function colourFor(worst) {
+      if (worst === null || worst === undefined) return '#888';
+      if (worst >= 75) return '#0c8';
+      if (worst >= 50) return '#e8a814';
+      return '#d44';
+    }
+
+    Object.entries(boot.wireless_link_summary).forEach(function (entry) {
+      const siteId = entry[0], sum = entry[1];
+      const s = siteById[siteId];
+      if (!s || s.lat === null || s.lng === null) return;
+      const ring = L.circleMarker([s.lat, s.lng], {
+        radius: 14,
+        color: colourFor(sum.worst),
+        weight: 3,
+        fill: false,
+        opacity: 0.85,
+      }).addTo(layer);
+      ring.bindTooltip(
+        '<strong>' + s.name + '</strong><br>' +
+        sum.count + ' wireless link' + (sum.count === 1 ? '' : 's') +
+        (sum.degraded > 0 ? ' · <span style="color:#d44">' + sum.degraded + ' degraded</span>' : '') +
+        (sum.worst !== null ? ' · worst health ' + sum.worst : ''),
+        { sticky: true, direction: 'top' }
+      );
+      ring.on('click', function () {
+        window.location = '/admin/links.php';
+      });
+    });
+  }
+  init();
+})();
+</script>
 
 <?php require __DIR__ . '/../auth/portal-footer.php'; ?>

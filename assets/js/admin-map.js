@@ -39,6 +39,9 @@
 
   /* ---------- map + layers ---------- */
   const map = L.map('map', { zoomControl: true }).setView(boot.center, boot.zoom);
+  // Expose the map for inline overlays (wireless link health rings, etc.)
+  // that live in PHP files rather than this bundle.
+  window.WIFIBER_MAP = map;
 
   const tileLayers = {
     Streets: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {

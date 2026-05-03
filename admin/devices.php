@@ -56,6 +56,75 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
+    if ($action === 'discover') {
+        $cidr = trim((string)($_POST['cidr'] ?? ''));
+        $is_ajax = !empty($_POST['ajax']);
+        $reply = function (array $data) use ($is_ajax, $self) {
+            if ($is_ajax) {
+                while (ob_get_level() > 0) ob_end_clean();
+                header('Content-Type: application/json');
+                echo json_encode($data);
+                exit;
+            }
+            flash($data['ok'] ? 'success' : 'error', $data['message'] ?? '');
+            header('Location: ' . $self);
+            exit;
+        };
+        // Parse a /24 (only) — anything wider stresses the host and triggers
+        // upstream rate limits. /24 = up to 254 hosts which we probe in
+        // small batches via curl.
+        if (!preg_match('#^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}/24$#', $cidr, $m)) {
+            $reply(['ok' => false, 'message' => 'Discover only supports /24 ranges (e.g. 10.0.0.0/24).']);
+        }
+        $base = $m[1];
+        $found = []; $checked = 0;
+        $existing = [];
+        foreach (devices_all() as $ed) $existing[$ed['mgmt_ip']] = true;
+
+        $mh = curl_multi_init();
+        $handles = [];
+        for ($i = 1; $i <= 254; $i++) {
+            $ip = "$base.$i";
+            if (isset($existing[$ip])) continue;
+            // Probe AirOS / RouterOS REST / Mimosa LuCI on HTTPS:443.
+            $ch = curl_init('https://' . $ip . '/');
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_NOBODY         => true,
+                CURLOPT_TIMEOUT        => 2,
+                CURLOPT_CONNECTTIMEOUT => 2,
+                CURLOPT_SSL_VERIFYPEER => false,
+                CURLOPT_SSL_VERIFYHOST => 0,
+                CURLOPT_USERAGENT      => 'WifiberDiscover/1.0',
+            ]);
+            curl_multi_add_handle($mh, $ch);
+            $handles[$ip] = $ch;
+        }
+        $running = null;
+        do {
+            curl_multi_exec($mh, $running);
+            curl_multi_select($mh, 0.2);
+        } while ($running > 0);
+        foreach ($handles as $ip => $ch) {
+            $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $hdr  = (string)curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+            $checked++;
+            if ($code > 0 && $code < 500) {
+                // Anything that talks HTTPS at all is interesting; the
+                // operator decides if it's a radio.
+                $found[] = ['ip' => $ip, 'http' => $code, 'content_type' => $hdr];
+            }
+            curl_multi_remove_handle($mh, $ch);
+            curl_close($ch);
+        }
+        curl_multi_close($mh);
+        audit_log('device.discover', ['meta' => ['cidr' => $cidr, 'found' => count($found), 'checked' => $checked]]);
+        flash('success', sprintf('Discover found %d HTTPS responder(s) on %s.', count($found), $cidr));
+        $_SESSION['discover_results'] = $found;
+        header('Location: ' . $self . '#discover');
+        exit;
+    }
+
     if ($action === 'save_credentials') {
         $device_id = (int)($_POST['device_id'] ?? 0);
         $scheme    = (string)($_POST['scheme'] ?? '');
@@ -158,6 +227,41 @@ $status_pill = function (string $status): string {
 <div class="portal-head">
   <h1>Devices</h1>
   <p class="portal-sub">Network gear inventory — APs, CPEs, routers, switches, backhaul radios. Live status comes online in Phase&nbsp;3 once the polling worker is wired up.</p>
+</div>
+
+<div class="portal-card" id="discover">
+  <h2>Discover radios on a subnet</h2>
+  <p class="muted">HTTPS-probe a /24 to find unclaimed radios. Anything responding on :443 with an HTTP status &lt; 500 shows up below — operator decides if it's actually a radio. /24 only (254 hosts).</p>
+  <form method="post" class="form form-grid">
+    <?= csrf_field() ?>
+    <input type="hidden" name="action" value="discover">
+    <div class="field"><label>CIDR</label>
+      <input type="text" name="cidr" placeholder="10.0.0.0/24" required pattern="\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/24">
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary btn-sm">Probe</button>
+    </div>
+  </form>
+  <?php $discover_results = $_SESSION['discover_results'] ?? []; unset($_SESSION['discover_results']); ?>
+  <?php if ($discover_results): ?>
+    <h3 class="lv-label">Last discover results</h3>
+    <table class="data-table">
+      <thead><tr><th>IP</th><th>HTTP</th><th>Content-Type</th><th></th></tr></thead>
+      <tbody>
+        <?php foreach ($discover_results as $r): ?>
+          <tr>
+            <td><code><?= htmlspecialchars($r['ip']) ?></code></td>
+            <td><?= (int)$r['http'] ?></td>
+            <td><small><?= htmlspecialchars((string)$r['content_type']) ?></small></td>
+            <td>
+              <a class="btn btn-ghost btn-sm" href="https://<?= htmlspecialchars($r['ip']) ?>/" target="_blank" rel="noopener">Open</a>
+            </td>
+          </tr>
+        <?php endforeach; ?>
+      </tbody>
+    </table>
+    <p class="muted"><small>Add the radio with the form below using the IP above as <code>mgmt_ip</code>, then attach credentials to start polling.</small></p>
+  <?php endif; ?>
 </div>
 
 <div class="portal-card">
