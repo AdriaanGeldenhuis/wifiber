@@ -30,6 +30,7 @@ if (PHP_SAPI !== 'cli') {
 }
 
 require __DIR__ . '/../auth/devices.php';
+require __DIR__ . '/../auth/wireless.php';
 require __DIR__ . '/../auth/notifications.php';
 
 $opts = ['quiet' => false, 'threshold-db' => 3, 'window-days' => 7];
@@ -53,15 +54,17 @@ $rows = $stmt->fetchAll();
 $by_device = [];
 foreach ($rows as $r) {
     $by_device[(int)$r['device_id']][] = [
-        't'    => strtotime((string)$r['polled_at']),
-        'snr'  => (float)$r['cable_snr_db'],
+        't' => strtotime((string)$r['polled_at']),
+        'v' => (float)$r['cable_snr_db'],
     ];
 }
 
 $alerts = 0;
 foreach ($by_device as $dev_id => $samples) {
     if (count($samples) < 24) continue; // need a useful sample set
-    [$slope, $intercept] = _linreg($samples);
+    foreach ($samples as &$s) $s['snr'] = $s['v'];
+    unset($s);
+    [$slope, $intercept] = linreg_slope($samples);
     $window_seconds = $opts['window-days'] * 86400;
     // Slope is dB/sec — extrapolate over the window.
     $delta = $slope * $window_seconds;
@@ -111,18 +114,4 @@ if (!$opts['quiet']) {
 }
 exit(0);
 
-function _linreg(array $points): array {
-    $n = count($points);
-    $sx = $sy = $sxx = $sxy = 0.0;
-    foreach ($points as $p) {
-        $sx  += $p['t'];
-        $sy  += $p['snr'];
-        $sxx += $p['t'] * $p['t'];
-        $sxy += $p['t'] * $p['snr'];
-    }
-    $denom = $n * $sxx - $sx * $sx;
-    if ($denom == 0) return [0.0, $sy / $n];
-    $slope = ($n * $sxy - $sx * $sy) / $denom;
-    $inter = ($sy - $slope * $sx) / $n;
-    return [$slope, $inter];
-}
+// linreg_slope() lives in auth/wireless.php — shared with check-link-health.

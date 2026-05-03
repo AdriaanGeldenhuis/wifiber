@@ -78,6 +78,14 @@ if ($dist_km !== null && $dist_km > 0) {
 }
 
 $samples = wireless_link_recent_samples($id, 288); // 24h at 5min cadence
+
+$alerts = pdo()->prepare(
+    "SELECT * FROM link_alerts
+      WHERE link_id = ? AND resolved_at IS NULL
+      ORDER BY opened_at DESC"
+);
+$alerts->execute([$id]);
+$alerts = $alerts->fetchAll();
 $rf_ap   = rf_environment_recent((int)$link['ap_device_id'], 60);
 $rf_cpe  = $link['cpe_device_id'] ? rf_environment_recent((int)$link['cpe_device_id'], 60) : [];
 
@@ -259,6 +267,22 @@ $cinr_gauge = function (?int $snr) {
   <a class="lv-tab <?= $tab === 'link' ? 'active' : '' ?>" href="?id=<?= (int)$link['id'] ?>&tab=link">Link</a>
   <a class="lv-tab <?= $tab === 'fresnel' ? 'active' : '' ?>" href="?id=<?= (int)$link['id'] ?>&tab=fresnel">Fresnel</a>
 </div>
+
+<?php if ($alerts): ?>
+<div class="portal-card" style="border-left:3px solid #d44;">
+  <h3 class="lv-label">Active health alerts</h3>
+  <?php foreach ($alerts as $a): ?>
+    <div class="lv-row">
+      <span><b><?= $h(str_replace('_', ' ', $a['kind'])) ?></b>
+        <span class="lv-pill" style="background:<?= $a['severity'] === 'crit' ? '#d44' : '#e8a814' ?>;">
+          <?= $h($a['severity']) ?>
+        </span>
+      </span>
+      <span class="muted small"><?= $h($a['notes']) ?> · since <?= $h($a['opened_at']) ?></span>
+    </div>
+  <?php endforeach; ?>
+</div>
+<?php endif; ?>
 
 <?php if ($tab === 'fresnel'): ?>
 <div class="portal-card">

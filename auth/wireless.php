@@ -39,7 +39,9 @@ function wireless_links_all(?array $filters = null): array {
                    ap.name  AS ap_name,  ap.vendor AS ap_vendor,  ap.model AS ap_model,
                    cpe.name AS cpe_name, cpe.vendor AS cpe_vendor, cpe.model AS cpe_model,
                    s.name AS sector_name,
-                   u.name AS customer_name, u.surname AS customer_surname
+                   u.name AS customer_name, u.surname AS customer_surname,
+                   (SELECT COUNT(*) FROM link_alerts la
+                     WHERE la.link_id = wl.id AND la.resolved_at IS NULL) AS active_alerts
               FROM wireless_links wl
               JOIN devices ap        ON ap.id = wl.ap_device_id
               LEFT JOIN devices cpe  ON cpe.id = wl.cpe_device_id
@@ -625,6 +627,32 @@ function wireless_change_log_record(array $row): int {
         substr((string)($row['error'] ?? ''), 0, 500),
     ]);
     return (int)pdo()->lastInsertId();
+}
+
+/* --------------------------------------------------------- regression */
+
+/**
+ * Ordinary least-squares linear regression over an array of
+ * [['t' => unix_seconds, 'v' => value], …] points. Returns [slope, intercept]
+ * with slope in value-units per second. Used by:
+ *   bin/check-cable-snr.php  — cable_snr_db over 7 days
+ *   bin/check-link-health.php — signal_dbm over 7 days
+ */
+function linreg_slope(array $points, string $tk = 't', string $vk = 'v'): array {
+    $n = count($points);
+    if ($n < 2) return [0.0, 0.0];
+    $sx = $sy = $sxx = $sxy = 0.0;
+    foreach ($points as $p) {
+        $sx  += $p[$tk];
+        $sy  += $p[$vk];
+        $sxx += $p[$tk] * $p[$tk];
+        $sxy += $p[$tk] * $p[$vk];
+    }
+    $denom = $n * $sxx - $sx * $sx;
+    if ($denom == 0) return [0.0, $sy / $n];
+    $slope = ($n * $sxy - $sx * $sy) / $denom;
+    $inter = ($sy - $slope * $sx) / $n;
+    return [$slope, $inter];
 }
 
 /* --------------------------------------------------------- distance */

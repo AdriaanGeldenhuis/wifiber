@@ -180,6 +180,7 @@ $health_pill = function (?int $score): string {
           <th>TX / RX rate</th>
           <th>Distance</th>
           <th>Last sample</th>
+          <th>Alerts</th>
           <th></th>
         </tr>
       </thead>
@@ -246,6 +247,14 @@ $health_pill = function (?int $score): string {
               <?= $l['last_evaluated_at']
                   ? '<small>' . htmlspecialchars((string)$l['last_evaluated_at']) . '</small>'
                   : '<small class="muted">never</small>' ?>
+            </td>
+            <td>
+              <?php $aa = (int)($l['active_alerts'] ?? 0); ?>
+              <?php if ($aa > 0): ?>
+                <span class="link-pill" style="background:#d44;color:#fff;"><?= $aa ?></span>
+              <?php else: ?>
+                <small class="muted">—</small>
+              <?php endif; ?>
             </td>
             <td>
               <a class="btn btn-ghost btn-sm" href="/admin/link-view.php?id=<?= (int)$l['id'] ?>">Open</a>
