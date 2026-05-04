@@ -143,7 +143,7 @@ $leads = $tab === 'waitlist' ? waitlist_all() : [];
     <div class="form form-grid">
       <div class="field" style="grid-column:1/-1; position:relative;">
         <label>Address <span class="muted small">(start typing for suggestions)</span></label>
-        <input type="text" maxlength="200" placeholder="e.g. 12 Main Street, Vanderbijlpark" autocomplete="off" data-addr-input>
+        <input type="text" maxlength="200" placeholder="e.g. 12 Main Street, Vanderbijlpark" autocomplete="new-password" data-addr-input data-1p-ignore data-lpignore="true">
         <div class="addr-suggestions" hidden data-addr-suggestions></div>
       </div>
       <div class="field"><label>Latitude</label>

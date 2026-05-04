@@ -302,7 +302,7 @@ $v = fn($k, $d = '') => htmlspecialchars((string)($client[$k] ?? $d), ENT_QUOTES
     <div class="form form-grid">
       <div class="field" style="grid-column:1/-1; position:relative;">
         <label>Street address <span class="muted small">(start typing for suggestions)</span></label>
-        <input type="text" name="address" id="addr-input" maxlength="200" value="<?= $v('address') ?>" autocomplete="off" data-addr-input>
+        <input type="text" name="address" id="addr-input" maxlength="200" value="<?= $v('address') ?>" autocomplete="new-password" data-addr-input data-1p-ignore data-lpignore="true">
         <div id="addr-suggestions" class="addr-suggestions" hidden data-addr-suggestions></div>
       </div>
       <div class="field"><label>Latitude</label>

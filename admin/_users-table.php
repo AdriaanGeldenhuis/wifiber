@@ -597,7 +597,7 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
           <div class="field" style="grid-column:1/-1;" data-addr-picker="/admin/clients.php">
             <div style="position:relative;">
               <label>Address <span class="muted small">(start typing for suggestions)</span></label>
-              <input type="text" id="new-addr-input" name="address" maxlength="200" autocomplete="off" data-addr-input>
+              <input type="text" id="new-addr-input" name="address" maxlength="200" autocomplete="new-password" data-addr-input data-1p-ignore data-lpignore="true">
               <div id="new-addr-suggestions" class="addr-suggestions" hidden data-addr-suggestions></div>
             </div>
             <input type="hidden" name="lat" data-addr-lat>

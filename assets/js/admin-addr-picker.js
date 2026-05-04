@@ -66,10 +66,18 @@
       hasStart ? [startLat, startLng] : DEFAULT_CENTER,
       hasStart ? 16 : 11
     );
-    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
-    }).addTo(map);
+    var tileLayers = {
+      Streets: L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+      }),
+      Satellite: L.tileLayer(
+        'https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
+        { attribution: 'Tiles &copy; Esri', maxZoom: 19 }
+      )
+    };
+    tileLayers.Streets.addTo(map);
+    L.control.layers(tileLayers, {}, { position: 'topright', collapsed: true }).addTo(map);
     setTimeout(function () { map.invalidateSize(); }, 100);
 
     var marker = null;
