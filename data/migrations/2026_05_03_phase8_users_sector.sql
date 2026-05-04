@@ -9,7 +9,11 @@
 --   mysql -h <host> -u <user> -p <db> < data/migrations/2026_05_03_phase8_users_sector.sql
 
 ALTER TABLE users
-  ADD COLUMN sector_id INT UNSIGNED DEFAULT NULL AFTER site_id,
-  ADD KEY idx_user_sector (sector_id),
-  ADD CONSTRAINT fk_users_sector
+  ADD COLUMN IF NOT EXISTS sector_id INT UNSIGNED DEFAULT NULL AFTER site_id;
+
+ALTER TABLE users
+  ADD KEY IF NOT EXISTS idx_user_sector (sector_id);
+
+ALTER TABLE users
+  ADD CONSTRAINT IF NOT EXISTS fk_users_sector
     FOREIGN KEY (sector_id) REFERENCES sectors(id) ON DELETE SET NULL;
