@@ -12,11 +12,15 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 
+# Echo before any git command so a failing git (e.g. not-a-repo, no remote
+# auth) doesn't leave the workflow with zero output. Previous deploys failed
+# with no visible reason because the first echo only ran after git succeeded.
+echo "[deploy] $(date '+%F %T')"
+echo "[deploy] root:    $ROOT"
+
 BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 BEFORE="$(git rev-parse --short HEAD)"
 
-echo "[deploy] $(date '+%F %T')"
-echo "[deploy] root:    $ROOT"
 echo "[deploy] branch:  $BRANCH"
 echo "[deploy] before:  $BEFORE"
 
