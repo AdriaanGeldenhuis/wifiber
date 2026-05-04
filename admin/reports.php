@@ -142,6 +142,69 @@ $longest_active = $pdo->query(
       ORDER BY started_at ASC LIMIT 1"
 )->fetch() ?: null;
 
+/* ---------- MRR / ARPU / churn (Phase 28) ----------
+ *
+ * MRR  = sum(products.monthly_price) over active clients with a product_id,
+ *        plus a fallback for accounts that only have legacy package text.
+ * ARPU = MRR / count(active clients with revenue).
+ * Churn cohort:
+ *   active 30d ago → still active = retained
+ *                  → suspended/disconnected/missing = churned
+ */
+$mrr_rows = $pdo->query(
+    "SELECT u.id, u.username, p.monthly_price
+       FROM users u
+       LEFT JOIN products p ON p.id = u.product_id AND p.is_active = 1
+      WHERE u.role = 'client' AND u.status = 'active'"
+)->fetchAll();
+$mrr = 0.0; $paying = 0;
+$pricing_json_cache = null;
+foreach ($mrr_rows as $r) {
+    $price = $r['monthly_price'] !== null ? (float)$r['monthly_price'] : 0.0;
+    if ($price <= 0) {
+        // Legacy package fallback so MRR isn't wildly under-counted on
+        // sites that haven't migrated every customer onto products yet.
+        $u = find_user_by_id((int)$r['id']);
+        if ($u && !empty($u['package'])) {
+            $p = package_price_lookup((string)$u['package']);
+            if ($p) $price = (float)$p['price'];
+        }
+    }
+    if ($price > 0) { $mrr += $price; $paying++; }
+}
+$arpu = $paying > 0 ? $mrr / $paying : 0.0;
+
+$active_now = (int)$pdo->query(
+    "SELECT COUNT(*) FROM users WHERE role = 'client' AND status = 'active'"
+)->fetchColumn();
+$active_30d_ago = $pdo->query(
+    "SELECT id FROM users
+      WHERE role = 'client' AND created_at < (NOW() - INTERVAL 30 DAY)
+        AND (status = 'active' OR status = 'suspended')"
+)->fetchAll(PDO::FETCH_COLUMN);
+// Of that cohort, how many are still active today?
+$retained = 0;
+if ($active_30d_ago) {
+    $in    = implode(',', array_map('intval', $active_30d_ago));
+    $rs    = $pdo->query("SELECT COUNT(*) FROM users WHERE id IN ($in) AND status = 'active'")->fetchColumn();
+    $retained = (int)$rs;
+}
+$cohort_size = count($active_30d_ago);
+$churned     = max(0, $cohort_size - $retained);
+$churn_pct   = $cohort_size > 0 ? round(($churned / $cohort_size) * 100, 1) : 0.0;
+
+/* ---------- collection / aging snapshot ---------- */
+$aging = $pdo->query(
+    "SELECT
+        SUM(CASE WHEN due_at >= CURDATE() THEN total ELSE 0 END) AS not_due,
+        SUM(CASE WHEN DATEDIFF(CURDATE(), due_at) BETWEEN 1 AND 30  THEN total ELSE 0 END) AS d1_30,
+        SUM(CASE WHEN DATEDIFF(CURDATE(), due_at) BETWEEN 31 AND 60 THEN total ELSE 0 END) AS d31_60,
+        SUM(CASE WHEN DATEDIFF(CURDATE(), due_at) BETWEEN 61 AND 90 THEN total ELSE 0 END) AS d61_90,
+        SUM(CASE WHEN DATEDIFF(CURDATE(), due_at) > 90 THEN total ELSE 0 END) AS over_90
+       FROM invoices
+      WHERE status = 'unpaid'"
+)->fetch();
+
 /* ---------- sector capacity ---------- */
 $tight_sectors = $pdo->query(
     "SELECT s.id, s.name, t.name AS tower_name, s.max_clients,
@@ -175,6 +238,28 @@ $tight_sectors = $pdo->query(
 <h2 style="margin: 24px 0 8px;">Revenue</h2>
 <div class="card-grid">
   <div class="portal-card">
+    <span class="card-label">MRR</span>
+    <div class="card-num" style="color:#0c8;">R<?= number_format($mrr, 0) ?></div>
+    <p class="card-sub muted"><?= $paying ?> paying client<?= $paying === 1 ? '' : 's' ?></p>
+  </div>
+  <div class="portal-card">
+    <span class="card-label">ARPU</span>
+    <div class="card-num">R<?= number_format($arpu, 0) ?></div>
+    <p class="card-sub muted">Avg. monthly per paying client.</p>
+  </div>
+  <div class="portal-card">
+    <span class="card-label">30-day churn</span>
+    <div class="card-num" style="color:<?= $churn_pct >= 5 ? '#d44' : ($churn_pct >= 2 ? '#fbbf24' : '#0c8') ?>;"><?= number_format($churn_pct, 1) ?>%</div>
+    <p class="card-sub muted"><?= $churned ?> churned of <?= $cohort_size ?> in cohort.</p>
+  </div>
+  <div class="portal-card">
+    <span class="card-label">Active clients</span>
+    <div class="card-num"><?= number_format($active_now) ?></div>
+    <p class="card-sub muted">All status=active customers.</p>
+  </div>
+</div>
+<div class="card-grid">
+  <div class="portal-card">
     <span class="card-label">Billed (12 m)</span>
     <div class="card-num">R<?= number_format($total_billed_12mo, 0) ?></div>
     <p class="card-sub muted">Sum of issued invoices.</p>
@@ -189,6 +274,22 @@ $tight_sectors = $pdo->query(
     <?= $bar_chart_svg($rev_rows, 'v', 'm', '#0c8') ?>
   </div>
 </div>
+
+<?php if ($aging): ?>
+<div class="portal-card">
+  <h3 style="margin:0 0 8px;font-size:.95rem;">Aging — unpaid invoices</h3>
+  <table class="data-table">
+    <thead><tr><th>Not due yet</th><th>1–30 d</th><th>31–60 d</th><th>61–90 d</th><th>&gt;90 d</th></tr></thead>
+    <tbody><tr>
+      <td>R<?= number_format((float)$aging['not_due'], 0) ?></td>
+      <td><?= ((float)$aging['d1_30']) > 0 ? '<strong style="color:#fbbf24;">R' . number_format((float)$aging['d1_30'], 0) . '</strong>' : 'R0' ?></td>
+      <td><?= ((float)$aging['d31_60']) > 0 ? '<strong style="color:#fb923c;">R' . number_format((float)$aging['d31_60'], 0) . '</strong>' : 'R0' ?></td>
+      <td><?= ((float)$aging['d61_90']) > 0 ? '<strong style="color:#d44;">R' . number_format((float)$aging['d61_90'], 0) . '</strong>' : 'R0' ?></td>
+      <td><?= ((float)$aging['over_90']) > 0 ? '<strong style="color:#d44;">R' . number_format((float)$aging['over_90'], 0) . '</strong>' : 'R0' ?></td>
+    </tr></tbody>
+  </table>
+</div>
+<?php endif; ?>
 
 <h2 style="margin: 24px 0 8px;">Outages (30 days)</h2>
 <div class="card-grid">

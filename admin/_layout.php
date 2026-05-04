@@ -39,10 +39,13 @@ $nav = [
         ['key' => 'topology',     'label' => 'Topology review',  'href' => '/admin/topology-review.php'],
     ]],
     ['group' => 'Customers & Billing', 'items' => [
-        ['key' => 'clients',  'label' => 'Clients',            'href' => '/admin/clients.php'],
-        ['key' => 'invoices', 'label' => 'Invoices',           'href' => '/admin/invoices.php'],
-        ['key' => 'products', 'label' => 'Products (billing)', 'href' => '/admin/products.php'],
-        ['key' => 'radius',   'label' => 'RADIUS / NAS',       'href' => '/admin/radius.php'],
+        ['key' => 'clients',          'label' => 'Clients',            'href' => '/admin/clients.php'],
+        ['key' => 'invoices',         'label' => 'Invoices',           'href' => '/admin/invoices.php'],
+        ['key' => 'payments',         'label' => 'Payments',           'href' => '/admin/payments.php'],
+        ['key' => 'payments_import',  'label' => 'Bank CSV import',    'href' => '/admin/payments-import.php'],
+        ['key' => 'credit_notes',     'label' => 'Credit notes',       'href' => '/admin/credit-notes.php'],
+        ['key' => 'products',         'label' => 'Products (billing)', 'href' => '/admin/products.php'],
+        ['key' => 'radius',           'label' => 'RADIUS / NAS',       'href' => '/admin/radius.php'],
     ]],
     ['group' => 'Website Content', 'items' => [
         ['key' => 'slides',  'label' => 'Hero slider',      'href' => '/admin/slides.php'],
