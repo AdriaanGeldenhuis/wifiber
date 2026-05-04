@@ -45,20 +45,55 @@ function outage_create(string $scope, ?int $scope_id, string $label, int $affect
     if (!in_array($scope, OUTAGE_SCOPES, true)) {
         throw new InvalidArgumentException("Unknown outage scope: $scope");
     }
+    // Suppress notifications when a maintenance window covers this scope
+    // (planned pole-swap, scheduled freq move, etc.).
+    $suppress = false;
+    if ($scope_id) {
+        $mw = pdo()->prepare(
+            "SELECT id, notify_customers FROM maintenance_windows
+              WHERE scope = ? AND scope_id = ?
+                AND starts_at <= NOW() AND ends_at >= NOW()
+              LIMIT 1"
+        );
+        $mw->execute([$scope, $scope_id]);
+        $row = $mw->fetch();
+        if ($row && empty($row['notify_customers'])) {
+            $suppress = true;
+        }
+    }
     pdo()->prepare(
-        "INSERT INTO outages (scope, scope_id, scope_label, status, affected_count, cause, started_at)
-         VALUES (?, ?, ?, 'active', ?, ?, NOW())"
-    )->execute([$scope, $scope_id, $label, $affected, $cause]);
+        "INSERT INTO outages (scope, scope_id, scope_label, status, affected_count, cause, started_at, suppressed)
+         VALUES (?, ?, ?, 'active', ?, ?, NOW(), ?)"
+    )->execute([$scope, $scope_id, $label, $affected, $cause, $suppress ? 1 : 0]);
     $id = (int)pdo()->lastInsertId();
 
-    // Fire-and-forget customer notifications. Best-effort: failures are
-    // recorded as audit_log rows but don't block outage creation. Skip
-    // notifications for tower/core scope until we know who is affected.
-    if ($scope === 'sector' && $scope_id) {
+    if ($scope === 'sector' && $scope_id && !$suppress) {
         $sent = outage_notify_affected($id, $scope_id, $label, $cause);
         audit_log('outage.notify', [
             'target_type' => 'outage', 'target_id' => $id,
             'meta' => $sent,
+        ]);
+    }
+    // Webhooks fire regardless of suppression — third-party
+    // integrations (Slack, PagerDuty) want to know.
+    if (function_exists('webhook_fire')) {
+        webhook_fire('outage.opened', [
+            'outage_id' => $id, 'scope' => $scope, 'scope_id' => $scope_id,
+            'label' => $label, 'affected_count' => $affected, 'cause' => $cause,
+            'suppressed' => $suppress,
+        ]);
+    } elseif (is_file(__DIR__ . '/webhooks.php')) {
+        require_once __DIR__ . '/webhooks.php';
+        webhook_fire('outage.opened', [
+            'outage_id' => $id, 'scope' => $scope, 'scope_id' => $scope_id,
+            'label' => $label, 'affected_count' => $affected, 'cause' => $cause,
+            'suppressed' => $suppress,
+        ]);
+    }
+    if ($suppress) {
+        audit_log('outage.suppressed', [
+            'target_type' => 'outage', 'target_id' => $id,
+            'meta' => ['reason' => 'maintenance_window_active'],
         ]);
     }
 
@@ -75,50 +110,28 @@ function outage_create(string $scope, ?int $scope_id, string $label, int $affect
  * fan-out (debounce per customer per 30 min) is item 14 follow-up.
  */
 function outage_notify_affected(int $outage_id, int $sector_id, string $label, ?string $cause): array {
+    require_once __DIR__ . '/notifications.php';
     $stmt = pdo()->prepare(
-        "SELECT id, email, name, username
+        "SELECT id, email, name, username, phone, phone_e164, notify_prefs
            FROM users
           WHERE role = 'client'
             AND status = 'active'
-            AND sector_id = ?
-            AND email IS NOT NULL
-            AND email <> ''"
+            AND sector_id = ?"
     );
     $stmt->execute([$sector_id]);
     $rows = $stmt->fetchAll();
 
-    $site      = load_site_settings();
-    $site_name = $site['name']          ?? 'Your ISP';
-    $support   = $site['email_support'] ?? null;
-    $phone     = $site['phone']         ?? '';
-    $host      = preg_replace('/^www\./', '', $_SERVER['HTTP_HOST'] ?? 'localhost');
-
     $sent = 0; $failed = 0; $skipped = 0;
     foreach ($rows as $u) {
-        $email = trim((string)$u['email']);
-        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) { $skipped++; continue; }
-        $name  = $u['name'] ?? $u['username'];
-
-        $body = "Hi {$name},\n\n"
-              . "We're aware of a service issue affecting your area"
-              . ($label ? " ({$label})" : '') . ".\n"
-              . ($cause ? "Cause: {$cause}\n" : '')
-              . "Started: " . date('Y-m-d H:i') . "\n\n"
-              . "Our team is already working on it — you don't need to log a ticket.\n"
-              . "We'll send another email when it's resolved.\n\n"
-              . ($phone ? "Urgent? Call us on {$phone}.\n\n" : '')
-              . "— The {$site_name} team\n";
-
-        $headers = "From: {$site_name} <no-reply@{$host}>\r\n"
-                 . ($support ? "Reply-To: {$support}\r\n" : '')
-                 . "X-Mailer: WiFIBER-Portal\r\n"
-                 . "X-Outage-Id: {$outage_id}\r\n"
-                 . "Content-Type: text/plain; charset=UTF-8\r\n";
-
-        $ok = @mail($email, "Service issue affecting your {$site_name} connection", $body, $headers);
-        $ok ? $sent++ : $failed++;
+        $r = notify_send($u, 'outage.opened', [
+            'scope_label' => $label,
+            'cause'       => $cause,
+            'outage_id'   => $outage_id,
+        ]);
+        $sent    += $r['sent'];
+        $failed  += $r['failed'];
+        $skipped += $r['skipped'];
     }
-
     return ['sent' => $sent, 'failed' => $failed, 'skipped' => $skipped, 'total' => count($rows)];
 }
 
@@ -150,6 +163,16 @@ function outage_resolve(int $outage_id, ?string $note = null): bool {
             'meta' => $sent,
         ]);
     }
+    if (is_file(__DIR__ . '/webhooks.php')) {
+        require_once __DIR__ . '/webhooks.php';
+        webhook_fire('outage.resolved', [
+            'outage_id' => $outage_id,
+            'scope' => $row['scope'] ?? null,
+            'scope_id' => $row['scope_id'] ?? null,
+            'label' => $row['scope_label'] ?? '',
+            'note' => $note,
+        ]);
+    }
     return true;
 }
 
@@ -157,44 +180,26 @@ function outage_resolve(int $outage_id, ?string $note = null): bool {
  * Mirror of outage_notify_affected for the all-clear message.
  */
 function outage_notify_resolved(int $outage_id, int $sector_id, string $label): array {
+    require_once __DIR__ . '/notifications.php';
     $stmt = pdo()->prepare(
-        "SELECT id, email, name, username
+        "SELECT id, email, name, username, phone, phone_e164, notify_prefs
            FROM users
           WHERE role = 'client'
             AND status = 'active'
-            AND sector_id = ?
-            AND email IS NOT NULL
-            AND email <> ''"
+            AND sector_id = ?"
     );
     $stmt->execute([$sector_id]);
     $rows = $stmt->fetchAll();
 
-    $site      = load_site_settings();
-    $site_name = $site['name']          ?? 'Your ISP';
-    $support   = $site['email_support'] ?? null;
-    $host      = preg_replace('/^www\./', '', $_SERVER['HTTP_HOST'] ?? 'localhost');
-
     $sent = 0; $failed = 0; $skipped = 0;
     foreach ($rows as $u) {
-        $email = trim((string)$u['email']);
-        if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) { $skipped++; continue; }
-        $name  = $u['name'] ?? $u['username'];
-
-        $body = "Hi {$name},\n\n"
-              . "Good news — the issue affecting your area"
-              . ($label ? " ({$label})" : '')
-              . " has been resolved.\n\n"
-              . "If you're still experiencing problems, reply to this email or open a ticket at /account/tickets.php and we'll take a look.\n\n"
-              . "— The {$site_name} team\n";
-
-        $headers = "From: {$site_name} <no-reply@{$host}>\r\n"
-                 . ($support ? "Reply-To: {$support}\r\n" : '')
-                 . "X-Mailer: WiFIBER-Portal\r\n"
-                 . "X-Outage-Id: {$outage_id}\r\n"
-                 . "Content-Type: text/plain; charset=UTF-8\r\n";
-
-        $ok = @mail($email, "Service restored — {$site_name}", $body, $headers);
-        $ok ? $sent++ : $failed++;
+        $r = notify_send($u, 'outage.resolved', [
+            'scope_label' => $label,
+            'outage_id'   => $outage_id,
+        ]);
+        $sent    += $r['sent'];
+        $failed  += $r['failed'];
+        $skipped += $r['skipped'];
     }
     return ['sent' => $sent, 'failed' => $failed, 'skipped' => $skipped, 'total' => count($rows)];
 }

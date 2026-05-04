@@ -98,6 +98,65 @@ function pdo(): PDO {
     return $pdo;
 }
 
+/* -------------------------------------------------------- secret crypto */
+
+/**
+ * Encrypt a secret (radio password / SSH key / SNMP community / API token)
+ * for at-rest storage in `device_credentials.*_enc` blobs.
+ *
+ * Uses libsodium's authenticated secretbox. The key must be 32 random bytes
+ * configured in data/db.local.php as 'device_key' (raw binary or base64;
+ * we accept either). Without that key the function returns NULL — callers
+ * should refuse to enqueue config-push jobs in that case.
+ *
+ * On decrypt failure (corruption, wrong key, missing key) returns NULL.
+ * Never throws — the caller decides how loud to be.
+ */
+function device_secret_key(): ?string {
+    static $key = null;
+    if ($key !== null) return $key === '' ? null : $key;
+    $cfg_file = is_file(DATA_DIR . '/db.local.php')
+        ? DATA_DIR . '/db.local.php'
+        : DATA_DIR . '/db.php';
+    if (!is_file($cfg_file)) { $key = ''; return null; }
+    $cfg = require $cfg_file;
+    $raw = is_array($cfg) ? ($cfg['device_key'] ?? '') : '';
+    if (!is_string($raw) || $raw === '') { $key = ''; return null; }
+    if (strlen($raw) !== SODIUM_CRYPTO_SECRETBOX_KEYBYTES) {
+        $decoded = base64_decode($raw, true);
+        if ($decoded !== false && strlen($decoded) === SODIUM_CRYPTO_SECRETBOX_KEYBYTES) {
+            $raw = $decoded;
+        } else {
+            $key = '';
+            return null;
+        }
+    }
+    $key = $raw;
+    return $key;
+}
+
+function encrypt_secret(?string $plaintext): ?string {
+    if ($plaintext === null || $plaintext === '') return null;
+    $key = device_secret_key();
+    if ($key === null) return null;
+    $nonce = random_bytes(SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+    $cipher = sodium_crypto_secretbox($plaintext, $nonce, $key);
+    return $nonce . $cipher;
+}
+
+function decrypt_secret(?string $blob): ?string {
+    if ($blob === null || $blob === '') return null;
+    $key = device_secret_key();
+    if ($key === null) return null;
+    if (strlen($blob) < SODIUM_CRYPTO_SECRETBOX_NONCEBYTES + SODIUM_CRYPTO_SECRETBOX_MACBYTES) {
+        return null;
+    }
+    $nonce = substr($blob, 0, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+    $cipher = substr($blob, SODIUM_CRYPTO_SECRETBOX_NONCEBYTES);
+    $plain = sodium_crypto_secretbox_open($cipher, $nonce, $key);
+    return $plain === false ? null : $plain;
+}
+
 /* ----------------------------------------------------------------- csrf */
 
 function csrf_token(): string {
@@ -129,9 +188,9 @@ function require_csrf(): void {
 const USER_COLUMNS = [
     'account_no','username','email','name','surname','id_number','vat_number',
     'role','customer_type','status','service_start','billing_day','payment_method',
-    'phone','address','lat','lng','alt_contact_name','alt_contact_phone',
+    'phone','phone_e164','address','lat','lng','alt_contact_name','alt_contact_phone',
     'package','product_id','site_id','sector_id','equipment_mac','equipment_ip','equipment_serial','equipment_model',
-    'notes',
+    'notes','notify_prefs',
     'password_hash','totp_secret','totp_enabled','totp_recovery_codes',
     'totp_enabled_at','last_login',
 ];
@@ -435,24 +494,40 @@ function current_user(): ?array {
     return find_user_by_id((int)$_SESSION['user_id']);
 }
 
-function require_role(string $role, string $login_url): array {
+function require_role($role, string $login_url): array {
     $user = current_user();
     if (!$user) {
         header('Location: ' . $login_url);
         exit;
     }
     $own_role = $user['role'] ?? '';
-    if ($own_role !== $role) {
-        // Logged in but viewing the wrong portal — bounce to their own
-        // dashboard. The "My Account" link is shown to every visitor on
-        // the public site, so an admin clicking it should land in /admin/
-        // rather than getting an opaque "Access denied".
-        if ($own_role === 'admin')  { header('Location: /admin/');   exit; }
+    $allowed  = is_array($role) ? $role : [$role];
+    if (!in_array($own_role, $allowed, true)) {
+        if ($own_role === 'admin' || $own_role === 'noc_readonly') {
+            header('Location: /admin/');   exit;
+        }
         if ($own_role === 'client') { header('Location: /account/'); exit; }
         http_response_code(403);
         die('Access denied.');
     }
     return $user;
+}
+
+/**
+ * Inside admin pages: returns true if the current admin can mutate
+ * (push-to-radio, edit sectors, queue jobs, …). NOC-readonly returns
+ * false so views render but action buttons / forms are hidden.
+ */
+function admin_can_write(?array $user = null): bool {
+    $user = $user ?? current_user();
+    return ($user['role'] ?? '') === 'admin';
+}
+
+function require_admin_write(): void {
+    if (!admin_can_write()) {
+        http_response_code(403);
+        die('This action requires a full admin role. NOC-readonly accounts can view but not change network state.');
+    }
 }
 
 /* ---------------------------------------------------------------- flash */

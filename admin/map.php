@@ -14,6 +14,25 @@ require_once __DIR__ . '/../auth/sites.php';
 require_once __DIR__ . '/../auth/devices.php';
 require_once __DIR__ . '/../auth/sectors.php';
 require_once __DIR__ . '/../auth/outages.php';
+require_once __DIR__ . '/../auth/wireless.php';
+
+// Coverage heatmap endpoint — returns a GeoJSON grid for one sector.
+if (!empty($_GET['coverage_for'])) {
+    require_once __DIR__ . '/../auth/coverage_rf.php';
+    $sid = (int)$_GET['coverage_for'];
+    $sec = pdo()->prepare("SELECT * FROM sectors WHERE id = ?");
+    $sec->execute([$sid]);
+    $sec = $sec->fetch();
+    while (ob_get_level() > 0) ob_end_clean();
+    header('Content-Type: application/json');
+    if (!$sec) { echo json_encode(['ok' => false, 'error' => 'sector not found']); exit; }
+    $tower = site_find((int)$sec['tower_id']);
+    if (!$tower) { echo json_encode(['ok' => false, 'error' => 'tower missing']); exit; }
+    $grid = rssi_grid_for_sector($sec, $tower, 40);
+    echo json_encode(['ok' => true, 'sector' => ['id' => $sid, 'name' => $sec['name']],
+                      'grid' => $grid]);
+    exit;
+}
 
 // Lightweight poll endpoint — JS calls this every ~30s to refresh
 // device statuses and outage state without reloading the whole map.
@@ -343,6 +362,28 @@ $map_data = [
         'active_count'  => count($active_outages),
     ],
 ];
+
+// Per-site wireless link rollup so the inline JS at the bottom can draw
+// a green/yellow/red ring on each AP site indicating worst link health.
+$wl_rollup = pdo()->query(
+    "SELECT d.site_id,
+            COUNT(*)                                     AS link_count,
+            MIN(wl.health_score)                         AS worst_health,
+            SUM(wl.health_score IS NOT NULL AND wl.health_score < 50) AS degraded
+       FROM wireless_links wl
+       JOIN devices d ON d.id = wl.ap_device_id
+      WHERE d.site_id IS NOT NULL
+      GROUP BY d.site_id"
+)->fetchAll();
+$wl_by_site = [];
+foreach ($wl_rollup as $r) {
+    $wl_by_site[(int)$r['site_id']] = [
+        'count'     => (int)$r['link_count'],
+        'worst'     => $r['worst_health'] !== null ? (int)$r['worst_health'] : null,
+        'degraded'  => (int)$r['degraded'],
+    ];
+}
+$map_data['wireless_link_summary'] = $wl_by_site;
 ?>
 
 <link rel="stylesheet"
@@ -847,5 +888,134 @@ $map_data = [
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
         crossorigin="anonymous"></script>
 <script src="/assets/js/admin-map.js" defer></script>
+
+<script>
+/* Coverage heatmap — operator picks a sector, fetches a GeoJSON grid
+   of predicted RSSI cells, and drops them onto the map as a coloured
+   layer. Toggle off to clear. */
+(function () {
+  function init() {
+    if (!window.WIFIBER_MAP || typeof L === 'undefined') {
+      return setTimeout(init, 300);
+    }
+    const map = window.WIFIBER_MAP;
+    const dataEl = document.getElementById('map-data');
+    let boot;
+    try { boot = JSON.parse(dataEl.textContent); } catch (e) { return; }
+    if (!boot || !boot.sectors || !boot.sectors.length) return;
+
+    let layer = null;
+    const colour = (rssi) => {
+      if (rssi >= -55) return '#22c55e';
+      if (rssi >= -65) return '#84cc16';
+      if (rssi >= -75) return '#eab308';
+      if (rssi >= -85) return '#f97316';
+      return '#dc2626';
+    };
+
+    const ctrl = L.control({ position: 'topright' });
+    ctrl.onAdd = function () {
+      const div = L.DomUtil.create('div', 'leaflet-bar');
+      div.style.background = '#fff';
+      div.style.padding = '6px 8px';
+      div.style.font = '12px sans-serif';
+      div.innerHTML =
+        '<label style="display:block;margin-bottom:4px;"><strong>Coverage</strong></label>' +
+        '<select id="cov-pick" style="max-width:160px;">' +
+          '<option value="">— sector —</option>' +
+          boot.sectors.map(s => '<option value="' + s.id + '">' + s.name + '</option>').join('') +
+        '</select> ' +
+        '<button id="cov-clear" type="button">Clear</button>';
+      L.DomEvent.disableClickPropagation(div);
+      return div;
+    };
+    ctrl.addTo(map);
+
+    document.addEventListener('change', function (e) {
+      if (e.target && e.target.id === 'cov-pick') {
+        const id = e.target.value;
+        if (layer) { map.removeLayer(layer); layer = null; }
+        if (!id) return;
+        fetch('/admin/map.php?coverage_for=' + encodeURIComponent(id), { credentials: 'same-origin' })
+          .then(r => r.json())
+          .then(j => {
+            if (!j || !j.ok) return;
+            layer = L.geoJSON(j.grid, {
+              style: f => ({
+                color: colour(f.properties.rssi),
+                fillColor: colour(f.properties.rssi),
+                fillOpacity: 0.35,
+                weight: 0,
+              }),
+            }).bindTooltip(f => f.feature.properties.rssi + ' dBm', { sticky: true });
+            layer.addTo(map);
+          });
+      }
+    });
+    document.addEventListener('click', function (e) {
+      if (e.target && e.target.id === 'cov-clear') {
+        if (layer) { map.removeLayer(layer); layer = null; }
+        const sel = document.getElementById('cov-pick');
+        if (sel) sel.value = '';
+      }
+    });
+  }
+  init();
+})();
+</script>
+
+<script>
+/* Wireless link health overlay — coloured ring on each site that hosts
+   an AP with active wireless_links. Layered onto the same Leaflet
+   instance admin-map.js creates (exposed as window.WIFIBER_MAP). */
+(function () {
+  function init() {
+    if (!window.WIFIBER_MAP || typeof L === 'undefined') {
+      return setTimeout(init, 250);
+    }
+    const dataEl = document.getElementById('map-data');
+    if (!dataEl) return;
+    let boot;
+    try { boot = JSON.parse(dataEl.textContent); } catch (e) { return; }
+    if (!boot || !boot.sites || !boot.wireless_link_summary) return;
+
+    const map = window.WIFIBER_MAP;
+    const layer = L.layerGroup().addTo(map);
+    const siteById = {};
+    boot.sites.forEach(function (s) { siteById[s.id] = s; });
+
+    function colourFor(worst) {
+      if (worst === null || worst === undefined) return '#888';
+      if (worst >= 75) return '#0c8';
+      if (worst >= 50) return '#e8a814';
+      return '#d44';
+    }
+
+    Object.entries(boot.wireless_link_summary).forEach(function (entry) {
+      const siteId = entry[0], sum = entry[1];
+      const s = siteById[siteId];
+      if (!s || s.lat === null || s.lng === null) return;
+      const ring = L.circleMarker([s.lat, s.lng], {
+        radius: 14,
+        color: colourFor(sum.worst),
+        weight: 3,
+        fill: false,
+        opacity: 0.85,
+      }).addTo(layer);
+      ring.bindTooltip(
+        '<strong>' + s.name + '</strong><br>' +
+        sum.count + ' wireless link' + (sum.count === 1 ? '' : 's') +
+        (sum.degraded > 0 ? ' · <span style="color:#d44">' + sum.degraded + ' degraded</span>' : '') +
+        (sum.worst !== null ? ' · worst health ' + sum.worst : ''),
+        { sticky: true, direction: 'top' }
+      );
+      ring.on('click', function () {
+        window.location = '/admin/links.php';
+      });
+    });
+  }
+  init();
+})();
+</script>
 
 <?php require __DIR__ . '/../auth/portal-footer.php'; ?>

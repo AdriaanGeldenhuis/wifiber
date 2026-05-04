@@ -172,6 +172,33 @@ function ticket_set_status(int $ticket_id, string $status): bool {
     return pdo()->prepare($sql)->execute([$status, $ticket_id]);
 }
 
+/**
+ * System-driven ticket — used by background workers (link health, cable
+ * SNR, etc.) that need to surface a problem without a customer asking.
+ * Inserts the ticket against the named customer, with the first message
+ * authored by author_id=NULL, role='admin', label='system'.
+ */
+function ticket_create_system(int $customer_id, string $subject, string $body): int {
+    if ($customer_id <= 0) throw new InvalidArgumentException('customer_id required');
+    $pdo = pdo();
+    $pdo->beginTransaction();
+    try {
+        $stmt = $pdo->prepare("INSERT INTO tickets (user_id, subject, status) VALUES (?, ?, 'open')");
+        $stmt->execute([$customer_id, mb_substr($subject, 0, 200)]);
+        $ticket_id = (int)$pdo->lastInsertId();
+        $pdo->prepare(
+            "INSERT INTO ticket_messages
+                (ticket_id, author_id, author_role, author_label, body)
+             VALUES (?, NULL, 'admin', 'system', ?)"
+        )->execute([$ticket_id, $body]);
+        $pdo->commit();
+        return $ticket_id;
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+        throw $e;
+    }
+}
+
 function ticket_message_insert(int $ticket_id, ?int $author_id, string $author_role, string $body, ?array $uploaded_file): int {
     if (!in_array($author_role, ['admin', 'client'], true)) {
         throw new InvalidArgumentException('author_role must be admin or client.');

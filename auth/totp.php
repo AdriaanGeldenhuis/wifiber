@@ -75,6 +75,20 @@ function totp_verify(string $secret_b32, string $code, int $window = 1): bool {
     return false;
 }
 
+/**
+ * Step-up auth for sensitive admin actions (push-to-radio, freq move,
+ * bulk reconfig). If the admin has 2FA enabled they must supply a fresh
+ * TOTP code with the request; admins without 2FA get a no-op pass-through
+ * (plus a flash nudge to enable 2FA). Returns true on success, false on
+ * failure (caller should flash + redirect back).
+ */
+function totp_require_step_up(array $user, string $code): bool {
+    if (empty($user['totp_enabled'])) return true; // not enrolled — pass
+    $secret = (string)($user['totp_secret'] ?? '');
+    if ($secret === '') return false;
+    return totp_verify($secret, $code, 1);
+}
+
 function totp_uri(string $secret_b32, string $account, string $issuer): string {
     $issuer = preg_replace('/[:?&=]/', '', $issuer);
     $label  = rawurlencode("{$issuer}:{$account}");

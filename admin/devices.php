@@ -11,11 +11,13 @@ $active_key = 'devices';
 require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/devices.php';
 require_once __DIR__ . '/../auth/sites.php';
+require_once __DIR__ . '/../auth/wireless.php';
 
 $self = '/admin/devices.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_csrf();
+    require_admin_write();
     $action = $_POST['action'] ?? '';
 
     if ($action === 'save') {
@@ -53,6 +55,143 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         }
         header('Location: ' . $self);
         exit;
+    }
+
+    if ($action === 'discover') {
+        $cidr = trim((string)($_POST['cidr'] ?? ''));
+        $is_ajax = !empty($_POST['ajax']);
+        $reply = function (array $data) use ($is_ajax, $self) {
+            if ($is_ajax) {
+                while (ob_get_level() > 0) ob_end_clean();
+                header('Content-Type: application/json');
+                echo json_encode($data);
+                exit;
+            }
+            flash($data['ok'] ? 'success' : 'error', $data['message'] ?? '');
+            header('Location: ' . $self);
+            exit;
+        };
+        // Parse a /24 (only) — anything wider stresses the host and triggers
+        // upstream rate limits. /24 = up to 254 hosts which we probe in
+        // small batches via curl.
+        if (!preg_match('#^(\d{1,3}\.\d{1,3}\.\d{1,3})\.\d{1,3}/24$#', $cidr, $m)) {
+            $reply(['ok' => false, 'message' => 'Discover only supports /24 ranges (e.g. 10.0.0.0/24).']);
+        }
+        $base = $m[1];
+        $found = []; $checked = 0;
+        $existing = [];
+        foreach (devices_all() as $ed) $existing[$ed['mgmt_ip']] = true;
+
+        $mh = curl_multi_init();
+        $handles = [];
+        for ($i = 1; $i <= 254; $i++) {
+            $ip = "$base.$i";
+            if (isset($existing[$ip])) continue;
+            // Probe AirOS / RouterOS REST / Mimosa LuCI on HTTPS:443.
+            $ch = curl_init('https://' . $ip . '/');
+            curl_setopt_array($ch, [
+                CURLOPT_RETURNTRANSFER => true,
+                CURLOPT_NOBODY         => true,
+                CURLOPT_TIMEOUT        => 2,
+                CURLOPT_CONNECTTIMEOUT => 2,
+                CURLOPT_SSL_VERIFYPEER => false,
+                CURLOPT_SSL_VERIFYHOST => 0,
+                CURLOPT_USERAGENT      => 'WifiberDiscover/1.0',
+            ]);
+            curl_multi_add_handle($mh, $ch);
+            $handles[$ip] = $ch;
+        }
+        $running = null;
+        do {
+            curl_multi_exec($mh, $running);
+            curl_multi_select($mh, 0.2);
+        } while ($running > 0);
+        foreach ($handles as $ip => $ch) {
+            $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $hdr  = (string)curl_getinfo($ch, CURLINFO_CONTENT_TYPE);
+            $checked++;
+            if ($code > 0 && $code < 500) {
+                // Anything that talks HTTPS at all is interesting; the
+                // operator decides if it's a radio.
+                $found[] = ['ip' => $ip, 'http' => $code, 'content_type' => $hdr];
+            }
+            curl_multi_remove_handle($mh, $ch);
+            curl_close($ch);
+        }
+        curl_multi_close($mh);
+        audit_log('device.discover', ['meta' => ['cidr' => $cidr, 'found' => count($found), 'checked' => $checked]]);
+        flash('success', sprintf('Discover found %d HTTPS responder(s) on %s.', count($found), $cidr));
+        $_SESSION['discover_results'] = $found;
+        header('Location: ' . $self . '#discover');
+        exit;
+    }
+
+    if ($action === 'save_credentials') {
+        $device_id = (int)($_POST['device_id'] ?? 0);
+        $scheme    = (string)($_POST['scheme'] ?? '');
+        try {
+            if (device_secret_key() === null) {
+                throw new RuntimeException('Set the 32-byte device_key in data/db.php before saving credentials. See data/db.php.example.');
+            }
+            device_credentials_save($device_id, $scheme, [
+                'password'       => $_POST['password']       ?? '',
+                'snmp_community' => $_POST['snmp_community'] ?? '',
+                'api_token'      => $_POST['api_token']      ?? '',
+                'ssh_key'        => $_POST['ssh_key']        ?? '',
+            ], [
+                'username'   => $_POST['username']   ?? '',
+                'port'       => $_POST['port']       ?? null,
+                'verify_tls' => !empty($_POST['verify_tls']),
+                'notes'      => $_POST['cred_notes'] ?? '',
+            ]);
+            audit_log('device.credentials_saved', [
+                'target_type' => 'device', 'target_id' => $device_id,
+                'meta' => ['scheme' => $scheme],
+            ]);
+            flash('success', 'Credentials saved (encrypted at rest).');
+        } catch (Throwable $e) {
+            flash('error', $e->getMessage());
+        }
+        header('Location: ' . $self);
+        exit;
+    }
+
+    if ($action === 'delete_credentials') {
+        $cred_id = (int)($_POST['cred_id'] ?? 0);
+        if ($cred_id) {
+            device_credentials_delete($cred_id);
+            audit_log('device.credentials_deleted', ['meta' => ['cred_id' => $cred_id]]);
+            flash('success', 'Credentials deleted.');
+        }
+        header('Location: ' . $self);
+        exit;
+    }
+
+    if ($action === 'poll_wireless_now') {
+        $id = (int)($_POST['id'] ?? 0);
+        $is_ajax = !empty($_POST['ajax']);
+        $reply_w = function (bool $ok, string $msg) use ($is_ajax, $self) {
+            if ($is_ajax) {
+                while (ob_get_level() > 0) ob_end_clean();
+                header('Content-Type: application/json');
+                echo json_encode(['ok' => $ok, 'message' => $msg]);
+                exit;
+            }
+            flash($ok ? 'success' : 'error', $msg);
+            header('Location: ' . $self);
+            exit;
+        };
+        $cmd = sprintf(
+            '/usr/bin/php %s --once --quiet --only-device=%d 2>&1',
+            escapeshellarg(realpath(__DIR__ . '/../bin/poll-wireless.php')),
+            $id
+        );
+        $out = shell_exec($cmd);
+        audit_log('device.poll_wireless_now', [
+            'target_type' => 'device', 'target_id' => $id,
+            'meta' => ['output' => mb_substr((string)$out, 0, 200)],
+        ]);
+        $reply_w(true, 'Wireless poll triggered. Refresh in a few seconds for telemetry.');
     }
 
     if ($action === 'ping_now') {
@@ -116,6 +255,41 @@ $status_pill = function (string $status): string {
 <div class="portal-head">
   <h1>Devices</h1>
   <p class="portal-sub">Network gear inventory — APs, CPEs, routers, switches, backhaul radios. Live status comes online in Phase&nbsp;3 once the polling worker is wired up.</p>
+</div>
+
+<div class="portal-card" id="discover">
+  <h2>Discover radios on a subnet</h2>
+  <p class="muted">HTTPS-probe a /24 to find unclaimed radios. Anything responding on :443 with an HTTP status &lt; 500 shows up below — operator decides if it's actually a radio. /24 only (254 hosts).</p>
+  <form method="post" class="form form-grid">
+    <?= csrf_field() ?>
+    <input type="hidden" name="action" value="discover">
+    <div class="field"><label>CIDR</label>
+      <input type="text" name="cidr" placeholder="10.0.0.0/24" required pattern="\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}/24">
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary btn-sm">Probe</button>
+    </div>
+  </form>
+  <?php $discover_results = $_SESSION['discover_results'] ?? []; unset($_SESSION['discover_results']); ?>
+  <?php if ($discover_results): ?>
+    <h3 class="lv-label">Last discover results</h3>
+    <table class="data-table">
+      <thead><tr><th>IP</th><th>HTTP</th><th>Content-Type</th><th></th></tr></thead>
+      <tbody>
+        <?php foreach ($discover_results as $r): ?>
+          <tr>
+            <td><code><?= htmlspecialchars($r['ip']) ?></code></td>
+            <td><?= (int)$r['http'] ?></td>
+            <td><small><?= htmlspecialchars((string)$r['content_type']) ?></small></td>
+            <td>
+              <a class="btn btn-ghost btn-sm" href="https://<?= htmlspecialchars($r['ip']) ?>/" target="_blank" rel="noopener">Open</a>
+            </td>
+          </tr>
+        <?php endforeach; ?>
+      </tbody>
+    </table>
+    <p class="muted"><small>Add the radio with the form below using the IP above as <code>mgmt_ip</code>, then attach credentials to start polling.</small></p>
+  <?php endif; ?>
 </div>
 
 <div class="portal-card">
@@ -203,6 +377,81 @@ $status_pill = function (string $status): string {
               <?php if ($d['mgmt_ip']): ?>
                 <button type="button" class="btn btn-ghost btn-sm" data-ping-device="<?= (int)$d['id'] ?>" data-ping-name="<?= htmlspecialchars($d['name'], ENT_QUOTES) ?>" style="margin-right:4px;" title="ICMP ping the management IP and record a health row">Ping</button>
               <?php endif; ?>
+              <?php if ($d['mgmt_ip'] && in_array($d['vendor'], ['ubiquiti','mikrotik','cambium','mimosa'], true)): ?>
+                <form method="post" class="inline-form" style="display:inline-block;margin-right:4px;">
+                  <?= csrf_field() ?>
+                  <input type="hidden" name="action" value="poll_wireless_now">
+                  <input type="hidden" name="id" value="<?= (int)$d['id'] ?>">
+                  <button type="submit" class="btn btn-ghost btn-sm" title="Run the vendor adapter against this device right now (synchronous)">Poll</button>
+                </form>
+              <?php endif; ?>
+              <details style="display:inline-block;">
+                <summary class="btn btn-ghost btn-sm">Creds</summary>
+                <?php $existing_creds = device_credentials_for((int)$d['id']); ?>
+                <div style="margin-top:12px;">
+                  <?php if ($existing_creds): ?>
+                    <table class="data-table" style="margin-bottom:10px;">
+                      <thead><tr><th>Scheme</th><th>Username</th><th>Port</th><th>Last OK</th><th>Fails</th><th></th></tr></thead>
+                      <tbody>
+                      <?php foreach ($existing_creds as $c): ?>
+                        <tr>
+                          <td><code><?= htmlspecialchars($c['scheme']) ?></code></td>
+                          <td><?= htmlspecialchars($c['username']) ?></td>
+                          <td><?= $c['port'] !== null ? (int)$c['port'] : '<small class="muted">—</small>' ?></td>
+                          <td><small><?= htmlspecialchars((string)($c['last_auth_ok_at'] ?? 'never')) ?></small></td>
+                          <td><?= (int)$c['consecutive_fails'] ?></td>
+                          <td>
+                            <form method="post" class="inline-form" data-confirm="Delete <?= htmlspecialchars($c['scheme'], ENT_QUOTES) ?> credentials?">
+                              <?= csrf_field() ?>
+                              <input type="hidden" name="action" value="delete_credentials">
+                              <input type="hidden" name="cred_id" value="<?= (int)$c['id'] ?>">
+                              <button class="btn btn-danger btn-sm" type="submit">×</button>
+                            </form>
+                          </td>
+                        </tr>
+                      <?php endforeach; ?>
+                      </tbody>
+                    </table>
+                  <?php endif; ?>
+                  <form method="post" class="form form-grid" autocomplete="off">
+                    <?= csrf_field() ?>
+                    <input type="hidden" name="action" value="save_credentials">
+                    <input type="hidden" name="device_id" value="<?= (int)$d['id'] ?>">
+                    <div class="field"><label>Scheme</label>
+                      <select name="scheme">
+                        <?php foreach (CRED_SCHEMES as $s): ?>
+                          <option value="<?= $s ?>"><?= $s ?></option>
+                        <?php endforeach; ?>
+                      </select>
+                    </div>
+                    <div class="field"><label>Username</label>
+                      <input type="text" name="username" autocomplete="off">
+                    </div>
+                    <div class="field"><label>Password (HTTP/HTTPS/SSH)</label>
+                      <input type="password" name="password" autocomplete="new-password">
+                    </div>
+                    <div class="field"><label>SNMP community (snmpv2)</label>
+                      <input type="password" name="snmp_community" autocomplete="new-password">
+                    </div>
+                    <div class="field"><label>API token (api scheme)</label>
+                      <input type="password" name="api_token" autocomplete="new-password">
+                    </div>
+                    <div class="field"><label>Port (override)</label>
+                      <input type="number" min="1" max="65535" name="port">
+                    </div>
+                    <div class="field"><label>Verify TLS?</label>
+                      <input type="checkbox" name="verify_tls" value="1">
+                    </div>
+                    <div class="field"><label>Notes (e.g. cnMaestro base URL)</label>
+                      <input type="text" name="cred_notes" maxlength="255">
+                    </div>
+                    <div class="form-actions" style="grid-column:1/-1;">
+                      <button type="submit" class="btn btn-primary btn-sm">Save credentials</button>
+                      <small class="muted">Secrets are encrypted at rest with libsodium. Leave a field blank to keep its existing ciphertext.</small>
+                    </div>
+                  </form>
+                </div>
+              </details>
               <details style="display:inline-block;">
                 <summary class="btn btn-ghost btn-sm">Edit</summary>
                 <form method="post" class="form form-grid" style="margin-top:12px;">

@@ -115,6 +115,16 @@ All paths assume the production install location
 
 # Outage auto-detect / auto-resolve
 * * * * *      /usr/bin/php ~/public_html/bin/detect-outages.php --quiet >> ~/detect-outages.log 2>&1
+
+# Vendor-specific wireless telemetry (AirOS / RouterOS / Cambium / Mimosa)
+* * * * *      /usr/bin/php ~/public_html/bin/poll-wireless.php  --quiet >> ~/poll-wireless.log 2>&1
+
+# Push queued frequency / TX-power / SSID changes to live radios
+* * * * *      /usr/bin/php ~/public_html/bin/apply-wireless-changes.php --quiet >> ~/apply-wireless.log 2>&1
+* * * * *      sleep 30 && /usr/bin/php ~/public_html/bin/apply-wireless-changes.php --quiet >> ~/apply-wireless.log 2>&1
+
+# Nightly cable SNR regression check (catches degrading drops weeks early)
+30 4 * * *     /usr/bin/php ~/public_html/bin/check-cable-snr.php --quiet >> ~/cable-snr.log 2>&1
 ```
 
 Each worker holds a `flock()` on a `data/*.lock` file so a slow run
@@ -167,6 +177,77 @@ Where outages surface:
 
 Customer notifications (SMS / WhatsApp / email) are deferred until
 a gateway is wired in.
+
+## Wireless link management (UISP-equivalent)
+
+The wireless side is a 6-phase build that lives in:
+
+```
+data/migrations/2026_05_03_phase10..13_*.sql   schema
+auth/wireless.php                              shared helpers
+auth/vendors/{airos,routeros,cambium,mimosa}.php   one adapter per vendor
+bin/poll-wireless.php                          telemetry worker (every 60s)
+bin/apply-wireless-changes.php                 push-to-radio worker (every 30s)
+bin/check-cable-snr.php                        nightly cable-degradation alert
+admin/links.php                                grid of every wireless_link
+admin/link-view.php                            UISP-style live link dashboard
+admin/sector-edit.php                          edit + queue freq/power/SSID push
+admin/freq-planner.php                         channel × sector interference matrix
+```
+
+Set `device_key` (32 random bytes, base64) in `data/db.php` before
+saving any device credentials &mdash; secrets are encrypted at rest
+with libsodium and the worker refuses to push if no key is configured:
+
+```bash
+php -r "echo base64_encode(random_bytes(32)).PHP_EOL;"
+```
+
+### Onboarding a new tower
+
+1. Open `/admin/map.php` and drop a marker for the tower (type
+   `tower`). Or use `/admin/sites.php`.
+2. Open `/admin/devices.php` &mdash; "Add device" for each radio:
+   AP, every CPE, the backhaul pair. Set vendor / model / role /
+   `mgmt_ip`.
+3. On the AP row click **Creds** &rarr; pick scheme `https` (AirOS),
+   `api` (RouterOS REST) or `snmpv2` (Cambium / Mimosa), enter
+   credentials, save. Repeat for each CPE.
+4. Open `/admin/sectors.php` &rarr; **Add sector** &rarr; pick the
+   tower, attach the AP device, set band / freq / TX-power / SSID.
+5. Run `php bin/poll-wireless.php --once --verbose` &mdash; the
+   worker will reach every radio, populate `device_health` /
+   `link_health_samples` / `rf_environment_samples` /
+   `ethernet_health`, and auto-create `wireless_links` rows for
+   every station MAC the AP sees.
+6. Open `/admin/links.php` &rarr; click any row &rarr; the live
+   UISP-style dashboard at `/admin/link-view.php` lights up.
+
+Pre-staged installs (CPE not on-air yet) can register a link
+manually on `/admin/links.php` &mdash; the values fill in once the
+station appears.
+
+### Moving a sector to a new frequency
+
+1. `/admin/freq-planner.php` &mdash; the matrix shows every sector
+   row × every 20 MHz channel coloured by 24 h interference. Black
+   outline = current channel; green outline = recommended quietest
+   channel. Click the **Apply recommendation** button to queue.
+2. Or `/admin/sector-edit.php?id=N` &rarr; **Apply to radio** form
+   &rarr; fill in the new frequency / width / TX power, click
+   "Queue change".
+3. The `bin/apply-wireless-changes.php` worker (every 30 s) picks
+   the queued job up. It snapshots the live config, pushes the
+   change to every CPE first (so they follow the AP into the new
+   band), then to the AP.
+4. After the push it waits up to 60 s for telemetry to come back
+   online. If the AP and a majority of CPEs reconverge the job is
+   marked **applied**. If anything is still offline at the deadline
+   the worker reverts every device from its snapshot and opens a
+   sector outage so the NOC sees the rollback in `/admin/outages.php`.
+5. Audit trail in `wireless_change_log` (surfaced in
+   `/admin/audit.php`) and per-sector recent jobs in
+   `/admin/sector-edit.php`.
 
 ## Deploying to the server
 

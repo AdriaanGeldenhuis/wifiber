@@ -13,6 +13,7 @@ $active_key = 'dashboard';
 require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/outages.php';
 require_once __DIR__ . '/../auth/invoices.php';
+require_once __DIR__ . '/../auth/wireless.php';
 
 $pdo = pdo();
 
@@ -66,6 +67,11 @@ foreach ($pdo->query("SELECT type, COUNT(*) c FROM sites WHERE is_active = 1 GRO
 $site_total = array_sum($site_counts);
 
 $sector_count = (int)$pdo->query("SELECT COUNT(*) FROM sectors")->fetchColumn();
+
+/* -------------------------------------------------- wireless links + queue */
+$wl_total       = (int)$pdo->query("SELECT COUNT(*) FROM wireless_links")->fetchColumn();
+$wl_degraded    = wireless_links_degraded_count(50);
+$wl_jobs_queued = wireless_change_jobs_pending_count();
 
 /* -------------------------------------------------- customers */
 
@@ -224,6 +230,24 @@ $last_seen_label = function (?string $when): string {
     <span class="card-label">Sectors</span>
     <div class="card-num"><?= $sector_count ?></div>
     <a href="/admin/sectors.php" class="card-link">Manage sectors &rarr;</a>
+  </div>
+  <div class="portal-card">
+    <span class="card-label">Wireless links</span>
+    <div class="card-num"><?= $wl_total ?></div>
+    <p class="card-sub muted">
+      <?php if ($wl_degraded > 0): ?>
+        <span style="color:#d44;font-weight:600;"><?= $wl_degraded ?> degraded</span> · health &lt; 50
+      <?php else: ?>
+        all healthy
+      <?php endif; ?>
+    </p>
+    <a href="/admin/links.php" class="card-link">Open links &rarr;</a>
+  </div>
+  <div class="portal-card">
+    <span class="card-label">Pending changes</span>
+    <div class="card-num" style="color:<?= $wl_jobs_queued > 0 ? '#e8a814' : 'var(--accent)' ?>;"><?= $wl_jobs_queued ?></div>
+    <p class="card-sub muted">queued or applying</p>
+    <a href="/admin/audit.php?q=wireless" class="card-link">Audit log &rarr;</a>
   </div>
 </div>
 

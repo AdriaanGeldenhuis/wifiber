@@ -9,11 +9,12 @@ $user = require_role('client', '/account/login.php');
 
 $portal = 'account';
 $nav = [
-    ['key' => 'dashboard', 'label' => 'Dashboard',       'href' => '/account/'],
-    ['key' => 'profile',   'label' => 'My profile',      'href' => '/account/profile.php'],
-    ['key' => 'invoices',  'label' => 'Invoices',        'href' => '/account/invoices.php'],
-    ['key' => 'tickets',   'label' => 'Support tickets', 'href' => '/account/tickets.php'],
-    ['key' => 'password',  'label' => 'Change password', 'href' => '/account/password.php'],
+    ['key' => 'dashboard',   'label' => 'Dashboard',       'href' => '/account/'],
+    ['key' => 'link-health', 'label' => 'Link health',     'href' => '/account/link-health.php'],
+    ['key' => 'profile',     'label' => 'My profile',      'href' => '/account/profile.php'],
+    ['key' => 'invoices',    'label' => 'Invoices',        'href' => '/account/invoices.php'],
+    ['key' => 'tickets',     'label' => 'Support tickets', 'href' => '/account/tickets.php'],
+    ['key' => 'password',    'label' => 'Change password', 'href' => '/account/password.php'],
 ];
 
 require __DIR__ . '/../auth/portal-header.php';
