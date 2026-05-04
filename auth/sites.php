@@ -205,3 +205,89 @@ function geocode_address(string $address): ?array {
         'display_name' => (string)($data[0]['display_name'] ?? ''),
     ];
 }
+
+/**
+ * Nominatim free-text search returning up to $limit candidates. Used by
+ * the address autocomplete on the client editor — same rate-limit dance
+ * as geocode_address.
+ */
+function nominatim_search(string $address, int $limit = 5): array {
+    $address = trim($address);
+    if ($address === '' || !function_exists('curl_init')) return [];
+
+    if (!rate_limit_check('nominatim', 1, 1)) {
+        usleep(1100000);
+    }
+
+    $url = 'https://nominatim.openstreetmap.org/search?'
+         . http_build_query([
+             'q'              => $address,
+             'format'         => 'json',
+             'limit'          => max(1, min(10, $limit)),
+             'addressdetails' => 0,
+             'countrycodes'   => 'za',
+         ]);
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_USERAGENT      => 'WiFIBER-admin/1.0 (+https://wifiber.co.za)',
+        CURLOPT_TIMEOUT        => 10,
+        CURLOPT_FOLLOWLOCATION => true,
+    ]);
+    $resp = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($code !== 200 || !$resp) return [];
+    $data = json_decode($resp, true);
+    if (!is_array($data)) return [];
+
+    $out = [];
+    foreach ($data as $row) {
+        if (empty($row['lat']) || empty($row['lon'])) continue;
+        $out[] = [
+            'lat'          => (float)$row['lat'],
+            'lng'          => (float)$row['lon'],
+            'display_name' => (string)($row['display_name'] ?? ''),
+        ];
+    }
+    return $out;
+}
+
+/**
+ * Reverse-geocode a lat/lng to a display name. Used when the admin drops
+ * a pin on the editor map and we want to fill in the address field.
+ */
+function nominatim_reverse(float $lat, float $lng): ?string {
+    if (!function_exists('curl_init')) return null;
+
+    if (!rate_limit_check('nominatim', 1, 1)) {
+        usleep(1100000);
+    }
+
+    $url = 'https://nominatim.openstreetmap.org/reverse?'
+         . http_build_query([
+             'lat'    => $lat,
+             'lon'    => $lng,
+             'format' => 'json',
+             'zoom'   => 18,
+         ]);
+
+    $ch = curl_init($url);
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_USERAGENT      => 'WiFIBER-admin/1.0 (+https://wifiber.co.za)',
+        CURLOPT_TIMEOUT        => 10,
+        CURLOPT_FOLLOWLOCATION => true,
+    ]);
+    $resp = curl_exec($ch);
+    $code = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+
+    if ($code !== 200 || !$resp) return null;
+    $data = json_decode($resp, true);
+    if (!is_array($data) || empty($data['display_name'])) return null;
+
+    return (string)$data['display_name'];
+}

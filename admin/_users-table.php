@@ -7,6 +7,7 @@
  */
 
 require_once __DIR__ . '/../auth/products.php';
+require_once __DIR__ . '/../auth/validators.php';
 
 function render_users_admin(string $role, string $heading, string $subtitle, array $current_user): void {
     $self = strtok($_SERVER['REQUEST_URI'], '?');
@@ -27,6 +28,13 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
             if ($role === 'client' && $surname === '')                       $errors[] = 'Surname is required so we can issue an account number.';
             if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) $errors[] = 'Email is not valid.';
             if (strlen($password) < 8)                                       $errors[] = 'Password must be at least 8 characters.';
+
+            // Normalise phone to E.164 up-front so the new client lands with a
+            // populated phone_e164 column — outage SMS / WhatsApp channels
+            // prefer phone_e164 over the raw phone string.
+            $phone_check = normalize_phone_e164((string)($_POST['phone'] ?? ''));
+            if (!$phone_check['ok']) $errors[] = 'Phone: ' . $phone_check['error'];
+
             $created = null;
             if (!$errors) {
                 try {
@@ -44,12 +52,16 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
                         'surname'       => $surname,
                         'customer_type' => $_POST['customer_type'] ?? 'residential',
                     ]);
-                    if ($product_id > 0 && $created && !empty($created['id'])) {
-                        update_user((int)$created['id'], function (array $u) use ($product_id) {
-                            $u['product_id'] = $product_id;
-                            return $u;
-                        });
-                        $created = find_user_by_id((int)$created['id']) ?? $created;
+                    if ($created && !empty($created['id'])) {
+                        // Backfill phone_e164 (and product_id below) — create_user's
+                        // INSERT only covers the canonical columns.
+                        $patch = [];
+                        if ($phone_check['value'] !== '') $patch['phone_e164'] = $phone_check['value'];
+                        if ($product_id > 0)              $patch['product_id'] = $product_id;
+                        if ($patch) {
+                            update_user((int)$created['id'], fn(array $u) => array_merge($u, $patch));
+                            $created = find_user_by_id((int)$created['id']) ?? $created;
+                        }
                     }
                     $msg = ucfirst($role) . " '{$username}' created";
                     if (!empty($created['account_no'])) {
@@ -173,10 +185,75 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
             header('Location: ' . $self);
             exit;
         }
+
+        if ($action === 'bulk_status' && $role === 'client') {
+            $ids = array_values(array_filter(array_map('intval', (array)($_POST['ids'] ?? []))));
+            $new = (string)($_POST['new_status'] ?? '');
+            if (!in_array($new, CUSTOMER_STATUS, true)) {
+                flash('error', 'Unknown bulk status.');
+            } elseif (!$ids) {
+                flash('error', 'Select at least one client first.');
+            } else {
+                $n = 0;
+                foreach ($ids as $uid) {
+                    if ($uid === (int)$current_user['id']) continue;
+                    if (update_user($uid, fn(array $u) => array_merge($u, ['status' => $new]))) $n++;
+                }
+                audit_log('client.bulk_status', ['target_type' => 'user', 'meta' => ['status' => $new, 'count' => $n]]);
+                flash('success', "Updated $n client" . ($n === 1 ? '' : 's') . " to {$new}.");
+            }
+            header('Location: ' . $self . (parse_url($self, PHP_URL_QUERY) ? '' : ''));
+            exit;
+        }
+
+        if ($action === 'bulk_delete' && $role === 'client') {
+            $ids = array_values(array_filter(array_map('intval', (array)($_POST['ids'] ?? []))));
+            if (!$ids) {
+                flash('error', 'Select at least one client first.');
+            } else {
+                $n = 0;
+                foreach ($ids as $uid) {
+                    if ($uid === (int)$current_user['id']) continue;
+                    if (delete_user($uid)) $n++;
+                }
+                audit_log('client.bulk_delete', ['target_type' => 'user', 'meta' => ['count' => $n]]);
+                flash('success', "Deleted $n client" . ($n === 1 ? '' : 's') . '.');
+            }
+            header('Location: ' . $self);
+            exit;
+        }
     }
 
     $users = array_values(array_filter(load_users(), fn($u) => ($u['role'] ?? '') === $role));
     $is_client_view = ($role === 'client');
+
+    // ---- Filters (clients only) ----
+    $status_filter   = $is_client_view ? trim((string)($_GET['status'] ?? '')) : '';
+    $unplaced_filter = $is_client_view && ($_GET['unplaced'] ?? '') === '1';
+
+    // Pre-compute the unfiltered status histogram so chips show counts.
+    $status_counts = ['' => count($users), 'active' => 0, 'lead' => 0, 'suspended' => 0, 'disconnected' => 0];
+    if ($is_client_view) {
+        foreach ($users as $u) {
+            $s = $u['status'] ?? 'active';
+            if (isset($status_counts[$s])) $status_counts[$s]++;
+        }
+    }
+    $unplaced_count = 0;
+    if ($is_client_view) {
+        foreach ($users as $u) {
+            if (($u['lat'] ?? null) === null || ($u['lng'] ?? null) === null) $unplaced_count++;
+        }
+    }
+
+    if ($is_client_view && $status_filter !== '') {
+        if (in_array($status_filter, CUSTOMER_STATUS, true)) {
+            $users = array_values(array_filter($users, fn($u) => ($u['status'] ?? 'active') === $status_filter));
+        }
+    }
+    if ($unplaced_filter) {
+        $users = array_values(array_filter($users, fn($u) => ($u['lat'] ?? null) === null || ($u['lng'] ?? null) === null));
+    }
 
     // Free-text search across the most useful columns. Case-insensitive
     // substring match — the dataset is small enough not to warrant SQL FTS.
@@ -187,6 +264,7 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
             $hay = mb_strtolower(implode(' ', [
                 $u['username']    ?? '',
                 $u['name']        ?? '',
+                $u['surname']     ?? '',
                 $u['email']       ?? '',
                 $u['phone']       ?? '',
                 $u['account_no']  ?? '',
@@ -196,6 +274,19 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
             return strpos($hay, $needle) !== false;
         }));
     }
+
+    // Helper to keep filter state across links/forms (clients only).
+    $qs_with = function (array $overrides) use ($search, $status_filter, $unplaced_filter): string {
+        $q = array_filter([
+            'q'        => $search ?: null,
+            'status'   => $status_filter ?: null,
+            'unplaced' => $unplaced_filter ? '1' : null,
+        ], fn($v) => $v !== null);
+        foreach ($overrides as $k => $v) {
+            if ($v === null) unset($q[$k]); else $q[$k] = $v;
+        }
+        return $q ? '?' . http_build_query($q) : '?';
+    };
     ?>
     <div class="portal-head">
       <h1><?= htmlspecialchars($heading) ?></h1>
@@ -203,16 +294,69 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
     </div>
 
     <div class="portal-card">
-      <form method="get" class="inline-form" style="margin:0;">
-        <input type="search" name="q" value="<?= htmlspecialchars($search, ENT_QUOTES) ?>" placeholder="Search by name, account, email, phone…" style="flex:1;min-width:200px;">
+      <form method="get" class="inline-form" style="margin:0; flex-wrap:wrap;">
+        <input type="search" name="q" value="<?= htmlspecialchars($search, ENT_QUOTES) ?>" placeholder="Search by name, surname, account, email, phone…" style="flex:1;min-width:200px;">
+        <?php if ($is_client_view && $status_filter !== ''): ?>
+          <input type="hidden" name="status" value="<?= htmlspecialchars($status_filter, ENT_QUOTES) ?>">
+        <?php endif; ?>
+        <?php if ($is_client_view && $unplaced_filter): ?>
+          <input type="hidden" name="unplaced" value="1">
+        <?php endif; ?>
         <button type="submit" class="btn btn-ghost btn-sm">Search</button>
-        <?php if ($search !== ''): ?>
+        <?php if ($search !== '' || $status_filter !== '' || $unplaced_filter): ?>
           <a href="?" class="btn btn-ghost btn-sm">Clear</a>
         <?php endif; ?>
         <?php if ($is_client_view): ?>
-          <a href="?export=csv<?= $search !== '' ? '&q=' . urlencode($search) : '' ?>" class="btn btn-ghost btn-sm">Export CSV</a>
+          <a href="<?= htmlspecialchars($qs_with(['export' => 'csv'])) ?>" class="btn btn-ghost btn-sm">Export CSV</a>
         <?php endif; ?>
       </form>
+
+      <?php if ($is_client_view): ?>
+        <div class="filter-chips" style="margin-top:12px;">
+          <?php
+            $chips = [
+                ''             => ['All', $status_counts['']],
+                'active'       => ['Active', $status_counts['active']],
+                'lead'         => ['Lead', $status_counts['lead']],
+                'suspended'    => ['Suspended', $status_counts['suspended']],
+                'disconnected' => ['Disconnected', $status_counts['disconnected']],
+            ];
+            foreach ($chips as $key => [$label, $count]):
+              $active = $status_filter === $key;
+          ?>
+            <a class="chip<?= $active ? ' is-active' : '' ?>"
+               href="<?= htmlspecialchars($qs_with(['status' => $key === '' ? null : $key])) ?>">
+              <?= htmlspecialchars($label) ?> <span class="chip-count"><?= (int)$count ?></span>
+            </a>
+          <?php endforeach; ?>
+          <a class="chip<?= $unplaced_filter ? ' is-active' : '' ?>"
+             href="<?= htmlspecialchars($qs_with(['unplaced' => $unplaced_filter ? null : '1'])) ?>"
+             title="Clients without lat/lng — won't appear on the network map.">
+            Unplaced <span class="chip-count"><?= (int)$unplaced_count ?></span>
+          </a>
+        </div>
+        <style>
+          .filter-chips { display:flex; gap:6px; flex-wrap:wrap; }
+          .filter-chips .chip {
+            display:inline-flex; align-items:center; gap:6px;
+            padding:4px 10px; border-radius:999px;
+            border:1px solid var(--border); color:var(--text-dim);
+            font-size:12px; text-decoration:none;
+            background:transparent;
+          }
+          .filter-chips .chip:hover { color:var(--text); border-color:var(--border-strong); }
+          .filter-chips .chip.is-active { background:var(--accent-soft); color:var(--accent); border-color:rgba(5,218,253,.4); }
+          .filter-chips .chip-count { font-weight:600; opacity:.7; }
+          .bulk-bar {
+            display:flex; gap:8px; align-items:center; flex-wrap:wrap;
+            padding:8px 12px; background:rgba(5,218,253,.06);
+            border:1px solid rgba(5,218,253,.2); border-radius:var(--radius-sm);
+            margin-bottom:12px; font-size:13px;
+          }
+          .bulk-bar.is-empty { opacity:.5; }
+          .user-row .row-check { margin-right:8px; vertical-align:middle; }
+        </style>
+      <?php endif; ?>
     </div>
 
     <div class="portal-card">
@@ -224,9 +368,42 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
           <p>Use the form below to add the first one. <?= $role === 'client' ? 'A welcome email with login credentials can be sent automatically.' : '' ?></p>
         </div>
       <?php else: ?>
+        <?php if ($is_client_view): ?>
+          <div class="bulk-bar" id="bulk-bar">
+            <label class="inline-check" style="margin:0;">
+              <input type="checkbox" id="bulk-select-all">
+              <span>Select all on page</span>
+            </label>
+            <span id="bulk-selected" class="muted small">0 selected</span>
+            <span style="flex:1;"></span>
+            <span class="muted small">Bulk actions:</span>
+            <?php foreach (['active' => 'Activate', 'suspended' => 'Suspend', 'disconnected' => 'Disconnect', 'lead' => 'Mark lead'] as $k => $lbl): ?>
+              <button type="submit" form="bulk-form" name="action_status_<?= $k ?>" value="<?= $k ?>"
+                      class="btn btn-ghost btn-sm bulk-act"
+                      data-confirm="Set selected clients to <?= htmlspecialchars($lbl, ENT_QUOTES) ?>?">
+                <?= htmlspecialchars($lbl) ?>
+              </button>
+            <?php endforeach; ?>
+            <button type="submit" form="bulk-form" name="action_delete" value="1"
+                    class="btn btn-danger btn-sm bulk-act"
+                    data-confirm="Delete the selected clients? This cannot be undone.">
+              Delete
+            </button>
+          </div>
+          <form id="bulk-form" method="post" style="margin:0;">
+            <?= csrf_field() ?>
+            <input type="hidden" name="action" id="bulk-form-action" value="bulk_status">
+            <input type="hidden" name="new_status" id="bulk-form-status" value="">
+        <?php endif; ?>
         <?php foreach ($users as $u): ?>
           <details class="user-row">
             <summary>
+              <?php if ($is_client_view): ?>
+                <input type="checkbox" class="row-check" name="ids[]" value="<?= (int)$u['id'] ?>"
+                       form="bulk-form"
+                       onclick="event.stopPropagation();"
+                       <?= (int)$u['id'] === (int)$current_user['id'] ? 'disabled title="That\'s you"' : '' ?>>
+              <?php endif; ?>
               <?php if ($is_client_view && !empty($u['account_no'])): ?>
                 <strong><?= htmlspecialchars($u['account_no']) ?></strong>
                 <span class="muted">&middot; <?= htmlspecialchars($u['username']) ?></span>
@@ -239,6 +416,9 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
               <?php endif; ?>
               <?php if ($is_client_view && !empty($u['status']) && $u['status'] !== 'active'): ?>
                 <span class="pkg-pill" style="background:#552;"><?= htmlspecialchars($u['status']) ?></span>
+              <?php endif; ?>
+              <?php if ($is_client_view && (($u['lat'] ?? null) === null || ($u['lng'] ?? null) === null)): ?>
+                <span class="pkg-pill" style="background:#444;" title="No GPS — won't show on the network map.">unplaced</span>
               <?php endif; ?>
               <span class="muted small" style="margin-left:auto;">
                 last login: <?= htmlspecialchars($u['last_login'] ?? 'never') ?>
@@ -323,6 +503,49 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
             </div>
           </details>
         <?php endforeach; ?>
+        <?php if ($is_client_view): ?>
+          </form>
+          <script>
+          (function () {
+            const form     = document.getElementById('bulk-form');
+            const selectAll= document.getElementById('bulk-select-all');
+            const counter  = document.getElementById('bulk-selected');
+            const actInput = document.getElementById('bulk-form-action');
+            const stsInput = document.getElementById('bulk-form-status');
+            if (!form) return;
+
+            const checks = () => Array.from(document.querySelectorAll('.row-check:not([disabled])'));
+            function refresh() {
+              const n = checks().filter(c => c.checked).length;
+              counter.textContent = n + ' selected';
+              document.querySelectorAll('.bulk-act').forEach(b => b.disabled = (n === 0));
+              document.getElementById('bulk-bar').classList.toggle('is-empty', n === 0);
+            }
+            refresh();
+            selectAll && selectAll.addEventListener('change', () => {
+              checks().forEach(c => { c.checked = selectAll.checked; });
+              refresh();
+            });
+            document.addEventListener('change', (e) => {
+              if (e.target.classList && e.target.classList.contains('row-check')) refresh();
+            });
+
+            document.querySelectorAll('.bulk-act').forEach((btn) => {
+              btn.addEventListener('click', (e) => {
+                if (btn.name === 'action_delete') {
+                  actInput.value = 'bulk_delete';
+                  stsInput.value = '';
+                } else if (btn.name && btn.name.indexOf('action_status_') === 0) {
+                  actInput.value = 'bulk_status';
+                  stsInput.value = btn.value;
+                }
+                const msg = btn.getAttribute('data-confirm');
+                if (msg && !confirm(msg)) e.preventDefault();
+              });
+            });
+          })();
+          </script>
+        <?php endif; ?>
       <?php endif; ?>
     </div>
 

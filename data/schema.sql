@@ -271,6 +271,22 @@ CREATE TABLE IF NOT EXISTS audit_log (
   KEY idx_target (target_type, target_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
+CREATE TABLE IF NOT EXISTS client_notes (
+  id          INT UNSIGNED NOT NULL AUTO_INCREMENT,
+  user_id     INT UNSIGNED NOT NULL,
+  author_id   INT UNSIGNED DEFAULT NULL,
+  body        TEXT         NOT NULL,
+  is_pinned   TINYINT(1)   NOT NULL DEFAULT 0,
+  created_at  DATETIME     NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  PRIMARY KEY (id),
+  KEY idx_client_notes_user   (user_id, created_at),
+  KEY idx_client_notes_pinned (user_id, is_pinned, created_at),
+  CONSTRAINT fk_client_notes_user
+    FOREIGN KEY (user_id)   REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_client_notes_author
+    FOREIGN KEY (author_id) REFERENCES users(id) ON DELETE SET NULL
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
 CREATE TABLE IF NOT EXISTS rate_limit (
   bucket      VARCHAR(80)  NOT NULL,
   counter     INT UNSIGNED NOT NULL DEFAULT 0,
@@ -282,6 +298,7 @@ CREATE TABLE IF NOT EXISTS rate_limit (
 CREATE TABLE IF NOT EXISTS devices (
   id            INT UNSIGNED  NOT NULL AUTO_INCREMENT,
   site_id       INT UNSIGNED  DEFAULT NULL,
+  customer_id   INT UNSIGNED  DEFAULT NULL,
   name          VARCHAR(120)  NOT NULL,
   vendor        ENUM('mikrotik','ubiquiti','cambium','mimosa','other') NOT NULL DEFAULT 'other',
   model         VARCHAR(80)   NOT NULL DEFAULT '',
@@ -297,14 +314,17 @@ CREATE TABLE IF NOT EXISTS devices (
   created_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at    DATETIME      NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
-  KEY idx_dev_site   (site_id),
-  KEY idx_dev_status (status),
-  KEY idx_dev_role   (role),
-  KEY idx_dev_vendor (vendor),
-  KEY idx_dev_mac    (mac),
-  KEY idx_dev_serial (serial),
+  KEY idx_dev_site     (site_id),
+  KEY idx_dev_customer (customer_id),
+  KEY idx_dev_status   (status),
+  KEY idx_dev_role     (role),
+  KEY idx_dev_vendor   (vendor),
+  KEY idx_dev_mac      (mac),
+  KEY idx_dev_serial   (serial),
   CONSTRAINT fk_devices_site
-    FOREIGN KEY (site_id) REFERENCES sites(id) ON DELETE SET NULL
+    FOREIGN KEY (site_id)     REFERENCES sites(id) ON DELETE SET NULL,
+  CONSTRAINT fk_devices_customer
+    FOREIGN KEY (customer_id) REFERENCES users(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
 CREATE TABLE IF NOT EXISTS device_health (
