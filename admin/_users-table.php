@@ -594,21 +594,21 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
               <?php endforeach; ?>
             </select>
           </div>
-          <div class="field" style="grid-column:1/-1; position:relative;">
-            <label>Address <span class="muted small">(start typing for suggestions)</span></label>
-            <input type="text" id="new-addr-input" name="address" maxlength="200" autocomplete="off">
-            <div id="new-addr-suggestions" class="addr-suggestions" hidden></div>
-            <input type="hidden" id="new-addr-lat" name="lat" value="">
-            <input type="hidden" id="new-addr-lng" name="lng" value="">
-          </div>
-          <div class="field" style="grid-column:1/-1;">
-            <div id="new-addr-map" class="addr-map" aria-label="Click or drag the pin to set GPS coordinates"></div>
-            <p class="muted small" id="new-addr-hint" style="margin:8px 0 0;">
+          <div class="field" style="grid-column:1/-1;" data-addr-picker="/admin/clients.php">
+            <div style="position:relative;">
+              <label>Address <span class="muted small">(start typing for suggestions)</span></label>
+              <input type="text" id="new-addr-input" name="address" maxlength="200" autocomplete="off" data-addr-input>
+              <div id="new-addr-suggestions" class="addr-suggestions" hidden data-addr-suggestions></div>
+            </div>
+            <input type="hidden" name="lat" data-addr-lat>
+            <input type="hidden" name="lng" data-addr-lng>
+            <div id="new-addr-map" class="addr-map" data-addr-map aria-label="Click or drag the pin to set GPS coordinates"></div>
+            <p class="muted small" data-addr-hint style="margin:8px 0 0;">
               Pick a suggestion, click the map, or drag the pin to set GPS. We'll save it with the client.
             </p>
             <div class="form-actions" style="margin-top:8px; flex-wrap:wrap;">
-              <button type="button" id="new-addr-locate"  class="btn btn-ghost btn-sm">Use my location</button>
-              <button type="button" id="new-addr-reverse" class="btn btn-ghost btn-sm">Fill address from pin</button>
+              <button type="button" class="btn btn-ghost btn-sm" data-addr-locate>Use my location</button>
+              <button type="button" class="btn btn-ghost btn-sm" data-addr-reverse>Fill address from pin</button>
             </div>
           </div>
           <div class="field-check" style="grid-column:1/-1;">
@@ -672,168 +672,7 @@ function render_users_addr_picker_assets(): void {
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
             integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
             crossorigin="anonymous" defer></script>
-    <script defer>
-    (function initNewClientAddrPicker() {
-      if (document.readyState === 'loading') {
-        return document.addEventListener('DOMContentLoaded', initNewClientAddrPicker);
-      }
-      if (typeof L === 'undefined') {
-        return setTimeout(initNewClientAddrPicker, 50);
-      }
-
-      const mapEl     = document.getElementById('new-addr-map');
-      const addrInput = document.getElementById('new-addr-input');
-      const latInput  = document.getElementById('new-addr-lat');
-      const lngInput  = document.getElementById('new-addr-lng');
-      const sugBox    = document.getElementById('new-addr-suggestions');
-      const hint      = document.getElementById('new-addr-hint');
-      const locateBtn = document.getElementById('new-addr-locate');
-      const reverseBtn= document.getElementById('new-addr-reverse');
-      if (!mapEl || !addrInput) return;
-
-      const ENDPOINT = location.pathname; // /admin/clients.php
-      const DEFAULT_CENTER = [-26.7100, 27.8300]; // Vaal Triangle
-
-      const map = L.map(mapEl).setView(DEFAULT_CENTER, 11);
-      L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-        maxZoom: 19,
-        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>',
-      }).addTo(map);
-      setTimeout(() => map.invalidateSize(), 100);
-
-      let marker = null;
-      function setCoords(lat, lng, opts) {
-        opts = opts || {};
-        const ll = [lat, lng];
-        if (marker) {
-          marker.setLatLng(ll);
-        } else {
-          marker = L.marker(ll, { draggable: true }).addTo(map);
-          marker.on('drag dragend', () => {
-            const p = marker.getLatLng();
-            latInput.value = p.lat.toFixed(7);
-            lngInput.value = p.lng.toFixed(7);
-          });
-        }
-        latInput.value = (+lat).toFixed(7);
-        lngInput.value = (+lng).toFixed(7);
-        if (opts.recenter) map.setView(ll, opts.zoom || Math.max(map.getZoom(), 16));
-      }
-      map.on('click', (e) => {
-        setCoords(e.latlng.lat, e.latlng.lng);
-        hint.textContent = 'Pin placed. Click "Fill address from pin" to look up the street.';
-      });
-
-      // ---------- Address autocomplete ----------
-      let sugAbort = null, sugTimer = null, sugResults = [], sugIndex = -1;
-      function clearSug() {
-        sugBox.innerHTML = ''; sugBox.hidden = true;
-        sugResults = []; sugIndex = -1;
-      }
-      function renderSug() {
-        sugBox.innerHTML = sugResults.map((r, i) =>
-          '<div class="addr-suggestion' + (i === sugIndex ? ' is-active' : '') +
-          '" data-i="' + i + '">' + escapeHtml(r.display_name) + '</div>'
-        ).join('');
-        sugBox.hidden = sugResults.length === 0;
-      }
-      function pickSuggestion(i) {
-        const r = sugResults[i];
-        if (!r) return;
-        addrInput.value = r.display_name;
-        setCoords(r.lat, r.lng, { recenter: true });
-        hint.textContent = 'Address picked. Drag the pin if needed.';
-        clearSug();
-      }
-      addrInput.addEventListener('input', () => {
-        clearTimeout(sugTimer);
-        if (sugAbort) sugAbort.abort();
-        const q = addrInput.value.trim();
-        if (q.length < 3) { clearSug(); return; }
-        sugTimer = setTimeout(() => {
-          sugAbort = new AbortController();
-          fetch(ENDPOINT + '?suggest=' + encodeURIComponent(q), {
-            credentials: 'same-origin', signal: sugAbort.signal,
-          })
-            .then(r => r.json())
-            .then(j => {
-              if (!j || !j.ok) return clearSug();
-              sugResults = j.results || [];
-              sugIndex = -1;
-              renderSug();
-            })
-            .catch(() => {});
-        }, 350);
-      });
-      addrInput.addEventListener('keydown', (e) => {
-        if (sugBox.hidden || !sugResults.length) return;
-        if (e.key === 'ArrowDown') {
-          e.preventDefault();
-          sugIndex = (sugIndex + 1) % sugResults.length;
-          renderSug();
-        } else if (e.key === 'ArrowUp') {
-          e.preventDefault();
-          sugIndex = (sugIndex - 1 + sugResults.length) % sugResults.length;
-          renderSug();
-        } else if (e.key === 'Enter' && sugIndex >= 0) {
-          e.preventDefault();
-          pickSuggestion(sugIndex);
-        } else if (e.key === 'Escape') {
-          clearSug();
-        }
-      });
-      addrInput.addEventListener('blur', () => setTimeout(clearSug, 200));
-      sugBox.addEventListener('mousedown', (e) => {
-        const item = e.target.closest('.addr-suggestion');
-        if (item) pickSuggestion(+item.dataset.i);
-      });
-
-      // ---------- Use my location ----------
-      if (locateBtn) {
-        locateBtn.addEventListener('click', () => {
-          if (!navigator.geolocation) {
-            hint.textContent = 'Geolocation not supported in this browser.';
-            return;
-          }
-          hint.textContent = 'Getting your location…';
-          navigator.geolocation.getCurrentPosition(
-            (pos) => {
-              setCoords(pos.coords.latitude, pos.coords.longitude, { recenter: true, zoom: 18 });
-              hint.textContent = 'Located. Click "Fill address from pin" to look up the street.';
-            },
-            (err) => { hint.textContent = 'Could not get location: ' + err.message; },
-            { enableHighAccuracy: true, timeout: 10000 }
-          );
-        });
-      }
-
-      // ---------- Reverse geocode ----------
-      if (reverseBtn) {
-        reverseBtn.addEventListener('click', () => {
-          if (!marker) { hint.textContent = 'Drop a pin on the map first.'; return; }
-          const ll = marker.getLatLng();
-          hint.textContent = 'Looking up address…';
-          fetch(ENDPOINT + '?reverse_lat=' + ll.lat + '&reverse_lng=' + ll.lng, {
-            credentials: 'same-origin',
-          })
-            .then(r => r.json())
-            .then(j => {
-              if (j && j.ok && j.display_name) {
-                addrInput.value = j.display_name;
-                hint.textContent = 'Address filled from pin location.';
-              } else {
-                hint.textContent = 'No address found for that pin.';
-              }
-            })
-            .catch(() => { hint.textContent = 'Address lookup failed.'; });
-        });
-      }
-
-      function escapeHtml(s) {
-        return String(s).replace(/[&<>"']/g, (c) =>
-          ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-      }
-    })();
-    </script>
+    <script src="/assets/js/admin-addr-picker.js" defer></script>
     <?php
 }
+
