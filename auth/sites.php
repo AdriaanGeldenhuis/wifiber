@@ -153,6 +153,210 @@ function site_link_delete(int $id): bool {
     return pdo()->prepare("DELETE FROM site_links WHERE id = ?")->execute([$id]);
 }
 
+/* ---------------------------------------------------- attachments + contacts */
+
+const SITE_ATTACH_DIR    = DATA_DIR . '/site-attachments';
+const SITE_ATTACH_MAX    = 10 * 1024 * 1024; // 10 MB — site photos can be big
+const SITE_ATTACH_TYPES  = [
+    'pdf'  => 'application/pdf',
+    'jpg'  => 'image/jpeg',
+    'jpeg' => 'image/jpeg',
+    'png'  => 'image/png',
+    'webp' => 'image/webp',
+    'gif'  => 'image/gif',
+    'heic' => 'image/heic',
+    'svg'  => 'image/svg+xml',
+    'doc'  => 'application/msword',
+    'docx' => 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'xls'  => 'application/vnd.ms-excel',
+    'xlsx' => 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'txt'  => 'text/plain',
+];
+const SITE_ATTACH_KINDS = ['photo', 'contract', 'deed', 'diagram', 'permit', 'other'];
+const SITE_CONTACT_ROLES = ['landlord', 'key_holder', 'security', 'technical', 'municipal', 'other'];
+
+function site_attachments_for(int $site_id): array {
+    if ($site_id <= 0) return [];
+    $stmt = pdo()->prepare(
+        "SELECT * FROM site_attachments WHERE site_id = ? ORDER BY created_at DESC, id DESC"
+    );
+    $stmt->execute([$site_id]);
+    $rows = $stmt->fetchAll();
+    foreach ($rows as &$r) {
+        $r['id']          = (int)$r['id'];
+        $r['site_id']     = (int)$r['site_id'];
+        $r['file_size']   = (int)$r['file_size'];
+        $r['uploaded_by'] = $r['uploaded_by'] !== null ? (int)$r['uploaded_by'] : null;
+    }
+    return $rows;
+}
+
+function site_attachment_find(int $id): ?array {
+    if ($id <= 0) return null;
+    $stmt = pdo()->prepare("SELECT * FROM site_attachments WHERE id = ? LIMIT 1");
+    $stmt->execute([$id]);
+    $row = $stmt->fetch();
+    return $row ?: null;
+}
+
+function site_attachment_save(int $site_id, ?array $f, string $caption, string $kind, ?int $uploaded_by): int {
+    if ($site_id <= 0) throw new InvalidArgumentException('Site id is required.');
+    if (!$f || !is_array($f) || (int)($f['error'] ?? UPLOAD_ERR_NO_FILE) === UPLOAD_ERR_NO_FILE) {
+        throw new InvalidArgumentException('No file uploaded.');
+    }
+    $err = (int)$f['error'];
+    if ($err !== UPLOAD_ERR_OK) throw new RuntimeException('Upload failed: ' . site_upload_error_msg($err));
+    $size = (int)($f['size'] ?? 0);
+    if ($size <= 0) throw new RuntimeException('Empty file.');
+    if ($size > SITE_ATTACH_MAX) throw new RuntimeException('File is too big (max 10 MB).');
+
+    $orig = (string)($f['name'] ?? 'file');
+    $ext  = strtolower((string)pathinfo($orig, PATHINFO_EXTENSION));
+    if (!isset(SITE_ATTACH_TYPES[$ext])) {
+        throw new RuntimeException('File type ".' . $ext . '" is not allowed. Allowed: ' . implode(', ', array_keys(SITE_ATTACH_TYPES)));
+    }
+    if (!is_dir(SITE_ATTACH_DIR)) @mkdir(SITE_ATTACH_DIR, 0755, true);
+    if (!is_dir(SITE_ATTACH_DIR) || !is_writable(SITE_ATTACH_DIR)) {
+        throw new RuntimeException('Site attachment directory is not writable: ' . SITE_ATTACH_DIR);
+    }
+
+    $rand = bin2hex(random_bytes(8));
+    $base = date('Ymd-His') . '-' . $rand . '.' . $ext;
+    $dest = SITE_ATTACH_DIR . '/' . $base;
+    $tmp  = (string)($f['tmp_name'] ?? '');
+
+    $ok = is_uploaded_file($tmp) ? @move_uploaded_file($tmp, $dest) : @rename($tmp, $dest);
+    if (!$ok) throw new RuntimeException('Could not save the uploaded file.');
+    @chmod($dest, 0644);
+
+    $kind = in_array($kind, SITE_ATTACH_KINDS, true) ? $kind : 'other';
+
+    $stmt = pdo()->prepare(
+        "INSERT INTO site_attachments
+            (site_id, kind, file_path, file_name, file_size, mime, caption, uploaded_by)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    );
+    $stmt->execute([
+        $site_id, $kind, $base, mb_substr($orig, 0, 255), $size,
+        SITE_ATTACH_TYPES[$ext], mb_substr($caption, 0, 255), $uploaded_by,
+    ]);
+    return (int)pdo()->lastInsertId();
+}
+
+function site_attachment_delete(int $id): bool {
+    $a = site_attachment_find($id);
+    if (!$a) return false;
+    $full = site_attachment_full_path((string)$a['file_path']);
+    if ($full) @unlink($full);
+    return pdo()->prepare("DELETE FROM site_attachments WHERE id = ?")->execute([$id]);
+}
+
+function site_attachment_full_path(string $relative): ?string {
+    if ($relative === '' || strpos($relative, '/') !== false || strpos($relative, '\\') !== false || strpos($relative, '..') !== false) {
+        return null;
+    }
+    $full = SITE_ATTACH_DIR . '/' . $relative;
+    return is_file($full) ? $full : null;
+}
+
+function site_attachment_stream(array $attachment): void {
+    $rel  = (string)($attachment['file_path'] ?? '');
+    $full = site_attachment_full_path($rel);
+    if (!$full) {
+        http_response_code(404);
+        die('Attachment not found.');
+    }
+    $name = (string)($attachment['file_name'] ?? basename($rel));
+    $mime = (string)($attachment['mime'] ?? 'application/octet-stream');
+    $disp = str_starts_with($mime, 'image/') || $mime === 'application/pdf' ? 'inline' : 'attachment';
+    header('Content-Type: ' . $mime);
+    header('Content-Length: ' . filesize($full));
+    header('Content-Disposition: ' . $disp . '; filename="' . str_replace('"', '', $name) . '"');
+    header('X-Content-Type-Options: nosniff');
+    header('Cache-Control: private, max-age=300');
+    readfile($full);
+    exit;
+}
+
+function site_upload_error_msg(int $code): string {
+    switch ($code) {
+        case UPLOAD_ERR_INI_SIZE:
+        case UPLOAD_ERR_FORM_SIZE:  return 'file is bigger than the server allows';
+        case UPLOAD_ERR_PARTIAL:    return 'upload was interrupted';
+        case UPLOAD_ERR_NO_TMP_DIR: return 'server has no temp directory';
+        case UPLOAD_ERR_CANT_WRITE: return 'server could not write the file';
+        case UPLOAD_ERR_EXTENSION:  return 'a PHP extension blocked the upload';
+        default: return 'unknown error (' . $code . ')';
+    }
+}
+
+/* ---------------------------------------------------------------- contacts */
+
+function site_contacts_for(int $site_id): array {
+    if ($site_id <= 0) return [];
+    $stmt = pdo()->prepare(
+        "SELECT * FROM site_contacts
+          WHERE site_id = ?
+          ORDER BY is_primary DESC, role ASC, name ASC"
+    );
+    $stmt->execute([$site_id]);
+    $rows = $stmt->fetchAll();
+    foreach ($rows as &$r) {
+        $r['id']         = (int)$r['id'];
+        $r['site_id']    = (int)$r['site_id'];
+        $r['is_primary'] = !empty($r['is_primary']);
+    }
+    return $rows;
+}
+
+function site_contact_find(int $id): ?array {
+    if ($id <= 0) return null;
+    $stmt = pdo()->prepare("SELECT * FROM site_contacts WHERE id = ? LIMIT 1");
+    $stmt->execute([$id]);
+    $row = $stmt->fetch();
+    return $row ?: null;
+}
+
+function site_contact_save(array $data, ?int $id = null): int {
+    $site_id = (int)($data['site_id'] ?? 0);
+    if ($site_id <= 0) throw new InvalidArgumentException('Site is required.');
+    if (!site_find($site_id))    throw new InvalidArgumentException('Site not found.');
+
+    $role  = in_array($data['role'] ?? '', SITE_CONTACT_ROLES, true) ? $data['role'] : 'other';
+    $name  = trim((string)($data['name']  ?? ''));
+    $phone = trim((string)($data['phone'] ?? ''));
+    $email = trim((string)($data['email'] ?? ''));
+    $notes = trim((string)($data['notes'] ?? '')) ?: null;
+    $is_primary = !empty($data['is_primary']) ? 1 : 0;
+
+    if ($name === '') throw new InvalidArgumentException('Contact name is required.');
+
+    // Only one primary per site — flip everyone else off when this one
+    // claims the slot.
+    if ($is_primary) {
+        $clr = pdo()->prepare("UPDATE site_contacts SET is_primary = 0 WHERE site_id = ?");
+        $clr->execute([$site_id]);
+    }
+
+    if ($id) {
+        pdo()->prepare(
+            "UPDATE site_contacts
+                SET site_id=?, role=?, name=?, phone=?, email=?, notes=?, is_primary=?
+              WHERE id=?"
+        )->execute([$site_id, $role, $name, $phone, $email, $notes, $is_primary, $id]);
+        return $id;
+    }
+    pdo()->prepare(
+        "INSERT INTO site_contacts (site_id, role, name, phone, email, notes, is_primary)
+         VALUES (?, ?, ?, ?, ?, ?, ?)"
+    )->execute([$site_id, $role, $name, $phone, $email, $notes, $is_primary]);
+    return (int)pdo()->lastInsertId();
+}
+
+function site_contact_delete(int $id): bool {
+    return pdo()->prepare("DELETE FROM site_contacts WHERE id = ?")->execute([$id]);
+}
+
 /**
  * site_links joined to both endpoint sites, with great-circle distance
  * between them in km. Used by /admin/links.php's backbone section so the

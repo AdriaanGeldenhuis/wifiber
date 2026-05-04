@@ -88,7 +88,8 @@ $site_label = function (?int $id) use ($sites): string {
 
 <div class="portal-head">
   <h1>Sites</h1>
-  <p class="portal-sub">Towers, AP poles, PTP endpoints and PoPs. Drag-edit on <a href="/admin/map.php">the map</a>; bulk-edit here.</p>
+  <p class="portal-sub">Towers, AP poles, PTP endpoints and PoPs. Drag-edit on <a href="/admin/map.php">the map</a>; bulk-edit here.
+    &nbsp;·&nbsp; <a href="/admin/sites-import.php">Bulk import CSV</a></p>
 </div>
 
 <div class="portal-card">
@@ -143,7 +144,8 @@ $site_label = function (?int $id) use ($sites): string {
             <td><?= (int)($device_counts[$s['id']] ?? 0) ?></td>
             <td><?= $s['is_active'] ? '✓' : '<span class="muted">—</span>' ?></td>
             <td>
-              <details>
+              <a href="/admin/site-view.php?id=<?= (int)$s['id'] ?>" class="btn btn-ghost btn-sm">View</a>
+              <details style="display:inline-block;">
                 <summary class="btn btn-ghost btn-sm">Edit</summary>
                 <form method="post" class="form form-grid" style="margin-top:12px;">
                   <?= csrf_field() ?>
