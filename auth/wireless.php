@@ -728,14 +728,19 @@ function linreg_slope(array $points, string $tk = 't', string $vk = 'v'): array 
  * Great-circle distance in km between two lat/lng pairs.
  * Used by the polling worker to backfill wireless_links.distance_km
  * when both AP and CPE devices have a site_id with coordinates set.
+ *
+ * Guarded with function_exists because auth/sites.php declares an
+ * identical helper, and any include order needs to be safe.
  */
-function haversine_km(float $lat1, float $lng1, float $lat2, float $lng2): float {
-    $r = 6371.0088;
-    $dlat = deg2rad($lat2 - $lat1);
-    $dlng = deg2rad($lng2 - $lng1);
-    $a = sin($dlat / 2) ** 2
-       + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($dlng / 2) ** 2;
-    return 2 * $r * asin(min(1.0, sqrt($a)));
+if (!function_exists('haversine_km')) {
+    function haversine_km(float $lat1, float $lng1, float $lat2, float $lng2): float {
+        $r = 6371.0088;
+        $dlat = deg2rad($lat2 - $lat1);
+        $dlng = deg2rad($lng2 - $lng1);
+        $a = sin($dlat / 2) ** 2
+           + cos(deg2rad($lat1)) * cos(deg2rad($lat2)) * sin($dlng / 2) ** 2;
+        return 2 * $r * asin(min(1.0, sqrt($a)));
+    }
 }
 
 function distance_between_devices_km(int $a_device_id, int $b_device_id): ?float {
