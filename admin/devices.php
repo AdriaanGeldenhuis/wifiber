@@ -194,6 +194,87 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $reply_w(true, 'Wireless poll triggered. Refresh in a few seconds for telemetry.');
     }
 
+    if ($action === 'test_credentials') {
+        // Synchronous "does this credential actually work?" check —
+        // calls the vendor adapter's poll function in-process and
+        // records the auth attempt on the credential row. Always
+        // returns JSON so the inline JS can flash the result without a
+        // page reload.
+        while (ob_get_level() > 0) ob_end_clean();
+        header('Content-Type: application/json');
+
+        $cred_id = (int)($_POST['cred_id'] ?? 0);
+        if ($cred_id <= 0) { echo json_encode(['ok' => false, 'message' => 'Missing credential id.']); exit; }
+
+        $stmt = pdo()->prepare("SELECT * FROM device_credentials WHERE id = ? LIMIT 1");
+        $stmt->execute([$cred_id]);
+        $row = $stmt->fetch();
+        if (!$row) { echo json_encode(['ok' => false, 'message' => 'Credential not found.']); exit; }
+
+        $device = device_find((int)$row['device_id']);
+        if (!$device || trim((string)$device['mgmt_ip']) === '') {
+            echo json_encode(['ok' => false, 'message' => 'Device has no management IP.']);
+            exit;
+        }
+        if (device_secret_key() === null) {
+            echo json_encode(['ok' => false, 'message' => 'No device_key configured — cannot decrypt.']);
+            exit;
+        }
+        $cred = device_credentials_unlock($row);
+        if (!$cred) {
+            echo json_encode(['ok' => false, 'message' => 'Could not decrypt credential.']);
+            exit;
+        }
+
+        // Pick the right adapter. We deliberately call the poll function
+        // (not snapshot) — every vendor has it, and if poll comes back
+        // with telemetry then auth definitely worked.
+        $vendor_map = [
+            'ubiquiti' => ['airos_poll_device',    __DIR__ . '/../auth/vendors/airos.php'],
+            'mikrotik' => ['routeros_poll_device', __DIR__ . '/../auth/vendors/routeros.php'],
+            'cambium'  => ['cambium_poll_device',  __DIR__ . '/../auth/vendors/cambium.php'],
+            'mimosa'   => ['mimosa_poll_device',   __DIR__ . '/../auth/vendors/mimosa.php'],
+        ];
+        $entry = $vendor_map[$device['vendor']] ?? null;
+        if (!$entry) {
+            echo json_encode(['ok' => false, 'message' => 'Vendor "' . $device['vendor'] . '" has no poll adapter.']);
+            exit;
+        }
+        [$vendor_fn, $vendor_file] = $entry;
+        if (!function_exists($vendor_fn) && is_file($vendor_file)) {
+            require_once $vendor_file;
+        }
+        if (!function_exists($vendor_fn)) {
+            echo json_encode(['ok' => false, 'message' => 'Adapter file missing: ' . basename($vendor_file)]);
+            exit;
+        }
+
+        $start = microtime(true);
+        try {
+            $result = $vendor_fn($device, $cred);
+        } catch (Throwable $e) {
+            $result = ['ok' => false, 'error' => $e->getMessage()];
+        }
+        $ms = (int)round((microtime(true) - $start) * 1000);
+
+        $ok  = !empty($result['ok']);
+        $err = (string)($result['error'] ?? ($ok ? '' : 'unspecified failure'));
+        device_credentials_record_attempt($cred_id, $ok, $err);
+        audit_log('device.credentials_tested', [
+            'target_type' => 'device', 'target_id' => (int)$device['id'],
+            'meta' => ['scheme' => $row['scheme'], 'ok' => $ok, 'ms' => $ms, 'err' => mb_substr($err, 0, 200)],
+        ]);
+
+        echo json_encode([
+            'ok'      => $ok,
+            'message' => $ok
+                ? sprintf('Auth OK on %s in %d ms.', $device['name'], $ms)
+                : sprintf('Auth FAILED on %s — %s', $device['name'], $err),
+            'ms'      => $ms,
+        ]);
+        exit;
+    }
+
     if ($action === 'ping_now') {
         $id = (int)($_POST['id'] ?? 0);
         $d  = $id ? device_find($id) : null;
@@ -237,6 +318,34 @@ $filters = [
 $devices = devices_all($filters);
 $sites   = sites_all(false);
 
+// Pre-load firmware_eol rows so the per-device matcher doesn't hit the
+// DB N times. Pattern matching happens in PHP — same LIKE semantics as
+// device_firmware_eol_status() but loop-once instead of per-row.
+$eol_rows = pdo()->query(
+    "SELECT * FROM firmware_eol ORDER BY FIELD(severity,'critical','warn','info'), eol_date ASC"
+)->fetchAll();
+
+$eol_for_device = function (array $d) use ($eol_rows): ?array {
+    if (empty($d['firmware'])) return null;
+    foreach ($eol_rows as $r) {
+        if ($r['vendor'] !== $d['vendor']) continue;
+        $mod = (string)($d['model'] ?? '');
+        $fw  = (string)$d['firmware'];
+        // Re-implement SQL LIKE with anchors. % → .*, _ → . (escaped
+        // so a literal '.' in firmware doesn't act as a wildcard).
+        $mp  = '/^' . str_replace(['%', '_'], ['.*', '.'], preg_quote((string)$r['model_match'], '/')) . '$/i';
+        $vp  = '/^' . str_replace(['%', '_'], ['.*', '.'], preg_quote((string)$r['version_match'], '/')) . '$/i';
+        if (@preg_match($mp, $mod) === 1 && @preg_match($vp, $fw) === 1) {
+            return $r;
+        }
+    }
+    return null;
+};
+
+// MAC conflict sweep — surface duplicates the legacy data may already
+// have. Save-time check stops new ones from sneaking in.
+$mac_conflicts = device_mac_conflicts_all();
+
 $site_label = function (?int $id) use ($sites): string {
     if (!$id) return '—';
     foreach ($sites as $s) if ((int)$s['id'] === $id) return $s['name'];
@@ -254,8 +363,35 @@ $status_pill = function (string $status): string {
 
 <div class="portal-head">
   <h1>Devices</h1>
-  <p class="portal-sub">Network gear inventory — APs, CPEs, routers, switches, backhaul radios. Live status comes online in Phase&nbsp;3 once the polling worker is wired up.</p>
+  <p class="portal-sub">Network gear inventory — APs, CPEs, routers, switches, backhaul radios.
+    &nbsp;·&nbsp; <a href="/admin/devices-import.php">Bulk import CSV</a></p>
 </div>
+
+<?php if ($mac_conflicts): ?>
+<div class="portal-card" style="border-color:var(--danger);background:rgba(220,68,68,.06);">
+  <h2 style="color:var(--danger);">⚠ Duplicate MAC addresses (<?= count($mac_conflicts) ?>)</h2>
+  <p>These MACs are claimed by more than one device. Save-time check now blocks new collisions, but legacy rows below need cleaning up by hand.</p>
+  <div class="table-scroll">
+  <table class="data-table">
+    <thead><tr><th>MAC</th><th>Devices</th></tr></thead>
+    <tbody>
+      <?php foreach ($mac_conflicts as $mac => $group): ?>
+        <tr>
+          <td><code><?= htmlspecialchars($mac) ?></code></td>
+          <td>
+            <?php foreach ($group as $g): ?>
+              <a href="/admin/device-view.php?id=<?= (int)$g['id'] ?>"><?= htmlspecialchars($g['name']) ?></a>
+              <small class="muted">(<?= htmlspecialchars($g['vendor']) ?><?= $g['model'] ? ' ' . htmlspecialchars($g['model']) : '' ?><?= $g['mgmt_ip'] ? ' · ' . htmlspecialchars($g['mgmt_ip']) : '' ?>)</small>
+              &nbsp;
+            <?php endforeach; ?>
+          </td>
+        </tr>
+      <?php endforeach; ?>
+    </tbody>
+  </table>
+  </div>
+</div>
+<?php endif; ?>
 
 <div class="portal-card" id="discover">
   <h2>Discover radios on a subnet</h2>
@@ -369,7 +505,14 @@ $status_pill = function (string $status): string {
               <?= $d['mac'] ? '<small><code>' . htmlspecialchars($d['mac']) . '</code></small><br>' : '' ?>
               <?= $d['mgmt_ip'] ? '<small>' . htmlspecialchars($d['mgmt_ip']) . ($d['mgmt_port'] ? ':' . (int)$d['mgmt_port'] : '') . '</small>' : '<small class="muted">—</small>' ?>
             </td>
-            <td><small<?= $d['firmware'] ? '' : ' class="muted"' ?>><?= $d['firmware'] ? htmlspecialchars($d['firmware']) : '—' ?></small></td>
+            <td>
+              <small<?= $d['firmware'] ? '' : ' class="muted"' ?>><?= $d['firmware'] ? htmlspecialchars($d['firmware']) : '—' ?></small>
+              <?php $eol = $eol_for_device($d); if ($eol):
+                $sev_color = ['critical' => '#d44', 'warn' => '#fa0', 'info' => '#888'][$eol['severity']] ?? '#888'; ?>
+                <br><span style="display:inline-block;background:<?= $sev_color ?>;color:#fff;padding:1px 6px;border-radius:6px;font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;"
+                       title="<?= htmlspecialchars($eol['notes'], ENT_QUOTES) ?><?= $eol['eol_date'] ? ' · EOL ' . htmlspecialchars($eol['eol_date']) : '' ?><?= $eol['eos_date'] ? ' · EOS ' . htmlspecialchars($eol['eos_date']) : '' ?>"><?= htmlspecialchars($eol['severity']) ?> EOL</span>
+              <?php endif; ?>
+            </td>
             <td data-device-status="<?= (int)$d['id'] ?>"><?= $status_pill($d['status']) ?></td>
             <td><small class="muted" data-device-lastseen="<?= (int)$d['id'] ?>"><?= $d['last_seen_at'] ? htmlspecialchars($d['last_seen_at']) : 'never' ?></small></td>
             <td>
@@ -401,6 +544,7 @@ $status_pill = function (string $status): string {
                           <td><small><?= htmlspecialchars((string)($c['last_auth_ok_at'] ?? 'never')) ?></small></td>
                           <td><?= (int)$c['consecutive_fails'] ?></td>
                           <td>
+                            <button type="button" class="btn btn-ghost btn-sm" data-test-cred="<?= (int)$c['id'] ?>" title="Run the vendor adapter against this device using these credentials. Synchronous — wait for result.">Test</button>
                             <form method="post" class="inline-form" data-confirm="Delete <?= htmlspecialchars($c['scheme'], ENT_QUOTES) ?> credentials?">
                               <?= csrf_field() ?>
                               <input type="hidden" name="action" value="delete_credentials">
@@ -634,6 +778,37 @@ $status_pill = function (string $status): string {
     } catch (err) {
       btn.disabled = false;
       btn.classList.remove('is-loading');
+      window.toast && window.toast('Network error', 'error');
+    }
+  });
+})();
+
+// AJAX credential test — talks to the vendor adapter synchronously and
+// reports whether auth worked. Updates the cred row's "Last OK" /
+// "Fails" cells on success.
+(function () {
+  document.addEventListener('click', async function (e) {
+    var btn = e.target.closest('[data-test-cred]');
+    if (!btn) return;
+    e.preventDefault();
+    var credId = btn.dataset.testCred;
+    var token = (document.querySelector('meta[name="csrf-token"]') || {}).content;
+    btn.disabled = true;
+    var origText = btn.textContent;
+    btn.textContent = 'Testing…';
+    var fd = new FormData();
+    fd.append('action',  'test_credentials');
+    fd.append('cred_id', credId);
+    fd.append('_csrf',   token || '');
+    try {
+      var res = await fetch('/admin/devices.php', { method: 'POST', body: fd, credentials: 'same-origin' });
+      var j = await res.json();
+      btn.disabled = false;
+      btn.textContent = origText;
+      window.toast && window.toast(j.message || (j.ok ? 'OK' : 'Failed'), j.ok ? 'success' : 'error', 6000);
+    } catch (err) {
+      btn.disabled = false;
+      btn.textContent = origText;
       window.toast && window.toast('Network error', 'error');
     }
   });

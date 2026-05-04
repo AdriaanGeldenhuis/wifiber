@@ -111,6 +111,35 @@ $towers  = array_values(array_filter(sites_all(false), fn($s) => $s['type'] === 
 $ap_devices = devices_all(['role' => 'ap']);
 $all_devices = devices_all();
 
+// One-pass overlap detection across the whole inventory. Doing it here
+// instead of calling sectors_overlap_check() per row means O(n²) in
+// PHP rather than O(n²) round-trips to MySQL — fine for thousands of
+// sectors. Only sectors with both freq + width set can overlap.
+$overlap_count = [];
+foreach ($sectors as $a) {
+    if (!$a['frequency_mhz'] || !$a['channel_width_mhz']) continue;
+    foreach ($sectors as $b) {
+        if ($a['id'] === $b['id']) continue;
+        if ($a['band'] !== $b['band']) continue;
+        if (!$b['frequency_mhz'] || !$b['channel_width_mhz']) continue;
+        $sep  = abs((int)$a['frequency_mhz'] - (int)$b['frequency_mhz']);
+        $half = ((int)$a['channel_width_mhz'] + (int)$b['channel_width_mhz']) / 2.0;
+        if ($half - $sep <= 0) continue;
+        // Tower distance gate — same SECTOR_OVERLAP_DISTANCE_KM threshold
+        // as sectors_overlap_check(). Look up tower lat/lng from the
+        // already-loaded $towers list so this stays in-process.
+        $ta = $tb = null;
+        foreach ($towers as $t) {
+            if ((int)$t['id'] === (int)$a['tower_id']) $ta = $t;
+            if ((int)$t['id'] === (int)$b['tower_id']) $tb = $t;
+        }
+        if (!$ta || !$tb) continue;
+        $km = haversine_km((float)$ta['lat'], (float)$ta['lng'], (float)$tb['lat'], (float)$tb['lng']);
+        if ($km > SECTOR_OVERLAP_DISTANCE_KM) continue;
+        $overlap_count[(int)$a['id']] = ($overlap_count[(int)$a['id']] ?? 0) + 1;
+    }
+}
+
 $tower_label = function (int $id) use ($towers): string {
     foreach ($towers as $t) if ((int)$t['id'] === $id) return $t['name'];
     return '#' . $id;
@@ -200,7 +229,12 @@ $device_label = function (?int $id) use ($all_devices): string {
         <?php foreach ($sectors as $s): ?>
           <tr>
             <td><input type="checkbox" name="sector_ids[]" value="<?= (int)$s['id'] ?>"></td>
-            <td><strong><?= htmlspecialchars($s['name']) ?></strong></td>
+            <td><strong><?= htmlspecialchars($s['name']) ?></strong>
+              <?php if (!empty($overlap_count[(int)$s['id']])): ?>
+                <br><span title="Co-channel overlap with neighbour sectors — open the sector to investigate."
+                         style="display:inline-block;background:#f97316;color:#fff;padding:1px 7px;border-radius:6px;font-size:10px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;margin-top:4px;">⚠ <?= (int)$overlap_count[(int)$s['id']] ?> overlap</span>
+              <?php endif; ?>
+            </td>
             <td><?= htmlspecialchars($s['tower_name'] ?? $tower_label((int)$s['tower_id'])) ?></td>
             <td>
               <?php if ($s['ap_device_id']):

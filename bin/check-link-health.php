@@ -46,20 +46,22 @@ require __DIR__ . '/../auth/tickets.php';
 require __DIR__ . '/../auth/notifications.php';
 
 $opts = [
-    'quiet'            => false,
-    'dry-run'          => false,
-    'signal-drop-db'   => 6,
-    'budget-margin-db' => 8,
-    'capacity-pct'     => 80,
-    'window-days'      => 7,
+    'quiet'             => false,
+    'dry-run'           => false,
+    'signal-drop-db'    => 6,
+    'budget-margin-db'  => 8,
+    'fresnel-margin-db' => 15,   // Phase 25 — significantly worse than budget = likely path obstruction.
+    'capacity-pct'      => 80,
+    'window-days'       => 7,
 ];
 foreach ($argv as $a) {
     if      ($a === '--quiet')   $opts['quiet']   = true;
     elseif  ($a === '--dry-run') $opts['dry-run'] = true;
-    elseif  (preg_match('/^--signal-drop-db=(\d+)$/', $a, $m))   $opts['signal-drop-db']   = max(1, min(40, (int)$m[1]));
-    elseif  (preg_match('/^--budget-margin-db=(\d+)$/', $a, $m)) $opts['budget-margin-db'] = max(1, min(40, (int)$m[1]));
-    elseif  (preg_match('/^--capacity-pct=(\d+)$/', $a, $m))     $opts['capacity-pct']     = max(50, min(99, (int)$m[1]));
-    elseif  (preg_match('/^--window-days=(\d+)$/', $a, $m))      $opts['window-days']      = max(2, min(60, (int)$m[1]));
+    elseif  (preg_match('/^--signal-drop-db=(\d+)$/', $a, $m))    $opts['signal-drop-db']    = max(1, min(40, (int)$m[1]));
+    elseif  (preg_match('/^--budget-margin-db=(\d+)$/', $a, $m))  $opts['budget-margin-db']  = max(1, min(40, (int)$m[1]));
+    elseif  (preg_match('/^--fresnel-margin-db=(\d+)$/', $a, $m)) $opts['fresnel-margin-db'] = max(8, min(50, (int)$m[1]));
+    elseif  (preg_match('/^--capacity-pct=(\d+)$/', $a, $m))      $opts['capacity-pct']      = max(50, min(99, (int)$m[1]));
+    elseif  (preg_match('/^--window-days=(\d+)$/', $a, $m))       $opts['window-days']       = max(2, min(60, (int)$m[1]));
 }
 
 $pdo = pdo();
@@ -133,6 +135,29 @@ foreach ($links as $link) {
         } else {
             $resolved += _link_alert_resolve($link_id, 'link_budget', $opts['dry-run']);
         }
+
+        /* ---------- 2b. Fresnel-zone obstruction ----------
+           When the shortfall is very large (default ≥15 dB) on a link
+           where everything else looks good, the most likely culprit is
+           a physical obstruction in the Fresnel zone — trees, buildings,
+           a new pole someone put up. Same shortfall + same baseline as
+           link_budget but a separate alert kind so the NOC can prioritise
+           "send a climber" vs "tweak settings". */
+        if ($shortfall >= $opts['fresnel-margin-db']) {
+            $r60_m = 0.6 * 8.657
+                   * sqrt((float)$link['distance_km']
+                        / max(0.01, (float)$link['frequency_mhz'] / 1000.0));
+            $notes = sprintf(
+                'Severe shortfall (%.1f dB) — likely Fresnel obstruction. Recommended ≥60%% clearance: %.1f m at midpoint over %.2f km @ %d MHz.',
+                $shortfall, $r60_m, (float)$link['distance_km'], (int)$link['frequency_mhz']
+            );
+            _link_alert_open($link, 'fresnel_blocked',
+                $shortfall > 25 ? 'crit' : 'warn',
+                $measured, $budget_dBm, $notes, $opts['dry-run']);
+            $opened++;
+        } else {
+            $resolved += _link_alert_resolve($link_id, 'fresnel_blocked', $opts['dry-run']);
+        }
     }
 
     /* ---------- 3. Capacity saturation ---------- */
@@ -196,10 +221,11 @@ function _link_alert_open(array $link, string $kind, string $severity,
     ]);
 
     // Open a customer ticket for the link-affecting kinds, page the NOC.
-    if (in_array($kind, ['signal_drop', 'link_budget'], true) && !empty($link['customer_id'])) {
+    if (in_array($kind, ['signal_drop', 'link_budget', 'fresnel_blocked'], true) && !empty($link['customer_id'])) {
         $subj = match ($kind) {
-            'signal_drop' => 'Signal degradation on your wireless link',
-            'link_budget' => 'Wireless link underperforming budget',
+            'signal_drop'     => 'Signal degradation on your wireless link',
+            'link_budget'     => 'Wireless link underperforming budget',
+            'fresnel_blocked' => 'Path obstruction suspected on your wireless link',
         };
         $body = $notes . "\n\nLink: " . ($link['ap_name'] ?? '?') . ' → '
               . ($link['cpe_name'] ?? '?') . "\nA technician will be in touch.";

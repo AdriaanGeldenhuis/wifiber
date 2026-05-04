@@ -124,6 +124,20 @@ $devices  = devices_all();
 $ap_devs  = array_values(array_filter($devices, fn ($d) => in_array($d['role'], ['ap', 'backhaul'], true)));
 $jobs     = wireless_change_jobs_recent(['scope' => 'sector', 'scope_id' => $id], 20);
 
+// Phase 24 analytics — overlap detector, throughput trend, outage
+// history, capacity forecast. All cheap (single query each, on
+// indexed columns) so safe to load on every page render.
+$overlaps        = sectors_overlap_check($id);
+$throughput_24h  = sector_throughput_history($id, 24);
+$outage_history  = sector_outage_history($id, 90, 20);
+$capacity        = sector_capacity_forecast($id, 90);
+
+// Live customer count — sectors_all() backfills this, but we hit
+// sector_find() here which doesn't, so do a one-row count.
+$cnt_stmt = pdo()->prepare("SELECT COUNT(*) FROM users WHERE role='client' AND sector_id = ?");
+$cnt_stmt->execute([$id]);
+$customer_count = (int)$cnt_stmt->fetchColumn();
+
 $h = fn ($v) => htmlspecialchars((string)$v, ENT_QUOTES);
 
 $status_pill = function (string $s): string {
@@ -146,9 +160,237 @@ $status_pill = function (string $s): string {
     &nbsp;·&nbsp;
     Band: <strong><?= $h($sector['band']) ?></strong>
     &nbsp;·&nbsp;
-    Customers: <strong><?= isset($sector['customer_count']) ? (int)$sector['customer_count'] : '?' ?></strong>
+    Customers: <strong><?= $customer_count ?><?= $sector['max_clients'] ? ' / ' . (int)$sector['max_clients'] : '' ?></strong>
   </p>
 </div>
+
+<?php
+// SVG cone preview — purely declarative, no JS. Anchored on a 240×240
+// canvas, sector cone drawn from the centre (tower) outward to a
+// configurable range. Helps operators sanity-check azimuth + beamwidth
+// without bouncing to /admin/map.php.
+$svg_size  = 240;
+$svg_centre = $svg_size / 2;
+$svg_radius = $svg_size / 2 - 12;
+$az = $sector['azimuth_deg']   !== null ? (int)$sector['azimuth_deg']   : null;
+$bw = $sector['beamwidth_deg'] !== null ? (int)$sector['beamwidth_deg'] : 60;
+$cone_path = '';
+if ($az !== null) {
+    $half  = $bw / 2.0;
+    // SVG y-axis points down; bearings are clockwise from north so
+    // angle 0 → straight up (centre.x, 0), 90 → right.
+    $start_deg = $az - $half - 90; // shift so 0° points "up"
+    $end_deg   = $az + $half - 90;
+    $start_x = $svg_centre + $svg_radius * cos(deg2rad($start_deg));
+    $start_y = $svg_centre + $svg_radius * sin(deg2rad($start_deg));
+    $end_x   = $svg_centre + $svg_radius * cos(deg2rad($end_deg));
+    $end_y   = $svg_centre + $svg_radius * sin(deg2rad($end_deg));
+    $large   = $bw > 180 ? 1 : 0;
+    $cone_path = "M{$svg_centre},{$svg_centre} L{$start_x},{$start_y} "
+               . "A{$svg_radius},{$svg_radius} 0 {$large} 1 {$end_x},{$end_y} Z";
+}
+?>
+
+<div class="portal-card" style="display:grid;grid-template-columns:auto 1fr;gap:24px;align-items:start;">
+  <!-- Left: SVG cone preview -->
+  <div>
+    <h3 style="margin-top:0;font-size:12px;text-transform:uppercase;letter-spacing:.08em;color:var(--text-muted);">Cone preview</h3>
+    <svg width="<?= $svg_size ?>" height="<?= $svg_size ?>" viewBox="0 0 <?= $svg_size ?> <?= $svg_size ?>"
+         style="background:#0a0d12;border-radius:50%;border:1px solid var(--border);">
+      <!-- compass rings -->
+      <circle cx="<?= $svg_centre ?>" cy="<?= $svg_centre ?>" r="<?= $svg_radius ?>" fill="none" stroke="rgba(255,255,255,.08)" stroke-width="1"/>
+      <circle cx="<?= $svg_centre ?>" cy="<?= $svg_centre ?>" r="<?= round($svg_radius * 2/3) ?>" fill="none" stroke="rgba(255,255,255,.05)" stroke-width="1"/>
+      <circle cx="<?= $svg_centre ?>" cy="<?= $svg_centre ?>" r="<?= round($svg_radius * 1/3) ?>" fill="none" stroke="rgba(255,255,255,.05)" stroke-width="1"/>
+      <!-- N S E W ticks -->
+      <text x="<?= $svg_centre ?>" y="14"  text-anchor="middle" fill="rgba(255,255,255,.4)" font-size="10" font-family="Inter,sans-serif">N</text>
+      <text x="<?= $svg_size - 8 ?>" y="<?= $svg_centre + 4 ?>" text-anchor="end"   fill="rgba(255,255,255,.4)" font-size="10" font-family="Inter,sans-serif">E</text>
+      <text x="<?= $svg_centre ?>" y="<?= $svg_size - 6 ?>"  text-anchor="middle" fill="rgba(255,255,255,.4)" font-size="10" font-family="Inter,sans-serif">S</text>
+      <text x="8" y="<?= $svg_centre + 4 ?>"                text-anchor="start"  fill="rgba(255,255,255,.4)" font-size="10" font-family="Inter,sans-serif">W</text>
+      <!-- cone -->
+      <?php if ($cone_path): ?>
+        <path d="<?= $cone_path ?>" fill="rgba(5,218,253,.20)" stroke="#05DAFD" stroke-width="2"/>
+      <?php else: ?>
+        <text x="<?= $svg_centre ?>" y="<?= $svg_centre + 4 ?>" text-anchor="middle" fill="rgba(255,255,255,.4)" font-size="11">no azimuth set</text>
+      <?php endif; ?>
+      <!-- centre dot -->
+      <circle cx="<?= $svg_centre ?>" cy="<?= $svg_centre ?>" r="3" fill="#05DAFD"/>
+    </svg>
+    <p class="muted" style="text-align:center;margin:8px 0 0;font-size:11px;">
+      <?= $az !== null ? 'az ' . $az . '° · bw ' . $bw . '°' : '—' ?>
+    </p>
+  </div>
+
+  <!-- Right: at-a-glance stats card grid -->
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:14px;">
+    <div class="sec-stat">
+      <small>Customers</small>
+      <strong><?= $customer_count ?><?php if ($sector['max_clients']): ?><span class="muted"> / <?= (int)$sector['max_clients'] ?></span><?php endif; ?></strong>
+      <?php if ($capacity && $capacity['days_to_full'] !== null): ?>
+        <em>fills in ~<?= $capacity['days_to_full'] ?> days</em>
+      <?php elseif ($capacity && $capacity['rate_per_day'] === 0.0): ?>
+        <em class="muted">no recent growth</em>
+      <?php endif; ?>
+    </div>
+    <div class="sec-stat">
+      <small>Capacity</small>
+      <strong><?= $capacity ? $capacity['pct'] . '%' : '—' ?></strong>
+      <?php if ($capacity): ?>
+        <em><?= $capacity['recent_adds'] ?> adds in <?= $capacity['window_days'] ?>d</em>
+      <?php endif; ?>
+    </div>
+    <div class="sec-stat<?= $overlaps ? ' sec-stat-warn' : '' ?>">
+      <small>Co-channel overlap</small>
+      <strong><?= count($overlaps) ?></strong>
+      <em><?= $overlaps ? 'sectors interfering' : 'clean' ?></em>
+    </div>
+    <div class="sec-stat<?= $outage_history['count'] > 0 ? ' sec-stat-warn' : '' ?>">
+      <small>Outages (90d)</small>
+      <strong><?= $outage_history['count'] ?></strong>
+      <?php if ($outage_history['down_minutes'] > 0): ?>
+        <em><?= floor($outage_history['down_minutes'] / 60) ?>h <?= $outage_history['down_minutes'] % 60 ?>m total<?php if ($outage_history['mttr_minutes'] !== null): ?> · MTTR <?= $outage_history['mttr_minutes'] ?>m<?php endif; ?></em>
+      <?php endif; ?>
+    </div>
+    <div class="sec-stat">
+      <small>Throughput peak (24h)</small>
+      <strong><?= number_format(max(array_column($throughput_24h, 'peak_mbps') ?: [0]), 1) ?> <small class="muted">Mbps</small></strong>
+      <em>avg <?= number_format(array_sum(array_column($throughput_24h, 'avg_mbps')) / max(1, count($throughput_24h)), 1) ?> Mbps</em>
+    </div>
+  </div>
+</div>
+
+<?php if ($overlaps): ?>
+<div class="portal-card" style="border-left:3px solid #f97316;">
+  <h2>Co-channel overlap <span class="muted">(<?= count($overlaps) ?>)</span></h2>
+  <p class="muted">These sectors share the band, have overlapping frequency windows, and are within <?= SECTOR_OVERLAP_DISTANCE_KM ?> km of this tower. Move one to a different channel or reduce TX power to clean it up.</p>
+  <div class="table-scroll">
+  <table class="data-table">
+    <thead><tr><th>Sector</th><th>Tower</th><th>Band</th><th>Frequency</th><th>Overlap</th><th>Distance</th><th></th></tr></thead>
+    <tbody>
+      <?php foreach ($overlaps as $o): ?>
+        <tr>
+          <td><strong><?= $h($o['sector_name']) ?></strong>
+            <?php if ($o['azimuth_deg'] !== null): ?>
+              <small class="muted">· az <?= $o['azimuth_deg'] ?>°</small>
+            <?php endif; ?>
+          </td>
+          <td><?= $h($o['tower_name']) ?></td>
+          <td><?= $h($o['band']) ?></td>
+          <td><?= $o['frequency_mhz'] ?> MHz @ <?= $o['channel_width_mhz'] ?> MHz wide</td>
+          <td><strong style="color:#f97316;"><?= $o['overlap_mhz'] ?> MHz</strong></td>
+          <td><?= number_format($o['distance_km'], 2) ?> km</td>
+          <td><a href="/admin/sector-edit.php?id=<?= $o['sector_id'] ?>" class="btn btn-ghost btn-sm">Open</a></td>
+        </tr>
+      <?php endforeach; ?>
+    </tbody>
+  </table>
+  </div>
+</div>
+<?php endif; ?>
+
+<?php
+// Throughput trend SVG sparkline. Drawn server-side so it works
+// regardless of JS state. Two paths: an "avg" line and a translucent
+// "peak" envelope behind it.
+$thr_w = 760; $thr_h = 110; $thr_pad_t = 8; $thr_pad_b = 18;
+$thr_plot_h = $thr_h - $thr_pad_t - $thr_pad_b;
+$thr_max = 0.0;
+foreach ($throughput_24h as $r) $thr_max = max($thr_max, (float)$r['peak_mbps']);
+if ($thr_max < 1.0) $thr_max = 1.0;
+$n = count($throughput_24h);
+$x_step = $n > 1 ? ($thr_w - 12) / ($n - 1) : 0;
+$pts_avg = []; $pts_peak = [];
+foreach ($throughput_24h as $i => $r) {
+    $x = 6 + $i * $x_step;
+    $y_avg  = $thr_pad_t + $thr_plot_h - ($r['avg_mbps']  / $thr_max) * $thr_plot_h;
+    $y_peak = $thr_pad_t + $thr_plot_h - ($r['peak_mbps'] / $thr_max) * $thr_plot_h;
+    $pts_avg[]  = number_format($x, 1) . ',' . number_format($y_avg,  1);
+    $pts_peak[] = number_format($x, 1) . ',' . number_format($y_peak, 1);
+}
+$baseline_y = $thr_pad_t + $thr_plot_h;
+$peak_path  = 'M ' . implode(' L ', $pts_peak) . ' L ' . number_format($thr_w - 6, 1) . ",{$baseline_y} L 6,{$baseline_y} Z";
+$avg_path   = 'M ' . implode(' L ', $pts_avg);
+?>
+<div class="portal-card">
+  <h2>Throughput (last 24 h)</h2>
+  <?php if ($n === 0 || $thr_max <= 1.0): ?>
+    <p class="muted">No throughput samples yet. Make sure the sector has wireless_links and the wireless poll worker is running.</p>
+  <?php else: ?>
+    <svg width="100%" height="<?= $thr_h ?>" viewBox="0 0 <?= $thr_w ?> <?= $thr_h ?>" preserveAspectRatio="none" style="background:#0a0d12;border-radius:6px;">
+      <line x1="6" x2="<?= $thr_w - 6 ?>" y1="<?= $baseline_y ?>" y2="<?= $baseline_y ?>" stroke="rgba(255,255,255,.1)" stroke-width="1"/>
+      <path d="<?= $peak_path ?>" fill="rgba(5,218,253,.10)" stroke="none"/>
+      <path d="<?= $avg_path  ?>" fill="none" stroke="#05DAFD" stroke-width="2" stroke-linejoin="round"/>
+      <text x="6" y="<?= $thr_pad_t + 10 ?>" fill="rgba(255,255,255,.5)" font-size="10" font-family="Inter,sans-serif"><?= number_format($thr_max, 1) ?> Mbps</text>
+      <text x="6" y="<?= $baseline_y - 4 ?>" fill="rgba(255,255,255,.3)" font-size="10" font-family="Inter,sans-serif">0</text>
+      <text x="<?= $thr_w - 6 ?>" y="<?= $baseline_y - 4 ?>" text-anchor="end" fill="rgba(255,255,255,.3)" font-size="10" font-family="Inter,sans-serif">now</text>
+      <text x="6" y="<?= $thr_h - 4 ?>" fill="rgba(255,255,255,.3)" font-size="10" font-family="Inter,sans-serif">−24 h</text>
+    </svg>
+    <p class="muted"><small>Solid line is hourly average across all wireless links on this sector; shaded area is per-hour peak. Source: <code>link_health_samples</code>.</small></p>
+  <?php endif; ?>
+</div>
+
+<?php if ($outage_history['rows']): ?>
+<div class="portal-card">
+  <h2>Outage history (90 days) <span class="muted">(<?= $outage_history['count'] ?>)</span></h2>
+  <p class="muted">
+    Total downtime: <strong><?= floor($outage_history['down_minutes'] / 60) ?>h <?= $outage_history['down_minutes'] % 60 ?>m</strong>
+    <?php if ($outage_history['mttr_minutes'] !== null): ?>
+      · MTTR: <strong><?= $outage_history['mttr_minutes'] ?> minutes</strong>
+    <?php endif; ?>
+  </p>
+  <div class="table-scroll">
+  <table class="data-table">
+    <thead><tr><th>Started</th><th>Resolved</th><th>Duration</th><th>Affected</th><th>Cause</th><th>Status</th></tr></thead>
+    <tbody>
+      <?php foreach ($outage_history['rows'] as $o): ?>
+        <tr>
+          <td><small><?= $h($o['started_at']) ?></small></td>
+          <td><small><?= $h($o['resolved_at'] ?? '—') ?></small></td>
+          <td><?= (int)$o['minutes'] ?>m</td>
+          <td><?= (int)$o['affected_count'] ?></td>
+          <td><small><?= $h($o['cause'] ?? '') ?></small></td>
+          <td>
+            <?php $oc = $o['status'] === 'active' ? '#d44' : '#888'; ?>
+            <span style="display:inline-block;background:<?= $oc ?>;color:#fff;padding:1px 8px;border-radius:8px;font-size:11px;text-transform:uppercase;"><?= $h($o['status']) ?></span>
+          </td>
+        </tr>
+      <?php endforeach; ?>
+    </tbody>
+  </table>
+  </div>
+</div>
+<?php endif; ?>
+
+<style>
+  .sec-stat {
+    background: var(--bg-elev);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .sec-stat small {
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+  .sec-stat strong {
+    font-family: 'Space Grotesk', 'Inter', sans-serif;
+    font-size: 22px;
+    line-height: 1.1;
+    color: var(--text);
+  }
+  .sec-stat em {
+    font-style: normal;
+    font-size: 11px;
+    color: var(--text-muted);
+  }
+  .sec-stat-warn { border-color: #f97316; box-shadow: 0 0 0 1px rgba(249,115,22,.15); }
+  .sec-stat-warn strong { color: #f97316; }
+</style>
 
 <div class="portal-card">
   <h2>Sector record</h2>

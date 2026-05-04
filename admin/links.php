@@ -307,6 +307,8 @@ $health_pill = function (?int $score): string {
             </td>
             <td>
               <a class="btn btn-ghost btn-sm" href="/admin/link-view.php?id=<?= (int)$l['id'] ?>">Open</a>
+              <a class="btn btn-ghost btn-sm" href="/admin/link-history.php?id=<?= (int)$l['id'] ?>&days=7"  title="7-day trends">7d</a>
+              <a class="btn btn-ghost btn-sm" href="/admin/link-history.php?id=<?= (int)$l['id'] ?>&days=30" title="30-day trends">30d</a>
             </td>
           </tr>
         <?php endforeach; ?>

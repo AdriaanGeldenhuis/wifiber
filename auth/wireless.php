@@ -238,8 +238,9 @@ function wireless_link_record_sample(int $link_id, array $s): void {
              ccq_pct, tx_rate_mbps, rx_rate_mbps,
              airtime_local_pct, airtime_remote_pct,
              throughput_local_mbps, throughput_remote_mbps,
-             capacity_local_mbps, capacity_remote_mbps)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+             capacity_local_mbps, capacity_remote_mbps,
+             tx_retries, rx_retries, ack_pct)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )->execute([
         $link_id,
         $s['signal_local_dbm']     ?? null,
@@ -257,6 +258,9 @@ function wireless_link_record_sample(int $link_id, array $s): void {
         $s['throughput_remote_mbps'] ?? null,
         $s['capacity_local_mbps']    ?? null,
         $s['capacity_remote_mbps']   ?? null,
+        $s['tx_retries']           ?? null,
+        $s['rx_retries']           ?? null,
+        $s['ack_pct']              ?? null,
     ]);
 }
 
@@ -773,4 +777,185 @@ function wireless_change_jobs_pending_count(): int {
     return (int)pdo()->query(
         "SELECT COUNT(*) FROM wireless_change_jobs WHERE status IN ('queued','applying')"
     )->fetchColumn();
+}
+
+/* ----------------------------------------- frequency-planner helpers (Phase 26) */
+
+/**
+ * Static DFS lookup. Returns true when the centre-frequency lands
+ * in the regulatory DFS band (ICASA / FCC / ETSI agree on the same
+ * 5260–5320 + 5500–5700 MHz windows). Used by the frequency planner
+ * to flag DFS channels visually and exclude them from recommendations
+ * unless the operator opts in.
+ *
+ * For wider channels (40/80/160 MHz) we widen the test by half-width
+ * on each side — an 80 MHz block centred on 5290 spans 5250–5330 and
+ * still falls inside the DFS window.
+ */
+function is_dfs_channel(int $freq_mhz, int $width_mhz = 20): bool {
+    $half = max(10, $width_mhz / 2);
+    $lo   = $freq_mhz - $half;
+    $hi   = $freq_mhz + $half;
+    // 5260..5320 (UNII-2A) and 5500..5700 (UNII-2C, weather radar).
+    if ($hi >= 5260 && $lo <= 5320) return true;
+    if ($hi >= 5500 && $lo <= 5700) return true;
+    return false;
+}
+
+/**
+ * Check whether the regulatory-DFS or live-detected DFS hold-down
+ * applies to a given centre frequency. Returns the blocked_until
+ * timestamp if the channel is currently unsafe to use (because a
+ * vendor adapter detected radar inside the last 30 min), or null
+ * if it's available.
+ *
+ * Live blocks override the static rule — i.e. a non-DFS channel
+ * with a manual block row will return its blocked_until, and a
+ * DFS-flagged channel without an active live block returns null
+ * (the static flag is informational; the operator may still pick it).
+ */
+function dfs_channel_blocked_until(int $freq_mhz): ?string {
+    $stmt = pdo()->prepare(
+        "SELECT blocked_until FROM dfs_channel_events
+          WHERE freq_mhz = ? AND blocked_until > NOW()
+          ORDER BY blocked_until DESC LIMIT 1"
+    );
+    $stmt->execute([$freq_mhz]);
+    $val = $stmt->fetchColumn();
+    return $val !== false && $val !== null ? (string)$val : null;
+}
+
+/**
+ * Record a radar detection. Vendor adapters will call this when they
+ * see a CAC failure or radar event. The default 30-minute hold-down
+ * matches the ETSI / FCC requirement.
+ */
+function dfs_record_event(?int $device_id, int $freq_mhz, int $width_mhz, string $source = 'vendor', int $hold_down_minutes = 30, string $notes = ''): int {
+    $until = date('Y-m-d H:i:s', time() + max(60, $hold_down_minutes * 60));
+    pdo()->prepare(
+        "INSERT INTO dfs_channel_events
+            (device_id, freq_mhz, channel_width_mhz, blocked_until, source, notes)
+         VALUES (?, ?, ?, ?, ?, ?)"
+    )->execute([$device_id, $freq_mhz, $width_mhz, $until,
+                in_array($source, ['vendor','manual','rule'], true) ? $source : 'vendor',
+                mb_substr($notes, 0, 255)]);
+    return (int)pdo()->lastInsertId();
+}
+
+/**
+ * Sectors on neighbour towers whose frequency window overlaps with
+ * a candidate (band, freq, width). Used by the frequency planner to
+ * cross-check a recommendation against what's already broadcasting
+ * in the area — avoid recommending channel 36 to one tower when the
+ * tower 6 km away is already on it.
+ *
+ * $exclude_sector_id is the sector being planned (so it doesn't see
+ * itself as a conflict). Distance limit defaults to
+ * SECTOR_OVERLAP_DISTANCE_KM from auth/sectors.php.
+ */
+function freq_planner_neighbour_conflicts(int $exclude_sector_id, string $band, int $freq_mhz, int $width_mhz, float $km_limit = 10.0): array {
+    require_once __DIR__ . '/sites.php';
+
+    $stmt = pdo()->prepare(
+        "SELECT s.id, s.name, s.frequency_mhz, s.channel_width_mhz, s.azimuth_deg,
+                t.name AS tower_name, t.lat AS tower_lat, t.lng AS tower_lng
+           FROM sectors s
+           JOIN sites   t ON t.id = s.tower_id
+          WHERE s.id <> ?
+            AND s.band = ?
+            AND s.frequency_mhz IS NOT NULL
+            AND s.channel_width_mhz IS NOT NULL"
+    );
+    $stmt->execute([$exclude_sector_id, $band]);
+    $rows = $stmt->fetchAll();
+
+    // Need self's tower lat/lng for distance compare. Look it up in a
+    // single query rather than dragging it through every caller.
+    $self_stmt = pdo()->prepare(
+        "SELECT t.lat, t.lng, t.name FROM sectors s JOIN sites t ON t.id = s.tower_id WHERE s.id = ? LIMIT 1"
+    );
+    $self_stmt->execute([$exclude_sector_id]);
+    $self = $self_stmt->fetch();
+    if (!$self) return [];
+
+    $hits = [];
+    foreach ($rows as $r) {
+        $sep   = abs($freq_mhz - (int)$r['frequency_mhz']);
+        $half  = ($width_mhz + (int)$r['channel_width_mhz']) / 2.0;
+        $overlap = $half - $sep;
+        if ($overlap <= 0) continue;
+        $km = haversine_km(
+            (float)$self['lat'], (float)$self['lng'],
+            (float)$r['tower_lat'], (float)$r['tower_lng']
+        );
+        if ($km > $km_limit) continue;
+        $hits[] = [
+            'sector_id'    => (int)$r['id'],
+            'sector_name'  => (string)$r['name'],
+            'tower_name'   => (string)$r['tower_name'],
+            'frequency_mhz'=> (int)$r['frequency_mhz'],
+            'channel_width_mhz' => (int)$r['channel_width_mhz'],
+            'overlap_mhz'  => round($overlap, 1),
+            'distance_km'  => round($km, 2),
+        ];
+    }
+    usort($hits, fn($a, $b) => $a['distance_km'] <=> $b['distance_km']);
+    return $hits;
+}
+
+/**
+ * Suggest a TX-power tweak based on observed SNR margin. Wireless
+ * networks degrade noisily when run at maximum TX — extra power
+ * doesn't help received SNR (it raises noise on neighbours and gets
+ * burned in CCQ / retries) and DFS regs cap us anyway. Recommend the
+ * lowest TX-power that keeps SNR ≥ target_snr_db with a 6 dB margin.
+ *
+ * Returns ['recommended_dbm', 'reason'] or null when there isn't
+ * enough data (no current TX power or no SNR sample).
+ */
+function freq_planner_tx_power_suggestion(?int $current_tx_dbm, ?int $current_snr_db, int $target_snr_db = 25, int $margin_db = 6): ?array {
+    if ($current_tx_dbm === null || $current_snr_db === null) return null;
+    $headroom = $current_snr_db - ($target_snr_db + $margin_db);
+    if ($headroom <= 0) {
+        return [
+            'recommended_dbm' => $current_tx_dbm,
+            'reason' => sprintf('Already at the SNR margin (%d dB ≤ target %d + %d).',
+                $current_snr_db, $target_snr_db, $margin_db),
+        ];
+    }
+    // Drop power by the headroom but never below 5 dBm — sub-5 dBm
+    // links rarely keep CPEs locked.
+    $rec = max(5, $current_tx_dbm - (int)$headroom);
+    if ($rec === $current_tx_dbm) return null;
+    return [
+        'recommended_dbm' => $rec,
+        'reason' => sprintf('SNR %d dB has %d dB headroom over target %d+%d. Reduce TX from %d → %d dBm to lower interference contribution.',
+            $current_snr_db, $headroom, $target_snr_db, $margin_db, $current_tx_dbm, $rec),
+    ];
+}
+
+/**
+ * Most recent SNR sample for a sector's AP — used by the planner's
+ * TX-power suggestion. Falls back across wireless_links for the AP if
+ * link_health_samples isn't populated.
+ */
+function freq_planner_sector_snr(int $sector_id): ?int {
+    $stmt = pdo()->prepare(
+        "SELECT lhs.snr_local_db
+           FROM link_health_samples lhs
+           JOIN wireless_links     wl  ON wl.id = lhs.link_id
+          WHERE wl.sector_id = ? AND lhs.snr_local_db IS NOT NULL
+          ORDER BY lhs.polled_at DESC LIMIT 1"
+    );
+    $stmt->execute([$sector_id]);
+    $v = $stmt->fetchColumn();
+    if ($v !== false && $v !== null) return (int)$v;
+    $stmt = pdo()->prepare(
+        "SELECT snr_db FROM wireless_links
+          WHERE sector_id = ? AND snr_db IS NOT NULL
+          ORDER BY last_evaluated_at DESC LIMIT 1"
+    );
+    $stmt->execute([$sector_id]);
+    $v = $stmt->fetchColumn();
+    return $v !== false && $v !== null ? (int)$v : null;
 }

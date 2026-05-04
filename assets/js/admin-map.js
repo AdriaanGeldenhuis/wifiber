@@ -645,17 +645,39 @@
     const bandColor = BAND_COLOR[sector.band] || BAND_COLOR.other;
     const inOutage  = outageSectorIds.has(sector.id);
 
-    const stroke = inOutage ? '#d44' : bandColor;
-    const fill   = inOutage ? '#d44' : bandColor;
+    // Capacity tint — outage > over-capacity > near-capacity > band colour.
+    // Reads customer_count / max_clients off the bootstrap payload so the
+    // map flags an AP that's running out of headroom without the operator
+    // having to open the sector popup.
+    const cap = (sector.max_clients && sector.max_clients > 0 && sector.customer_count != null)
+              ? sector.customer_count / sector.max_clients
+              : null;
+    const overCap = cap !== null && cap >= 1.0;
+    const nearCap = cap !== null && cap >= 0.85 && cap < 1.0;
+
+    let stroke, fill, weight, fillOpacity, opacity;
+    if (inOutage) {
+      stroke = fill = '#d44';
+      weight = 3; fillOpacity = 0.25; opacity = 0.95;
+    } else if (overCap) {
+      stroke = fill = '#d44';
+      weight = 2.5; fillOpacity = 0.22; opacity = 0.9;
+    } else if (nearCap) {
+      stroke = fill = '#f97316';
+      weight = 2; fillOpacity = 0.20; opacity = 0.85;
+    } else {
+      stroke = fill = bandColor;
+      weight = 1.5; fillOpacity = 0.15; opacity = 0.7;
+    }
 
     const poly = L.polygon(
       sectorPolygon(tower.data.lat, tower.data.lng, Number(az), Number(bw), range),
       {
         color: stroke,
-        weight: inOutage ? 3 : 1.5,
+        weight: weight,
         fillColor: fill,
-        fillOpacity: inOutage ? 0.25 : 0.15,
-        opacity: inOutage ? 0.95 : 0.7,
+        fillOpacity: fillOpacity,
+        opacity: opacity,
       }
     );
     poly.bindPopup(sectorPopupHTML(sector, tower.data.name));
