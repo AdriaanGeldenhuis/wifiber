@@ -14,6 +14,11 @@ ALTER TABLE users
 ALTER TABLE users
   ADD KEY IF NOT EXISTS idx_user_sector (sector_id);
 
+-- MariaDB doesn't support `ADD CONSTRAINT IF NOT EXISTS` for foreign
+-- keys, so use the standard idempotent pattern: drop-if-exists then add.
+-- DROP FOREIGN KEY IF EXISTS is a no-op when the constraint is missing.
+ALTER TABLE users DROP FOREIGN KEY IF EXISTS fk_users_sector;
+
 ALTER TABLE users
-  ADD CONSTRAINT IF NOT EXISTS fk_users_sector
+  ADD CONSTRAINT fk_users_sector
     FOREIGN KEY (sector_id) REFERENCES sectors(id) ON DELETE SET NULL;
