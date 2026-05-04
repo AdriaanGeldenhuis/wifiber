@@ -28,11 +28,11 @@ CREATE TABLE IF NOT EXISTS device_configs (
   taken_by      INT UNSIGNED  DEFAULT NULL,
   notes         VARCHAR(255)  NOT NULL DEFAULT '',
   PRIMARY KEY (id),
-  KEY idx_dc_device (device_id, captured_at),
-  KEY idx_dc_hash   (device_id, config_sha256),
-  CONSTRAINT fk_dc_device
+  KEY idx_devcfg_device (device_id, captured_at),
+  KEY idx_devcfg_hash   (device_id, config_sha256),
+  CONSTRAINT fk_devcfg_device
     FOREIGN KEY (device_id) REFERENCES devices(id) ON DELETE CASCADE,
-  CONSTRAINT fk_dc_taker
+  CONSTRAINT fk_devcfg_taker
     FOREIGN KEY (taken_by)  REFERENCES users(id)   ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 
