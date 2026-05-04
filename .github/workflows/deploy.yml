@@ -64,7 +64,7 @@ jobs:
           [ -n "${{ secrets.DEPLOY_SSH_PASSWORD }}" ] || { echo "DEPLOY_SSH_PASSWORD secret is missing"; exit 1; }
 
       - name: Run bin/deploy.sh on the server
-        uses: appleboy/ssh-action@v1.0.3
+        uses: appleboy/ssh-action@v1.2.0
         with:
           host:     ${{ secrets.DEPLOY_SSH_HOST }}
           username: ${{ secrets.DEPLOY_SSH_USER }}
@@ -72,7 +72,11 @@ jobs:
           password: ${{ secrets.DEPLOY_SSH_PASSWORD }}
           # 2-min cap; deploy.sh + schema migration should be a few seconds.
           command_timeout: 2m
+          # Allocate a PTY so the script's stdout/stderr streams back live
+          # instead of being buffered and dropped on early failure — older
+          # runs failed with no output at all, hiding the real error.
+          request_pty: true
           script: |
             set -e
             cd ~/public_html
-            bash bin/deploy.sh
+            bash bin/deploy.sh 2>&1
