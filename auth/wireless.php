@@ -238,8 +238,9 @@ function wireless_link_record_sample(int $link_id, array $s): void {
              ccq_pct, tx_rate_mbps, rx_rate_mbps,
              airtime_local_pct, airtime_remote_pct,
              throughput_local_mbps, throughput_remote_mbps,
-             capacity_local_mbps, capacity_remote_mbps)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+             capacity_local_mbps, capacity_remote_mbps,
+             tx_retries, rx_retries, ack_pct)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )->execute([
         $link_id,
         $s['signal_local_dbm']     ?? null,
@@ -257,6 +258,9 @@ function wireless_link_record_sample(int $link_id, array $s): void {
         $s['throughput_remote_mbps'] ?? null,
         $s['capacity_local_mbps']    ?? null,
         $s['capacity_remote_mbps']   ?? null,
+        $s['tx_retries']           ?? null,
+        $s['rx_retries']           ?? null,
+        $s['ack_pct']              ?? null,
     ]);
 }
 

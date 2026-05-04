@@ -209,6 +209,17 @@ function _airos_parse_stations(array $status, $sta_raw, array $device): array {
             'uptime_seconds'      => isset($s['uptime']) ? (int)$s['uptime'] : null,
             'tx_bytes'            => isset($s['tx_bytes']) ? (int)$s['tx_bytes'] : null,
             'rx_bytes'            => isset($s['rx_bytes']) ? (int)$s['rx_bytes'] : null,
+            // Phase 25 PHY counters — best-effort; not every AirOS firmware
+            // surfaces them. Adapter returns NULL when missing so the
+            // sample row just stores NULL rather than a fabricated value.
+            'tx_retries'          => isset($s['tx_retries'])    ? (int)$s['tx_retries']    : (isset($s['tx_pkts_retried']) ? (int)$s['tx_pkts_retried'] : null),
+            'rx_retries'          => isset($s['rx_retries'])    ? (int)$s['rx_retries']    : (isset($s['rx_pkts_retried']) ? (int)$s['rx_pkts_retried'] : null),
+            // ACK% — newer firmwares expose under different names; fall
+            // back to deriving from tx_packets / tx_retries when available.
+            'ack_pct'             => isset($s['ack_pct'])       ? (float)$s['ack_pct']
+                                     : (isset($s['tx_packets'], $s['tx_retries']) && (int)$s['tx_packets'] > 0
+                                        ? round(100.0 * (1.0 - (int)$s['tx_retries'] / max(1, (int)$s['tx_packets'])), 2)
+                                        : null),
             'remote_ip'           => (string)($s['lastip'] ?? ''),
             'remote_name'         => (string)($s['name']   ?? ''),
         ];

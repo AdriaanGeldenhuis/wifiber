@@ -288,6 +288,8 @@ $cinr_gauge = function (?int $snr) {
   <a class="lv-tab" href="/admin/map.php">Map</a>
   <a class="lv-tab <?= $tab === 'link' ? 'active' : '' ?>" href="?id=<?= (int)$link['id'] ?>&tab=link">Link</a>
   <a class="lv-tab <?= $tab === 'fresnel' ? 'active' : '' ?>" href="?id=<?= (int)$link['id'] ?>&tab=fresnel">Fresnel</a>
+  <a class="lv-tab" href="/admin/link-history.php?id=<?= (int)$link['id'] ?>&days=7">History 7d</a>
+  <a class="lv-tab" href="/admin/link-history.php?id=<?= (int)$link['id'] ?>&days=30">30d</a>
 </div>
 
 <?php if ($alerts): ?>
