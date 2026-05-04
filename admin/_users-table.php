@@ -7,6 +7,7 @@
  */
 
 require_once __DIR__ . '/../auth/products.php';
+require_once __DIR__ . '/../auth/validators.php';
 
 function render_users_admin(string $role, string $heading, string $subtitle, array $current_user): void {
     $self = strtok($_SERVER['REQUEST_URI'], '?');
@@ -27,6 +28,13 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
             if ($role === 'client' && $surname === '')                       $errors[] = 'Surname is required so we can issue an account number.';
             if ($email !== '' && !filter_var($email, FILTER_VALIDATE_EMAIL)) $errors[] = 'Email is not valid.';
             if (strlen($password) < 8)                                       $errors[] = 'Password must be at least 8 characters.';
+
+            // Normalise phone to E.164 up-front so the new client lands with a
+            // populated phone_e164 column — outage SMS / WhatsApp channels
+            // prefer phone_e164 over the raw phone string.
+            $phone_check = normalize_phone_e164((string)($_POST['phone'] ?? ''));
+            if (!$phone_check['ok']) $errors[] = 'Phone: ' . $phone_check['error'];
+
             $created = null;
             if (!$errors) {
                 try {
@@ -44,12 +52,16 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
                         'surname'       => $surname,
                         'customer_type' => $_POST['customer_type'] ?? 'residential',
                     ]);
-                    if ($product_id > 0 && $created && !empty($created['id'])) {
-                        update_user((int)$created['id'], function (array $u) use ($product_id) {
-                            $u['product_id'] = $product_id;
-                            return $u;
-                        });
-                        $created = find_user_by_id((int)$created['id']) ?? $created;
+                    if ($created && !empty($created['id'])) {
+                        // Backfill phone_e164 (and product_id below) — create_user's
+                        // INSERT only covers the canonical columns.
+                        $patch = [];
+                        if ($phone_check['value'] !== '') $patch['phone_e164'] = $phone_check['value'];
+                        if ($product_id > 0)              $patch['product_id'] = $product_id;
+                        if ($patch) {
+                            update_user((int)$created['id'], fn(array $u) => array_merge($u, $patch));
+                            $created = find_user_by_id((int)$created['id']) ?? $created;
+                        }
                     }
                     $msg = ucfirst($role) . " '{$username}' created";
                     if (!empty($created['account_no'])) {

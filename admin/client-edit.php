@@ -40,6 +40,22 @@ if (isset($_GET['reverse_lat'], $_GET['reverse_lng'])) {
     echo json_encode(['ok' => true, 'display_name' => $name]);
     exit;
 }
+if (isset($_GET['validate'])) {
+    while (ob_get_level() > 0) ob_end_clean();
+    header('Content-Type: application/json');
+    $kind  = (string)$_GET['validate'];
+    $value = (string)($_GET['value'] ?? '');
+    $r = match ($kind) {
+        'sa_id' => validate_sa_id($value),
+        'sa_vat'=> validate_sa_vat($value),
+        'phone' => normalize_phone_e164($value),
+        'mac'   => validate_mac($value),
+        'ip'    => validate_ip($value),
+        default => ['ok' => false, 'value' => '', 'error' => 'unknown validator', 'extra' => []],
+    };
+    echo json_encode($r);
+    exit;
+}
 
 $errors = [];
 
@@ -213,7 +229,7 @@ $v = fn($k, $d = '') => htmlspecialchars((string)($client[$k] ?? $d), ENT_QUOTES
   <a href="/admin/clients.php" class="btn btn-ghost btn-sm">&larr; Back to clients</a>
 </p>
 
-<form method="post" class="form">
+<form method="post" class="form" id="client-form">
   <?= csrf_field() ?>
 
   <div class="portal-card">
@@ -251,10 +267,12 @@ $v = fn($k, $d = '') => htmlspecialchars((string)($client[$k] ?? $d), ENT_QUOTES
         <input type="text" name="surname" required maxlength="60" value="<?= $v('surname') ?>">
       </div>
       <div class="field"><label>SA ID number</label>
-        <input type="text" name="id_number" maxlength="20" value="<?= $v('id_number') ?>">
+        <input type="text" name="id_number" id="id_number" maxlength="20" inputmode="numeric" value="<?= $v('id_number') ?>" data-validate="sa_id" data-preview="id_number_hint">
+        <small class="field-hint" id="id_number_hint"></small>
       </div>
       <div class="field"><label>VAT number</label>
-        <input type="text" name="vat_number" maxlength="20" value="<?= $v('vat_number') ?>">
+        <input type="text" name="vat_number" id="vat_number" maxlength="20" inputmode="numeric" value="<?= $v('vat_number') ?>" data-validate="sa_vat" data-preview="vat_number_hint">
+        <small class="field-hint" id="vat_number_hint"></small>
       </div>
     </div>
   </div>
@@ -266,13 +284,15 @@ $v = fn($k, $d = '') => htmlspecialchars((string)($client[$k] ?? $d), ENT_QUOTES
         <input type="email" name="email" maxlength="120" value="<?= $v('email') ?>">
       </div>
       <div class="field"><label>Phone</label>
-        <input type="tel" name="phone" maxlength="40" value="<?= $v('phone') ?>">
+        <input type="tel" name="phone" id="phone" maxlength="40" value="<?= $v('phone') ?>" data-validate="phone" data-preview="phone_hint">
+        <small class="field-hint" id="phone_hint"><?php if (!empty($client['phone_e164'])): ?>Stored E.164: <code><?= htmlspecialchars($client['phone_e164']) ?></code><?php endif; ?></small>
       </div>
       <div class="field"><label>Alt. contact name</label>
         <input type="text" name="alt_contact_name" maxlength="100" value="<?= $v('alt_contact_name') ?>">
       </div>
       <div class="field"><label>Alt. contact phone</label>
-        <input type="tel" name="alt_contact_phone" maxlength="40" value="<?= $v('alt_contact_phone') ?>">
+        <input type="tel" name="alt_contact_phone" id="alt_contact_phone" maxlength="40" value="<?= $v('alt_contact_phone') ?>" data-validate="phone" data-preview="alt_phone_hint">
+        <small class="field-hint" id="alt_phone_hint"></small>
       </div>
     </div>
   </div>
@@ -435,10 +455,12 @@ $v = fn($k, $d = '') => htmlspecialchars((string)($client[$k] ?? $d), ENT_QUOTES
     <p class="muted small">Prefer the <a href="#devices">Linked devices</a> panel below for new installs — it supports multiple radios/routers/switches per client and ties them to the network map. These fields are kept so older readers don't break; MAC and IP are validated and normalised on save.</p>
     <div class="form form-grid">
       <div class="field"><label>MAC address</label>
-        <input type="text" name="equipment_mac" maxlength="20" value="<?= $v('equipment_mac') ?>" placeholder="aa:bb:cc:dd:ee:ff" pattern="^([0-9a-fA-F]{2}[:\-]?){5}[0-9a-fA-F]{2}$">
+        <input type="text" name="equipment_mac" id="equipment_mac" maxlength="20" value="<?= $v('equipment_mac') ?>" placeholder="aa:bb:cc:dd:ee:ff" data-validate="mac" data-preview="equipment_mac_hint">
+        <small class="field-hint" id="equipment_mac_hint"></small>
       </div>
       <div class="field"><label>IP address</label>
-        <input type="text" name="equipment_ip" maxlength="45" value="<?= $v('equipment_ip') ?>" placeholder="10.0.0.1">
+        <input type="text" name="equipment_ip" id="equipment_ip" maxlength="45" value="<?= $v('equipment_ip') ?>" placeholder="10.0.0.1" data-validate="ip" data-preview="equipment_ip_hint">
+        <small class="field-hint" id="equipment_ip_hint"></small>
       </div>
       <div class="field"><label>Serial number</label>
         <input type="text" name="equipment_serial" maxlength="60" value="<?= $v('equipment_serial') ?>">
@@ -664,6 +686,48 @@ $v = fn($k, $d = '') => htmlspecialchars((string)($client[$k] ?? $d), ENT_QUOTES
   .note-body { white-space:pre-wrap; color:var(--text); font-size:13px; line-height:1.5; }
 </style>
 
+<?php
+  // ---------- Audit trail for this client ----------
+  $audit_stmt = pdo()->prepare(
+      "SELECT a.*, COALESCE(u.name, u.username, a.username) AS actor_label
+         FROM audit_log a
+         LEFT JOIN users u ON u.id = a.user_id
+        WHERE a.target_type = 'user' AND a.target_id = ?
+        ORDER BY a.id DESC
+        LIMIT 25"
+  );
+  $audit_stmt->execute([$id]);
+  $audit_rows = $audit_stmt->fetchAll();
+?>
+<div class="portal-card" id="audit">
+  <h2>Audit trail <span class="muted small" style="font-weight:normal;">(last <?= count($audit_rows) ?> events on this record)</span></h2>
+  <?php if ($audit_rows): ?>
+    <table class="data-table">
+      <thead><tr><th>When</th><th>Who</th><th>Action</th><th>Detail</th></tr></thead>
+      <tbody>
+        <?php foreach ($audit_rows as $a):
+          $meta = $a['meta'] ? json_decode((string)$a['meta'], true) : [];
+          $detail_bits = [];
+          if (is_array($meta)) {
+              foreach ($meta as $k => $v) {
+                  if (is_scalar($v)) $detail_bits[] = $k . '=' . (string)$v;
+              }
+          }
+        ?>
+          <tr>
+            <td><small><?= htmlspecialchars((string)$a['created_at']) ?></small></td>
+            <td><small><?= htmlspecialchars((string)($a['actor_label'] ?? 'system')) ?></small></td>
+            <td><small><code><?= htmlspecialchars((string)$a['action']) ?></code></small></td>
+            <td><small class="muted"><?= htmlspecialchars(implode(' · ', $detail_bits)) ?></small></td>
+          </tr>
+        <?php endforeach; ?>
+      </tbody>
+    </table>
+  <?php else: ?>
+    <p class="muted" style="margin:0;">No audit events recorded yet.</p>
+  <?php endif; ?>
+</div>
+
 <link rel="stylesheet"
       href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
       integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
@@ -886,6 +950,98 @@ $v = fn($k, $d = '') => htmlspecialchars((string)($client[$k] ?? $d), ENT_QUOTES
   function escapeHtml(s) {
     return String(s).replace(/[&<>"']/g, (c) =>
       ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+})();
+</script>
+
+<style>
+  .field-hint {
+    display: block;
+    margin-top: 4px;
+    font-size: 11.5px;
+    color: var(--text-muted);
+    min-height: 1em;
+    line-height: 1.3;
+  }
+  .field-hint.is-ok    { color: #2dbf73; }
+  .field-hint.is-error { color: #ff7a8c; }
+  .field-hint code     { font-size: 11px; padding: 1px 5px; }
+</style>
+<script defer>
+(function initFieldExtras() {
+  if (document.readyState === 'loading') {
+    return document.addEventListener('DOMContentLoaded', initFieldExtras);
+  }
+
+  // ---------- Live validators with hints ----------
+  const fields = document.querySelectorAll('input[data-validate]');
+  const debounceMs = 300;
+
+  function setHint(target, kind, payload) {
+    const hint = document.getElementById(target);
+    if (!hint) return;
+    hint.classList.remove('is-ok', 'is-error');
+    if (!payload) { hint.textContent = ''; return; }
+    if (!payload.ok) {
+      hint.classList.add('is-error');
+      hint.textContent = payload.error || 'Invalid.';
+      return;
+    }
+    if (!payload.value) { hint.textContent = ''; return; }
+
+    hint.classList.add('is-ok');
+    if (kind === 'sa_id' && payload.extra) {
+      const dob = payload.extra.dob || '';
+      const age = dob ? Math.floor((Date.now() - new Date(dob).getTime()) / 31557600000) : '';
+      hint.innerHTML = '✓ DOB <code>' + dob + '</code>' + (age ? ' (' + age + 'y)' : '') +
+        (payload.extra.gender ? ' · ' + payload.extra.gender : '');
+    } else if (kind === 'phone') {
+      hint.innerHTML = '✓ E.164: <code>' + payload.value + '</code>';
+    } else if (kind === 'mac') {
+      hint.innerHTML = '✓ Stored as <code>' + payload.value + '</code>';
+    } else {
+      hint.textContent = '✓ OK';
+    }
+  }
+
+  const timers = new WeakMap();
+  fields.forEach((input) => {
+    const kind   = input.dataset.validate;
+    const target = input.dataset.preview;
+    let abort = null;
+    const run = () => {
+      if (abort) abort.abort();
+      const v = input.value.trim();
+      if (v === '') { setHint(target, kind, null); return; }
+      abort = new AbortController();
+      fetch('?id=<?= (int)$id ?>&validate=' + encodeURIComponent(kind) + '&value=' + encodeURIComponent(v), {
+        credentials: 'same-origin', signal: abort.signal,
+      })
+        .then(r => r.json())
+        .then(j => setHint(target, kind, j))
+        .catch(() => {});
+    };
+    input.addEventListener('input', () => {
+      clearTimeout(timers.get(input));
+      timers.set(input, setTimeout(run, debounceMs));
+    });
+    if (input.value.trim() !== '') run(); // prime on load
+  });
+
+  // ---------- Unsaved-changes guard for the main editor form ----------
+  const mainForm = document.getElementById('client-form');
+  if (mainForm) {
+    let dirty = false;
+    mainForm.addEventListener('input',  () => { dirty = true; });
+    mainForm.addEventListener('change', () => { dirty = true; });
+    // Any submit (main save OR sub-form like add-note / attach-device /
+    // delete-note) means we're navigating intentionally — clear the flag.
+    document.addEventListener('submit', () => { dirty = false; });
+    window.addEventListener('beforeunload', (e) => {
+      if (!dirty) return;
+      e.preventDefault();
+      e.returnValue = '';
+    });
   }
 })();
 </script>
