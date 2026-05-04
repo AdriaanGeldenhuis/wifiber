@@ -13,17 +13,12 @@
 #   DEPLOY_SSH_HOST     hostname or IP of the server (e.g. wifiber.co.za
 #                       or whatever xneelo gives you for SSH)
 #   DEPLOY_SSH_USER     SSH username, e.g. wifibfjedj
-#   DEPLOY_SSH_PORT     SSH port (xneelo: usually 22)
-#   DEPLOY_SSH_KEY      *private* half of an SSH key pair. Add the public
-#                       half to ~/.ssh/authorized_keys on the server first.
-#                       The key needs only enough access to run
-#                       bin/deploy.sh (i.e. the wifibfjedj user).
+#   DEPLOY_SSH_PORT     SSH port (xneelo: usually 22) — optional
+#   DEPLOY_SSH_PASSWORD SSH password for the deploy user.
 #
-# Recommended setup:
-#   ssh-keygen -t ed25519 -C "github-actions-deploy" -f ~/wifiber-deploy -N ""
-#   ssh-copy-id -i ~/wifiber-deploy.pub wifibfjedj@<host>
-#   # then paste contents of ~/wifiber-deploy into DEPLOY_SSH_KEY,
-#   # delete the local copy
+# Note on auth: xneelo disables SSH publickey auth on shared accounts,
+# so we use password auth here. If publickey ever gets enabled, swap
+# `password:` for `key:` and store the *private* key in DEPLOY_SSH_KEY.
 
 name: Deploy
 
@@ -64,9 +59,9 @@ jobs:
     steps:
       - name: Sanity-check secrets are present
         run: |
-          [ -n "${{ secrets.DEPLOY_SSH_HOST }}" ] || { echo "DEPLOY_SSH_HOST secret is missing"; exit 1; }
-          [ -n "${{ secrets.DEPLOY_SSH_USER }}" ] || { echo "DEPLOY_SSH_USER secret is missing"; exit 1; }
-          [ -n "${{ secrets.DEPLOY_SSH_KEY  }}" ] || { echo "DEPLOY_SSH_KEY secret is missing";  exit 1; }
+          [ -n "${{ secrets.DEPLOY_SSH_HOST     }}" ] || { echo "DEPLOY_SSH_HOST secret is missing";     exit 1; }
+          [ -n "${{ secrets.DEPLOY_SSH_USER     }}" ] || { echo "DEPLOY_SSH_USER secret is missing";     exit 1; }
+          [ -n "${{ secrets.DEPLOY_SSH_PASSWORD }}" ] || { echo "DEPLOY_SSH_PASSWORD secret is missing"; exit 1; }
 
       - name: Run bin/deploy.sh on the server
         uses: appleboy/ssh-action@v1.0.3
@@ -74,7 +69,7 @@ jobs:
           host:     ${{ secrets.DEPLOY_SSH_HOST }}
           username: ${{ secrets.DEPLOY_SSH_USER }}
           port:     ${{ secrets.DEPLOY_SSH_PORT || 22 }}
-          key:      ${{ secrets.DEPLOY_SSH_KEY }}
+          password: ${{ secrets.DEPLOY_SSH_PASSWORD }}
           # 2-min cap; deploy.sh + schema migration should be a few seconds.
           command_timeout: 2m
           script: |
