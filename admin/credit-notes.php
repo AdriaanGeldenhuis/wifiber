@@ -18,7 +18,7 @@ $self = '/admin/credit-notes.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_csrf();
-    require_admin_write();
+    acl_require('invoices.write');
     $action = $_POST['action'] ?? '';
 
     try {

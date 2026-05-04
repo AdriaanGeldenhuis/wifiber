@@ -54,6 +54,7 @@ $errors = [];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_csrf();
+    acl_require('tickets.write');
     $action = $_POST['action'] ?? '';
 
     if ($action === 'reply' && $ticket) {

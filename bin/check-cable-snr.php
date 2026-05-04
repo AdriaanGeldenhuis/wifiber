@@ -101,6 +101,20 @@ foreach ($by_device as $dev_id => $samples) {
                 'window_days' => $opts['window-days'],
             ], ['email']);
         }
+        if (is_file(__DIR__ . '/../auth/inbox.php')) {
+            require_once __DIR__ . '/../auth/inbox.php';
+            inbox_post(
+                'Cable SNR regression — ' . ($dev['name'] ?? ('#' . $dev_id)),
+                sprintf("%.1f dB drop over %d days (%d samples). Likely water ingress, UV cracking or a working-loose crimp.",
+                    $delta, (int)$opts['window-days'], count($samples)),
+                [
+                    'audience'   => 'noc',
+                    'severity'   => 'warning',
+                    'link'       => '/admin/devices.php?id=' . $dev_id,
+                    'dedupe_key' => 'cable.snr_drop.' . $dev_id,
+                ]
+            );
+        }
         $alerts++;
         if (!$opts['quiet']) {
             printf("[cable-snr] device #%d: %.1f dB drop over %d days (%d samples)\n",

@@ -113,6 +113,30 @@ code   { background: var(--bg-elev); padding: 2px 6px; border-radius: 4px; font-
   color: var(--text-dim);
 }
 .portal-logout:hover { color: var(--danger); }
+.portal-inbox-bell {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 10px;
+  margin-right: 12px;
+  font-size: .85rem;
+  color: var(--text-dim);
+  position: relative;
+}
+.portal-inbox-bell:hover { color: var(--accent); }
+.portal-inbox-bell svg { display: inline-block; }
+.portal-inbox-badge {
+  display: inline-block;
+  background: var(--danger, #d44);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 700;
+  line-height: 1;
+  padding: 2px 6px;
+  border-radius: 8px;
+  min-width: 16px;
+  text-align: center;
+}
 
 /* ---------- Main pane ---------- */
 .portal-main { flex: 1; padding: 40px; overflow-x: hidden; }

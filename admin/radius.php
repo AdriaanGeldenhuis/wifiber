@@ -25,8 +25,14 @@ $self = '/admin/radius.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_csrf();
-    require_admin_write();
+    // PoD (disconnect) gets its own capability so support staff can
+    // boot a stuck session without being able to reissue secrets.
     $action = $_POST['action'] ?? '';
+    if ($action === 'pod') {
+        acl_require('radius.disconnect');
+    } else {
+        acl_require('radius.write');
+    }
 
     if ($action === 'nas_save') {
         $id = (int)($_POST['id'] ?? 0);

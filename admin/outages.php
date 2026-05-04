@@ -19,6 +19,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['action'] ?? '';
 
     if ($action === 'resolve') {
+        acl_require('outages.close');
         $id   = (int)($_POST['id'] ?? 0);
         $note = trim((string)($_POST['note'] ?? ''));
         if ($id) {
@@ -31,6 +32,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($action === 'detect_now') {
+        // Triggering the detector touches the network state and outage table;
+        // keep this restricted to actual write-capable roles.
+        require_admin_write();
         $r = outage_detect();
         audit_log('outage.detect', ['meta' => $r]);
         flash('success', sprintf('Detector ran: opened=%d closed=%d updated=%d', $r['opened'], $r['closed'], $r['updated']));

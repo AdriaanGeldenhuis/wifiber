@@ -12,14 +12,16 @@
  *   require __DIR__ . '/_layout.php';
  */
 require_once __DIR__ . '/../auth/helpers.php';
+require_once __DIR__ . '/../auth/acl.php';
 
 require_admin_ip();
-$user = require_role(['admin', 'noc_readonly'], '/admin/login.php');
+$user = require_role(acl_staff_roles(), '/admin/login.php');
 
 $portal = 'admin';
 $nav = [
     ['group' => 'Overview', 'items' => [
         ['key' => 'dashboard', 'label' => 'Dashboard', 'href' => '/admin/'],
+        ['key' => 'inbox',     'label' => 'Inbox',     'href' => '/admin/inbox.php'],
         ['key' => 'reports',   'label' => 'Reports',   'href' => '/admin/reports.php'],
     ]],
     ['group' => 'Operations', 'items' => [
