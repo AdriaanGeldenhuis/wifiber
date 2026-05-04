@@ -58,6 +58,7 @@ $nav = [
         ['key' => 'admins',       'label' => 'Admins',        'href' => '/admin/admins.php'],
         ['key' => 'audit',        'label' => 'Audit log',     'href' => '/admin/audit.php'],
         ['key' => 'integrations', 'label' => 'Integrations',  'href' => '/admin/integrations.php'],
+        ['key' => 'imports',      'label' => 'Imports',       'href' => '/admin/imports.php'],
     ]],
     ['group' => 'My Account', 'items' => [
         ['key' => 'password', 'label' => 'My password',     'href' => '/admin/password.php'],
