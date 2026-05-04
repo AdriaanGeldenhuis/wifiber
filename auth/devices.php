@@ -79,7 +79,7 @@ function device_save(array $data, ?int $id = null): int {
         'model'       => trim((string)($data['model']   ?? '')),
         'role'        => $role,
         'serial'      => trim((string)($data['serial']  ?? '')),
-        'mac'         => strtoupper(trim((string)($data['mac'] ?? ''))),
+        'mac'         => mac_canonical((string)($data['mac'] ?? '')),
         'mgmt_ip'     => trim((string)($data['mgmt_ip'] ?? '')),
         'mgmt_port'   => is_numeric($data['mgmt_port'] ?? null) ? max(1, min(65535, (int)$data['mgmt_port'])) : null,
         'firmware'    => trim((string)($data['firmware'] ?? '')),
@@ -89,6 +89,18 @@ function device_save(array $data, ?int $id = null): int {
 
     if ($args['name'] === '') {
         throw new InvalidArgumentException('Device name is required.');
+    }
+
+    // Block duplicate MACs across the inventory. We canonicalise to
+    // AA:BB:CC:DD:EE:FF before compare so paste-from-airOS variants
+    // (aa-bb-cc, aabbccddeeff, lowercase) all collide correctly.
+    if ($args['mac'] !== '') {
+        $clash = device_mac_conflict($args['mac'], $id);
+        if ($clash) {
+            throw new InvalidArgumentException(
+                'MAC ' . $args['mac'] . ' is already used by device "' . $clash['name'] . '" (#' . (int)$clash['id'] . ').'
+            );
+        }
     }
 
     if ($id) {
@@ -283,4 +295,137 @@ function device_health_cleanup(int $retention_days = 30): int {
     );
     $stmt->execute([$retention_days]);
     return $stmt->rowCount();
+}
+
+/* ------------------------------------------------------- MAC + firmware */
+
+/**
+ * Canonical MAC form is AA:BB:CC:DD:EE:FF — uppercase, colon-separated.
+ * Accepts the usual handful of paste variants (no separator, hyphenated,
+ * Cisco dotted-quad). Returns '' if the input doesn't look like a MAC at
+ * all so the caller can decide whether that's a soft skip or hard fail.
+ */
+function mac_canonical(string $raw): string {
+    $hex = preg_replace('/[^0-9A-Fa-f]/', '', $raw) ?? '';
+    if (strlen($hex) !== 12) return '';
+    $hex = strtoupper($hex);
+    return implode(':', str_split($hex, 2));
+}
+
+/**
+ * Find an existing device that already owns a MAC. Used by device_save()
+ * to throw before insert, and by /admin/devices.php for a nightly
+ * "duplicate MAC" report. Excludes $exclude_id so editing your own row
+ * doesn't trip on itself, and ignores blank MACs (lots of pre-staged
+ * devices have no MAC yet).
+ */
+function device_mac_conflict(string $mac, ?int $exclude_id = null): ?array {
+    $mac = mac_canonical($mac);
+    if ($mac === '') return null;
+    $sql  = "SELECT id, name, vendor, model, mgmt_ip, site_id
+               FROM devices
+              WHERE mac = ?";
+    $args = [$mac];
+    if ($exclude_id) { $sql .= " AND id <> ?"; $args[] = $exclude_id; }
+    $sql .= " LIMIT 1";
+    $stmt = pdo()->prepare($sql);
+    $stmt->execute($args);
+    $row = $stmt->fetch();
+    return $row ? device_normalise($row) : null;
+}
+
+/**
+ * Sweep the entire inventory for duplicated MACs (canonicalising as we
+ * go so cosmetic differences don't hide collisions). Returns groups of
+ * 2+ devices keyed by canonical MAC. Surfaced on /admin/devices.php so
+ * the operator can fix legacy data that pre-dates the save-time check.
+ */
+function device_mac_conflicts_all(): array {
+    $rows = pdo()->query("SELECT id, name, mac, vendor, model, mgmt_ip FROM devices WHERE mac <> ''")->fetchAll();
+    $by_mac = [];
+    foreach ($rows as $r) {
+        $c = mac_canonical((string)$r['mac']);
+        if ($c === '') continue;
+        $by_mac[$c][] = device_normalise($r);
+    }
+    return array_filter($by_mac, fn($g) => count($g) > 1);
+}
+
+/**
+ * Match a device's vendor / model / firmware against the curated
+ * firmware_eol table. Returns the worst applicable row (or null if
+ * nothing matches), with eol_date / eos_date / severity / notes for
+ * the badge. Severity ordering: critical > warn > info.
+ */
+function device_firmware_eol_status(string $vendor, string $model, string $firmware): ?array {
+    if ($firmware === '') return null;
+    if (!in_array($vendor, DEVICE_VENDORS, true)) return null;
+    $stmt = pdo()->prepare(
+        "SELECT * FROM firmware_eol
+          WHERE vendor = ?
+            AND ? LIKE model_match
+            AND ? LIKE version_match
+          ORDER BY FIELD(severity,'critical','warn','info'), eol_date ASC
+          LIMIT 1"
+    );
+    $stmt->execute([$vendor, $model ?: '%', $firmware]);
+    $row = $stmt->fetch();
+    if (!$row) return null;
+    $row['id']       = (int)$row['id'];
+    $row['eol_date'] = $row['eol_date'] ?: null;
+    $row['eos_date'] = $row['eos_date'] ?: null;
+    return $row;
+}
+
+/* ----------------------------------------------------- config snapshots */
+
+/**
+ * Insert a running-config snapshot for a device. Skips the write when
+ * the new body's sha256 matches the most recent snapshot — keeps the
+ * table small and means "did this change?" is just a row-count query.
+ * Returns the new device_configs.id, or 0 if it was a no-op.
+ */
+function device_config_save(int $device_id, string $vendor, string $body, string $captured_via = 'cron', ?int $taken_by = null, string $notes = ''): int {
+    if ($device_id <= 0) throw new InvalidArgumentException('device_id required');
+    if (!in_array($vendor, DEVICE_VENDORS, true)) $vendor = 'other';
+    $sha = hash('sha256', $body);
+
+    $stmt = pdo()->prepare(
+        "SELECT config_sha256 FROM device_configs
+          WHERE device_id = ? ORDER BY captured_at DESC LIMIT 1"
+    );
+    $stmt->execute([$device_id]);
+    $prev = $stmt->fetchColumn();
+    if ($prev === $sha) return 0;
+
+    pdo()->prepare(
+        "INSERT INTO device_configs
+            (device_id, captured_via, vendor, config_sha256, config_body, size_bytes, taken_by, notes)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    )->execute([
+        $device_id, in_array($captured_via, ['cron','manual','pre-change','post-change'], true) ? $captured_via : 'cron',
+        $vendor, $sha, $body, strlen($body), $taken_by, mb_substr($notes, 0, 255),
+    ]);
+    return (int)pdo()->lastInsertId();
+}
+
+function device_configs_for(int $device_id, int $limit = 20): array {
+    if ($device_id <= 0) return [];
+    $limit = max(1, min(500, $limit));
+    $stmt = pdo()->prepare(
+        "SELECT id, device_id, captured_at, captured_via, vendor, config_sha256,
+                size_bytes, taken_by, notes
+           FROM device_configs WHERE device_id = ?
+          ORDER BY captured_at DESC, id DESC LIMIT $limit"
+    );
+    $stmt->execute([$device_id]);
+    return $stmt->fetchAll();
+}
+
+function device_config_find(int $config_id): ?array {
+    if ($config_id <= 0) return null;
+    $stmt = pdo()->prepare("SELECT * FROM device_configs WHERE id = ? LIMIT 1");
+    $stmt->execute([$config_id]);
+    $row = $stmt->fetch();
+    return $row ?: null;
 }
