@@ -9,6 +9,7 @@ $data = is_file($file) ? (json_decode((string)@file_get_contents($file), true) ?
 $errors = [];
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_csrf();
+    acl_require('settings.write');
 
     // Logo upload — saved under /assets/uploads/branding/ with a stable
     // filename so the public site doesn't need to know which extension

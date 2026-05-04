@@ -25,8 +25,9 @@ require_once __DIR__ . '/helpers.php';
 require_once __DIR__ . '/channels/email.php';
 require_once __DIR__ . '/channels/sms.php';
 require_once __DIR__ . '/channels/whatsapp.php';
+require_once __DIR__ . '/channels/slack.php';
 
-const NOTIFY_CHANNELS = ['email', 'sms', 'whatsapp'];
+const NOTIFY_CHANNELS = ['email', 'sms', 'whatsapp', 'slack'];
 
 /**
  * Templates: subject + email/SMS body builders. Add new templates here
@@ -188,6 +189,7 @@ function notify_channel_available(string $channel, array $config): bool {
     if ($channel === 'email')    return true;
     if ($channel === 'sms')      return !empty($config['sms']['enabled']);
     if ($channel === 'whatsapp') return !empty($config['whatsapp']['enabled']);
+    if ($channel === 'slack')    return !empty($config['slack']['enabled']);
     return false;
 }
 
@@ -202,6 +204,7 @@ function notify_load_config(): array {
         'email'    => $raw['notify_email']    ?? ['from' => 'no-reply@wifiber.co.za'],
         'sms'      => $raw['notify_sms']      ?? ['enabled' => false],
         'whatsapp' => $raw['notify_whatsapp'] ?? ['enabled' => false],
+        'slack'    => $raw['notify_slack']    ?? ['enabled' => false],
     ];
     return $cfg;
 }

@@ -13,7 +13,7 @@ $flash_token = null;
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_csrf();
-    require_admin_write();
+    acl_require('integrations.write');
     $action = $_POST['action'] ?? '';
 
     if ($action === 'webhook_save') {

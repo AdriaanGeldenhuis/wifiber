@@ -240,6 +240,20 @@ function _link_alert_open(array $link, string $kind, string $severity,
             if ($crow) {
                 notify_send($crow, 'link.signal_drop', ['drop_db' => abs((int)$observed - (int)$expected)]);
             }
+            if (is_file(__DIR__ . '/../auth/inbox.php')) {
+                require_once __DIR__ . '/../auth/inbox.php';
+                $drop_db = abs((int)$observed - (int)$expected);
+                inbox_post(
+                    'Link signal drop — ' . ($link['ap_name'] ?? '?') . ' → ' . ($link['cpe_name'] ?? '?'),
+                    "Δ {$drop_db} dB over the trailing window. Ticket #{$tid} opened.",
+                    [
+                        'audience'   => 'noc',
+                        'severity'   => $drop_db >= 10 ? 'error' : 'warning',
+                        'link'       => '/admin/link-view.php?id=' . (int)$link['id'],
+                        'dedupe_key' => 'link.signal_drop.' . (int)$link['id'],
+                    ]
+                );
+            }
         } catch (Throwable $e) {
             error_log('link_alert ticket creation failed: ' . $e->getMessage());
         }

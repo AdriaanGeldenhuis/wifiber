@@ -13,6 +13,7 @@ $errors = [];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_csrf();
+    acl_require('invoices.write');
     $action = $_POST['action'] ?? '';
     $id     = (int)($_POST['id'] ?? 0);
 

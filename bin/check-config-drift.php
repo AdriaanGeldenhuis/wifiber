@@ -118,6 +118,19 @@ foreach ($sectors as $sec) {
                         'fails'       => 1,
                     ], ['email']);
             }
+            if (is_file(__DIR__ . '/../auth/inbox.php')) {
+                require_once __DIR__ . '/../auth/inbox.php';
+                inbox_post(
+                    'Config drift on ' . $sec['device_name'],
+                    "Field: {$c['field']}\nExpected: $exp\nObserved: $obs_v",
+                    [
+                        'audience'   => 'noc',
+                        'severity'   => 'warning',
+                        'link'       => '/admin/sector-edit.php?id=' . $sector_id,
+                        'dedupe_key' => 'drift.' . $device_id . '.' . $c['field'],
+                    ]
+                );
+            }
         }
         $opened++;
     }

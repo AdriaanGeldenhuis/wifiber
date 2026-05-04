@@ -74,6 +74,31 @@ function outage_create(string $scope, ?int $scope_id, string $label, int $affect
             'meta' => $sent,
         ]);
     }
+
+    // In-app inbox row for the NOC. Dedupe key keyed on (scope, scope_id)
+    // so a flapping link doesn't generate a fresh inbox row every minute.
+    if (is_file(__DIR__ . '/inbox.php')) {
+        require_once __DIR__ . '/inbox.php';
+        $body = "Affected: " . $affected . ($affected === 1 ? ' customer' : ' customers');
+        if ($cause !== null && $cause !== '') $body .= "\nCause: " . $cause;
+        if ($suppress) $body .= "\n(maintenance window active — customer notifications suppressed)";
+        $link = match ($scope) {
+            'sector' => '/admin/sector-edit.php?id=' . (int)$scope_id,
+            'device' => '/admin/devices.php?id='   . (int)$scope_id,
+            'tower'  => '/admin/site-view.php?id=' . (int)$scope_id,
+            default  => '/admin/outages.php',
+        };
+        inbox_post(
+            'Outage opened — ' . $label,
+            $body,
+            [
+                'audience'   => 'noc',
+                'severity'   => $affected > 0 ? 'error' : 'warning',
+                'link'       => $link,
+                'dedupe_key' => 'outage.opened.' . $scope . '.' . (int)$scope_id,
+            ]
+        );
+    }
     // Webhooks fire regardless of suppression — third-party
     // integrations (Slack, PagerDuty) want to know.
     if (function_exists('webhook_fire')) {
@@ -162,6 +187,21 @@ function outage_resolve(int $outage_id, ?string $note = null): bool {
             'target_type' => 'outage', 'target_id' => $outage_id,
             'meta' => $sent,
         ]);
+    }
+
+    // Mirror the resolution in the in-app inbox.
+    if ($row && $row['status'] === 'active' && is_file(__DIR__ . '/inbox.php')) {
+        require_once __DIR__ . '/inbox.php';
+        inbox_post(
+            'Outage resolved — ' . (string)$row['scope_label'],
+            $note ?: 'Service restored.',
+            [
+                'audience'   => 'noc',
+                'severity'   => 'success',
+                'link'       => '/admin/outages.php',
+                'dedupe_key' => 'outage.resolved.' . (int)$outage_id,
+            ]
+        );
     }
     if (is_file(__DIR__ . '/webhooks.php')) {
         require_once __DIR__ . '/webhooks.php';

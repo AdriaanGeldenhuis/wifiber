@@ -18,7 +18,7 @@ $bank_pick = $_POST['bank'] ?? 'auto';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_csrf();
-    require_admin_write();
+    acl_require('payments.write');
     try {
         $f = $_FILES['file'] ?? null;
         if (!$f || (int)($f['error'] ?? UPLOAD_ERR_NO_FILE) !== UPLOAD_ERR_OK) {

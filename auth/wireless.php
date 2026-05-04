@@ -615,6 +615,38 @@ function wireless_change_job_mark(int $id, string $status, array $patch = []): v
     $args[] = $id;
     pdo()->prepare("UPDATE wireless_change_jobs SET " . implode(', ', $sets) . " WHERE id = ?")
         ->execute($args);
+
+    // Surface terminal-state job results in the requester's inbox so the
+    // operator who queued the change sees the outcome on their next page
+    // load without scraping the recent-jobs table.
+    if (in_array($status, ['applied','failed','rolled_back'], true)
+        && is_file(__DIR__ . '/inbox.php')) {
+        require_once __DIR__ . '/inbox.php';
+        $job = wireless_change_job_find($id);
+        if ($job && !empty($job['requested_by'])) {
+            $sev = match ($status) {
+                'applied'     => 'success',
+                'failed'      => 'error',
+                'rolled_back' => 'warning',
+            };
+            $title = match ($status) {
+                'applied'     => "Push-to-radio applied (job #$id)",
+                'failed'      => "Push-to-radio failed (job #$id)",
+                'rolled_back' => "Push-to-radio rolled back (job #$id)",
+            };
+            $body = $job['scope'] . ' #' . (int)$job['scope_id']
+                  . ($job['error'] ? "\nError: " . $job['error'] : '');
+            $link = $job['scope'] === 'sector'
+                  ? '/admin/sector-edit.php?id=' . (int)$job['scope_id']
+                  : '/admin/devices.php?id='   . (int)$job['scope_id'];
+            inbox_post($title, $body, [
+                'user_id'    => (int)$job['requested_by'],
+                'severity'   => $sev,
+                'link'       => $link,
+                'dedupe_key' => 'wireless_job.' . $status . '.' . $id,
+            ]);
+        }
+    }
 }
 
 /* ------------------------------------------------ maintenance windows */

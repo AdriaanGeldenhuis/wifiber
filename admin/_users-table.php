@@ -14,6 +14,10 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
 
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         require_csrf();
+        // Customer accounts can be created by support/billing; staff
+        // accounts (admin/super_admin/etc.) require admins.write which
+        // only super_admin and admin grant.
+        acl_require($role === 'client' ? 'customers.write' : 'admins.write');
         $action = $_POST['action'] ?? '';
 
         if ($action === 'create') {

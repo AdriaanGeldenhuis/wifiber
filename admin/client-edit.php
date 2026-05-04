@@ -61,6 +61,7 @@ $errors = [];
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_csrf();
+    acl_require('customers.write');
     $action = $_POST['action'] ?? '';
 
     // ---------- Note sub-actions ----------

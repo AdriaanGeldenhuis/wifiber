@@ -19,7 +19,7 @@ $self = '/admin/payments.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_csrf();
-    require_admin_write();
+    acl_require('payments.write');
     $action = $_POST['action'] ?? '';
 
     try {

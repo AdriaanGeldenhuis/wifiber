@@ -494,6 +494,10 @@ function current_user(): ?array {
     return find_user_by_id((int)$_SESSION['user_id']);
 }
 
+const ACL_STAFF_ROLES_FALLBACK = [
+    'super_admin','admin','billing','support','technician','noc_readonly','viewer',
+];
+
 function require_role($role, string $login_url): array {
     $user = current_user();
     if (!$user) {
@@ -503,7 +507,7 @@ function require_role($role, string $login_url): array {
     $own_role = $user['role'] ?? '';
     $allowed  = is_array($role) ? $role : [$role];
     if (!in_array($own_role, $allowed, true)) {
-        if ($own_role === 'admin' || $own_role === 'noc_readonly') {
+        if (in_array($own_role, ACL_STAFF_ROLES_FALLBACK, true)) {
             header('Location: /admin/');   exit;
         }
         if ($own_role === 'client') { header('Location: /account/'); exit; }
@@ -514,19 +518,23 @@ function require_role($role, string $login_url): array {
 }
 
 /**
- * Inside admin pages: returns true if the current admin can mutate
- * (push-to-radio, edit sectors, queue jobs, …). NOC-readonly returns
- * false so views render but action buttons / forms are hidden.
+ * Inside admin pages: returns true if the current operator can mutate
+ * network state (push-to-radio, edit sectors, queue jobs, …). The
+ * binary admin / noc_readonly check has been replaced with a role
+ * allow-list — super_admin, admin and technician have write access by
+ * default; other staff roles can still be granted finer capabilities
+ * via auth/acl.php (acl_require).
  */
 function admin_can_write(?array $user = null): bool {
     $user = $user ?? current_user();
-    return ($user['role'] ?? '') === 'admin';
+    $role = (string)($user['role'] ?? '');
+    return in_array($role, ['super_admin','admin','technician'], true);
 }
 
 function require_admin_write(): void {
     if (!admin_can_write()) {
         http_response_code(403);
-        die('This action requires a full admin role. NOC-readonly accounts can view but not change network state.');
+        die('This action requires a write-capable role (admin / super_admin / technician). Read-only accounts can view but not change network state.');
     }
 }
 

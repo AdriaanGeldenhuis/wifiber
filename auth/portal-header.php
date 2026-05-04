@@ -87,9 +87,29 @@ if ($_brand_colour && preg_match('/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/',
       <?php endif; ?>
     <?php endforeach; ?>
   </nav>
+  <?php
+  // In-app inbox bell — admin portal only. Reads unread count from
+  // admin_inbox; clicking opens /admin/inbox.php for the full list.
+  $_inbox_unread = 0;
+  if ($is_admin && file_exists(__DIR__ . '/inbox.php')) {
+      require_once __DIR__ . '/inbox.php';
+      try { $_inbox_unread = inbox_unread_count($user); } catch (Throwable $e) { $_inbox_unread = 0; }
+  }
+  ?>
   <div class="portal-user">
     <div class="portal-user-name"><?= htmlspecialchars($user['name'] ?? $user['username'] ?? 'User') ?></div>
     <div class="portal-user-role"><?= htmlspecialchars($user['role'] ?? '') ?></div>
+    <?php if ($is_admin): ?>
+      <a href="/admin/inbox.php" class="portal-inbox-bell" title="Inbox<?= $_inbox_unread ? " ({$_inbox_unread} unread)" : '' ?>">
+        <svg viewBox="0 0 24 24" width="18" height="18" aria-hidden="true">
+          <path fill="currentColor" d="M12 2a1 1 0 0 1 1 1v.6a7 7 0 0 1 6 6.9V14l1.7 2.4a1 1 0 0 1-.8 1.6H4.1a1 1 0 0 1-.8-1.6L5 14v-3.5a7 7 0 0 1 6-6.9V3a1 1 0 0 1 1-1zm-2 17a2 2 0 0 0 4 0h-4z"/>
+        </svg>
+        Inbox
+        <?php if ($_inbox_unread > 0): ?>
+          <span class="portal-inbox-badge"><?= $_inbox_unread > 99 ? '99+' : (int)$_inbox_unread ?></span>
+        <?php endif; ?>
+      </a>
+    <?php endif; ?>
     <a href="/<?= $portal ?>/logout.php" class="portal-logout">Log out</a>
   </div>
 </aside>
