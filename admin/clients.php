@@ -2,6 +2,23 @@
 $page_title = 'Clients';
 $active_key = 'clients';
 require __DIR__ . '/_layout.php';
+require_once __DIR__ . '/../auth/sites.php';
+
+// Address-picker AJAX endpoints for the inline create form. Auth has
+// already been enforced by _layout.php.
+if (isset($_GET['suggest'])) {
+    while (ob_get_level() > 0) ob_end_clean();
+    header('Content-Type: application/json');
+    echo json_encode(['ok' => true, 'results' => nominatim_search((string)$_GET['suggest'], 5)]);
+    exit;
+}
+if (isset($_GET['reverse_lat'], $_GET['reverse_lng'])) {
+    while (ob_get_level() > 0) ob_end_clean();
+    header('Content-Type: application/json');
+    $name = nominatim_reverse((float)$_GET['reverse_lat'], (float)$_GET['reverse_lng']);
+    echo json_encode(['ok' => true, 'display_name' => $name]);
+    exit;
+}
 
 // CSV export — runs before the table render so we can stream and exit.
 if (($_GET['export'] ?? '') === 'csv') {

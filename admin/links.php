@@ -12,6 +12,7 @@ require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/wireless.php';
 require_once __DIR__ . '/../auth/devices.php';
 require_once __DIR__ . '/../auth/sectors.php';
+require_once __DIR__ . '/../auth/sites.php';
 require_once __DIR__ . '/../auth/csv.php';
 
 $self = '/admin/links.php';
@@ -52,6 +53,37 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Location: ' . $self);
         exit;
     }
+
+    if ($action === 'save_site_link') {
+        try {
+            $saved = site_link_save([
+                'from_site_id'  => (int)($_POST['from_site_id'] ?? 0),
+                'to_site_id'    => (int)($_POST['to_site_id']   ?? 0),
+                'type'          => $_POST['type']          ?? 'ptp',
+                'label'         => $_POST['label']         ?? '',
+                'capacity_mbps' => $_POST['capacity_mbps'] ?? null,
+                'frequency'     => $_POST['frequency']     ?? '',
+                'notes'         => $_POST['notes']         ?? '',
+            ]);
+            audit_log('site_link.create', ['target_type' => 'site_link', 'target_id' => $saved]);
+            flash('success', 'Backbone link added.');
+        } catch (Throwable $e) {
+            flash('error', $e->getMessage());
+        }
+        header('Location: ' . $self . '#backbone');
+        exit;
+    }
+
+    if ($action === 'delete_site_link') {
+        $id = (int)($_POST['id'] ?? 0);
+        if ($id) {
+            site_link_delete($id);
+            audit_log('site_link.delete', ['target_type' => 'site_link', 'target_id' => $id]);
+            flash('success', 'Backbone link removed.');
+        }
+        header('Location: ' . $self . '#backbone');
+        exit;
+    }
 }
 
 $filters = [
@@ -82,6 +114,22 @@ $sectors = sectors_all(null);
 $ap_devices  = array_values(array_filter($devices, fn ($d) => in_array($d['role'], ['ap', 'backhaul'], true)));
 $cpe_devices = array_values(array_filter($devices, fn ($d) => in_array($d['role'], ['cpe', 'backhaul'], true)));
 
+$site_links_rows = site_links_with_sites();
+$sites           = sites_all();
+
+$site_link_type_labels = [
+    'ptp'      => 'Point-to-point',
+    'ptmp'     => 'Point-to-multipoint',
+    'fiber'    => 'Fibre',
+    'backhaul' => 'Backhaul',
+];
+$site_link_type_color = [
+    'ptp'      => '#08e',
+    'ptmp'     => '#0c8',
+    'fiber'    => '#f0a',
+    'backhaul' => '#f80',
+];
+
 $health_pill = function (?int $score): string {
     if ($score === null) {
         return '<span class="link-pill" style="background:#888;color:#fff;">no data</span>';
@@ -102,8 +150,8 @@ $health_pill = function (?int $score): string {
 </style>
 
 <div class="portal-head">
-  <h1>Wireless links</h1>
-  <p class="portal-sub">Every AP↔CPE pairing in the network, ordered by health (worst first). Click a row to open the live link dashboard. Most links auto-register on first poll — the form below is for pre-staging new installs.</p>
+  <h1>Links</h1>
+  <p class="portal-sub">Every link in the network: customer AP↔CPE wireless links (auto-registered by the polling worker) and the backbone PTP / fibre / backhaul lines drawn between sites. Jump to <a href="#backbone">backbone links</a>.</p>
 </div>
 
 <div class="portal-card">
@@ -158,7 +206,7 @@ $health_pill = function (?int $score): string {
 </div>
 
 <div class="portal-card">
-  <h2>Links <span class="muted">(<?= count($links) ?>)</span></h2>
+  <h2>Wireless customer links <span class="muted">(<?= count($links) ?>)</span></h2>
   <?php if (!$links): ?>
     <div class="empty-state">
       <div class="empty-icon">📡</div>
@@ -265,6 +313,131 @@ $health_pill = function (?int $score): string {
       </tbody>
     </table>
     </div>
+  <?php endif; ?>
+</div>
+
+<div class="portal-card" id="backbone">
+  <h2>Backbone links <span class="muted">(<?= count($site_links_rows) ?>)</span></h2>
+  <p class="muted">Site-to-site PTP / fibre / backhaul connections — the lines you see on the <a href="/admin/map.php">network map</a>. Edits made here update the map immediately.</p>
+  <?php if (!$site_links_rows): ?>
+    <div class="empty-state">
+      <div class="empty-icon">🛰️</div>
+      <h3>No backbone links yet</h3>
+      <p>Draw them on the <a href="/admin/map.php">network map</a> by clicking two sites in turn, or pre-stage one with the form below.</p>
+    </div>
+  <?php else: ?>
+    <div class="table-scroll">
+    <table class="data-table">
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>From → To</th>
+          <th>Label</th>
+          <th>Capacity</th>
+          <th>Frequency</th>
+          <th>Distance</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody>
+        <?php foreach ($site_links_rows as $sl): ?>
+          <?php
+            $type_lbl = $site_link_type_labels[$sl['type']] ?? $sl['type'];
+            $type_bg  = $site_link_type_color[$sl['type']]  ?? '#888';
+          ?>
+          <tr>
+            <td>
+              <span class="link-pill" style="background:<?= $type_bg ?>;color:#fff;">
+                <?= htmlspecialchars($type_lbl) ?>
+              </span>
+            </td>
+            <td>
+              <strong><?= htmlspecialchars($sl['from_name']) ?></strong>
+              <span class="muted">→</span>
+              <strong><?= htmlspecialchars($sl['to_name']) ?></strong>
+            </td>
+            <td>
+              <?= $sl['label'] !== ''
+                  ? htmlspecialchars($sl['label'])
+                  : '<small class="muted">—</small>' ?>
+            </td>
+            <td>
+              <?= $sl['capacity_mbps'] !== null
+                  ? number_format((float)$sl['capacity_mbps'], 0) . ' <small class="muted">Mbps</small>'
+                  : '<small class="muted">—</small>' ?>
+            </td>
+            <td>
+              <?= $sl['frequency']
+                  ? htmlspecialchars((string)$sl['frequency'])
+                  : '<small class="muted">—</small>' ?>
+            </td>
+            <td>
+              <small><?= number_format($sl['distance_km'], 2) ?> km</small>
+            </td>
+            <td class="row-actions">
+              <form method="post" class="inline-form" data-confirm="Delete this backbone link?">
+                <?= csrf_field() ?>
+                <input type="hidden" name="action" value="delete_site_link">
+                <input type="hidden" name="id" value="<?= (int)$sl['id'] ?>">
+                <button type="submit" class="btn btn-danger btn-sm">Delete</button>
+              </form>
+            </td>
+          </tr>
+        <?php endforeach; ?>
+      </tbody>
+    </table>
+    </div>
+  <?php endif; ?>
+</div>
+
+<div class="portal-card">
+  <h2>Add a backbone link</h2>
+  <p class="muted">Wire two sites together without leaving this page. For graphical placement use the <a href="/admin/map.php">network map</a>.</p>
+  <?php if (count($sites) < 2): ?>
+    <p class="muted">You need at least two sites before you can link them. Add some on <a href="/admin/sites.php">/admin/sites.php</a>.</p>
+  <?php else: ?>
+    <form method="post" class="form form-grid">
+      <?= csrf_field() ?>
+      <input type="hidden" name="action" value="save_site_link">
+      <div class="field"><label>From site *</label>
+        <select name="from_site_id" required>
+          <option value="">— pick —</option>
+          <?php foreach ($sites as $s): ?>
+            <option value="<?= (int)$s['id'] ?>"><?= htmlspecialchars($s['name']) ?></option>
+          <?php endforeach; ?>
+        </select>
+      </div>
+      <div class="field"><label>To site *</label>
+        <select name="to_site_id" required>
+          <option value="">— pick —</option>
+          <?php foreach ($sites as $s): ?>
+            <option value="<?= (int)$s['id'] ?>"><?= htmlspecialchars($s['name']) ?></option>
+          <?php endforeach; ?>
+        </select>
+      </div>
+      <div class="field"><label>Type</label>
+        <select name="type">
+          <?php foreach ($site_link_type_labels as $k => $lbl): ?>
+            <option value="<?= htmlspecialchars($k) ?>"><?= htmlspecialchars($lbl) ?></option>
+          <?php endforeach; ?>
+        </select>
+      </div>
+      <div class="field"><label>Label</label>
+        <input type="text" name="label" maxlength="120" placeholder="e.g. Tower A ↔ Tower B">
+      </div>
+      <div class="field"><label>Capacity (Mbps)</label>
+        <input type="number" step="any" min="0" name="capacity_mbps" placeholder="e.g. 1000">
+      </div>
+      <div class="field"><label>Frequency</label>
+        <input type="text" name="frequency" maxlength="20" placeholder="e.g. 5 GHz / fibre">
+      </div>
+      <div class="field" style="grid-column:1/-1;"><label>Notes</label>
+        <textarea name="notes" rows="2" maxlength="2000"></textarea>
+      </div>
+      <div class="form-actions" style="grid-column:1/-1;">
+        <button type="submit" class="btn btn-primary btn-sm">Add backbone link</button>
+      </div>
+    </form>
   <?php endif; ?>
 </div>
 

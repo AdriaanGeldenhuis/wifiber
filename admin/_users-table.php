@@ -53,11 +53,13 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
                         'customer_type' => $_POST['customer_type'] ?? 'residential',
                     ]);
                     if ($created && !empty($created['id'])) {
-                        // Backfill phone_e164 (and product_id below) — create_user's
-                        // INSERT only covers the canonical columns.
+                        // Backfill phone_e164 (and product_id / GPS below) —
+                        // create_user's INSERT only covers the canonical columns.
                         $patch = [];
                         if ($phone_check['value'] !== '') $patch['phone_e164'] = $phone_check['value'];
                         if ($product_id > 0)              $patch['product_id'] = $product_id;
+                        if (is_numeric($_POST['lat'] ?? null)) $patch['lat'] = (float)$_POST['lat'];
+                        if (is_numeric($_POST['lng'] ?? null)) $patch['lng'] = (float)$_POST['lng'];
                         if ($patch) {
                             update_user((int)$created['id'], fn(array $u) => array_merge($u, $patch));
                             $created = find_user_by_id((int)$created['id']) ?? $created;
@@ -592,8 +594,22 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
               <?php endforeach; ?>
             </select>
           </div>
-          <div class="field" style="grid-column:1/-1;"><label>Address</label>
-            <input type="text" name="address" maxlength="200">
+          <div class="field" style="grid-column:1/-1;" data-addr-picker="/admin/clients.php">
+            <div style="position:relative;">
+              <label>Address <span class="muted small">(start typing for suggestions)</span></label>
+              <input type="text" id="new-addr-input" name="address" maxlength="200" autocomplete="new-password" data-addr-input data-1p-ignore data-lpignore="true">
+              <div id="new-addr-suggestions" class="addr-suggestions" hidden data-addr-suggestions></div>
+            </div>
+            <input type="hidden" name="lat" data-addr-lat>
+            <input type="hidden" name="lng" data-addr-lng>
+            <div id="new-addr-map" class="addr-map" data-addr-map aria-label="Click or drag the pin to set GPS coordinates"></div>
+            <p class="muted small" data-addr-hint style="margin:8px 0 0;">
+              Pick a suggestion, click the map, or drag the pin to set GPS. We'll save it with the client.
+            </p>
+            <div class="form-actions" style="margin-top:8px; flex-wrap:wrap;">
+              <button type="button" class="btn btn-ghost btn-sm" data-addr-locate>Use my location</button>
+              <button type="button" class="btn btn-ghost btn-sm" data-addr-reverse>Fill address from pin</button>
+            </div>
           </div>
           <div class="field-check" style="grid-column:1/-1;">
             <input type="checkbox" id="send_welcome_<?= htmlspecialchars($role) ?>" name="send_welcome" value="1" checked>
@@ -609,4 +625,54 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
       </form>
     </div>
     <?php
+    if ($is_client_view) render_users_addr_picker_assets();
 }
+
+function render_users_addr_picker_assets(): void {
+    ?>
+    <link rel="stylesheet"
+          href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+          integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+          crossorigin="anonymous">
+    <style>
+      .addr-suggestions {
+        position: absolute;
+        top: 100%; left: 0; right: 0;
+        background: var(--bg-card, #1a1d24);
+        border: 1px solid var(--border);
+        border-radius: var(--radius-sm);
+        z-index: 1000;
+        max-height: 240px;
+        overflow-y: auto;
+        box-shadow: 0 4px 12px rgba(0,0,0,.4);
+        margin-top: 2px;
+      }
+      .addr-suggestion {
+        padding: 8px 12px;
+        cursor: pointer;
+        font-size: 13px;
+        border-bottom: 1px solid var(--border);
+        color: var(--text-dim);
+      }
+      .addr-suggestion:last-child { border-bottom: none; }
+      .addr-suggestion:hover,
+      .addr-suggestion.is-active {
+        background: var(--accent-soft);
+        color: var(--accent);
+      }
+      .addr-map {
+        height: 280px;
+        margin-top: 8px;
+        border-radius: var(--radius-sm);
+        border: 1px solid var(--border);
+        background: #0a0d12;
+      }
+      .leaflet-container { font-family: inherit; }
+    </style>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+            integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+            crossorigin="anonymous" defer></script>
+    <script src="/assets/js/admin-addr-picker.js" defer></script>
+    <?php
+}
+
