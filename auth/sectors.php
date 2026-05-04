@@ -152,3 +152,234 @@ function sector_save(array $data, ?int $id = null): int {
 function sector_delete(int $id): bool {
     return pdo()->prepare("DELETE FROM sectors WHERE id = ?")->execute([$id]);
 }
+
+/* ---------------------------------------------------- analytics helpers */
+
+const SECTOR_OVERLAP_DISTANCE_KM = 10.0;  // Same-band sectors this close are likely to interfere.
+
+/**
+ * Find every other sector whose frequency range overlaps with this one
+ * AND whose tower is within SECTOR_OVERLAP_DISTANCE_KM. Useful for the
+ * "you're stepping on yourself" warning on /admin/sectors.php and
+ * /admin/sector-edit.php.
+ *
+ * Two sectors overlap on the air if:
+ *   • Same band
+ *   • |freq_a - freq_b| < (width_a + width_b) / 2
+ *   • haversine(tower_a, tower_b) < SECTOR_OVERLAP_DISTANCE_KM
+ *
+ * Returns rows with the offender sector + its tower + computed
+ * distance + freq-window overlap in MHz, sorted by worst-offender
+ * first (largest overlap × shortest distance).
+ */
+function sectors_overlap_check(int $sector_id): array {
+    if ($sector_id <= 0) return [];
+    require_once __DIR__ . '/sites.php'; // for haversine_km()
+
+    $stmt = pdo()->prepare(
+        "SELECT s.*, t.lat AS tower_lat, t.lng AS tower_lng, t.name AS tower_name
+           FROM sectors s
+           JOIN sites   t ON t.id = s.tower_id
+          WHERE s.id = ? LIMIT 1"
+    );
+    $stmt->execute([$sector_id]);
+    $self = $stmt->fetch();
+    if (!$self || !$self['frequency_mhz'] || !$self['channel_width_mhz']) return [];
+
+    $stmt = pdo()->prepare(
+        "SELECT s.*, t.lat AS tower_lat, t.lng AS tower_lng, t.name AS tower_name
+           FROM sectors s
+           JOIN sites   t ON t.id = s.tower_id
+          WHERE s.id <> ?
+            AND s.band = ?
+            AND s.frequency_mhz IS NOT NULL
+            AND s.channel_width_mhz IS NOT NULL"
+    );
+    $stmt->execute([$sector_id, $self['band']]);
+
+    $f1 = (int)$self['frequency_mhz'];
+    $w1 = (int)$self['channel_width_mhz'];
+    $hits = [];
+    foreach ($stmt->fetchAll() as $r) {
+        $f2 = (int)$r['frequency_mhz'];
+        $w2 = (int)$r['channel_width_mhz'];
+        $sep   = abs($f1 - $f2);
+        $half  = ($w1 + $w2) / 2.0;
+        $overlap_mhz = $half - $sep;
+        if ($overlap_mhz <= 0) continue;
+
+        $km = haversine_km(
+            (float)$self['tower_lat'], (float)$self['tower_lng'],
+            (float)$r['tower_lat'],    (float)$r['tower_lng']
+        );
+        if ($km > SECTOR_OVERLAP_DISTANCE_KM) continue;
+
+        $hits[] = [
+            'sector_id'    => (int)$r['id'],
+            'sector_name'  => (string)$r['name'],
+            'tower_id'     => (int)$r['tower_id'],
+            'tower_name'   => (string)$r['tower_name'],
+            'band'         => (string)$r['band'],
+            'frequency_mhz'=> $f2,
+            'channel_width_mhz' => $w2,
+            'distance_km'  => round($km, 3),
+            'overlap_mhz'  => round($overlap_mhz, 1),
+            'azimuth_deg'  => $r['azimuth_deg'] !== null ? (int)$r['azimuth_deg'] : null,
+        ];
+    }
+    // Worst offenders first: more MHz overlap and closer = higher priority.
+    usort($hits, fn($a, $b) => ($b['overlap_mhz'] / max(0.1, $b['distance_km']))
+                            <=> ($a['overlap_mhz'] / max(0.1, $a['distance_km'])));
+    return $hits;
+}
+
+/**
+ * Hourly throughput rollup for a sector over the last $hours.
+ * Aggregates link_health_samples joined via wireless_links.sector_id.
+ * Returns one row per hour bucket, oldest-first, suitable for an SVG
+ * sparkline. Empty hours are present with avg/peak = 0 so the chart
+ * doesn't have gaps.
+ */
+function sector_throughput_history(int $sector_id, int $hours = 24): array {
+    if ($sector_id <= 0) return [];
+    $hours = max(1, min(168, $hours));
+
+    $stmt = pdo()->prepare(
+        "SELECT DATE_FORMAT(lhs.polled_at, '%Y-%m-%d %H:00') AS bucket,
+                AVG(COALESCE(lhs.throughput_local_mbps, 0)
+                  + COALESCE(lhs.throughput_remote_mbps, 0))   AS avg_mbps,
+                MAX(COALESCE(lhs.throughput_local_mbps, 0)
+                  + COALESCE(lhs.throughput_remote_mbps, 0))   AS peak_mbps,
+                COUNT(*)                                       AS samples
+           FROM link_health_samples lhs
+           JOIN wireless_links wl ON wl.id = lhs.link_id
+          WHERE wl.sector_id = ?
+            AND lhs.polled_at >= DATE_SUB(NOW(), INTERVAL ? HOUR)
+          GROUP BY bucket
+          ORDER BY bucket ASC"
+    );
+    $stmt->execute([$sector_id, $hours]);
+    $by_bucket = [];
+    foreach ($stmt->fetchAll() as $r) {
+        $by_bucket[$r['bucket']] = [
+            'bucket'    => $r['bucket'],
+            'avg_mbps'  => round((float)$r['avg_mbps'], 2),
+            'peak_mbps' => round((float)$r['peak_mbps'], 2),
+            'samples'   => (int)$r['samples'],
+        ];
+    }
+    // Fill in empty hours so the sparkline doesn't compress its X axis.
+    $out = [];
+    $now = strtotime(date('Y-m-d H:00:00'));
+    for ($i = $hours - 1; $i >= 0; $i--) {
+        $ts = $now - $i * 3600;
+        $key = date('Y-m-d H:00', $ts);
+        $out[] = $by_bucket[$key] ?? [
+            'bucket' => $key, 'avg_mbps' => 0.0, 'peak_mbps' => 0.0, 'samples' => 0,
+        ];
+    }
+    return $out;
+}
+
+/**
+ * Outage history for a sector — recent rows from the outages table
+ * plus aggregate stats (count, total downtime minutes, MTTR). Limits
+ * to scope='sector' AND scope_id=$id; tower-level outages aren't
+ * counted here even though they affect this sector — that's a
+ * different chart.
+ */
+function sector_outage_history(int $sector_id, int $days = 90, int $list_limit = 20): array {
+    if ($sector_id <= 0) return ['rows' => [], 'count' => 0, 'down_minutes' => 0, 'mttr_minutes' => null];
+    $days = max(1, min(3650, $days));
+    $list_limit = max(1, min(500, $list_limit));
+
+    $stmt = pdo()->prepare(
+        "SELECT *,
+                TIMESTAMPDIFF(MINUTE, started_at, COALESCE(resolved_at, NOW())) AS minutes
+           FROM outages
+          WHERE scope = 'sector' AND scope_id = ?
+            AND started_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+          ORDER BY started_at DESC LIMIT $list_limit"
+    );
+    $stmt->execute([$sector_id, $days]);
+    $rows = $stmt->fetchAll();
+
+    $stmt = pdo()->prepare(
+        "SELECT COUNT(*) AS event_count,
+                SUM(TIMESTAMPDIFF(MINUTE, started_at, COALESCE(resolved_at, NOW()))) AS down_minutes,
+                AVG(CASE WHEN resolved_at IS NOT NULL
+                          THEN TIMESTAMPDIFF(MINUTE, started_at, resolved_at)
+                          ELSE NULL END) AS mttr_minutes
+           FROM outages
+          WHERE scope = 'sector' AND scope_id = ?
+            AND started_at >= DATE_SUB(NOW(), INTERVAL ? DAY)"
+    );
+    $stmt->execute([$sector_id, $days]);
+    $agg = $stmt->fetch() ?: [];
+
+    return [
+        'rows'         => $rows,
+        'count'        => (int)($agg['event_count']  ?? 0),
+        'down_minutes' => (int)($agg['down_minutes'] ?? 0),
+        'mttr_minutes' => $agg['mttr_minutes'] !== null ? (int)round((float)$agg['mttr_minutes']) : null,
+    ];
+}
+
+/**
+ * Estimate when a sector will hit max_clients given the trailing
+ * subscriber-add velocity. Linear projection — counts users whose
+ * service_start landed inside the last $window_days, divides by the
+ * window to get a per-day rate, then projects forward to max_clients.
+ *
+ * Returns null when the sector has no max_clients set, no current
+ * subscribers, or recent growth ≤ 0 (in which case "fill" is
+ * meaningless). Otherwise returns the projection so the UI can show
+ * "expected to fill in N days at current rate".
+ */
+function sector_capacity_forecast(int $sector_id, int $window_days = 90): ?array {
+    if ($sector_id <= 0) return null;
+    $window_days = max(7, min(365, $window_days));
+
+    $stmt = pdo()->prepare(
+        "SELECT (SELECT max_clients FROM sectors WHERE id = ?) AS max_clients,
+                COUNT(*)                                                          AS current_count,
+                SUM(service_start IS NOT NULL
+                    AND service_start >= DATE_SUB(CURDATE(), INTERVAL ? DAY))     AS recent_adds
+           FROM users
+          WHERE sector_id = ? AND role = 'client'"
+    );
+    $stmt->execute([$sector_id, $window_days, $sector_id]);
+    $r = $stmt->fetch();
+    if (!$r) return null;
+
+    $max     = $r['max_clients'] !== null ? (int)$r['max_clients'] : null;
+    $current = (int)$r['current_count'];
+    $recent  = (int)$r['recent_adds'];
+    if ($max === null || $max <= 0) return null;
+
+    $pct = round(($current / $max) * 100, 1);
+
+    $rate_per_day = $recent > 0 ? ($recent / $window_days) : 0.0;
+    if ($rate_per_day <= 0) {
+        return [
+            'max_clients'   => $max,
+            'current_count' => $current,
+            'pct'           => $pct,
+            'recent_adds'   => $recent,
+            'window_days'   => $window_days,
+            'rate_per_day'  => 0.0,
+            'days_to_full'  => null,
+        ];
+    }
+    $remaining     = max(0, $max - $current);
+    $days_to_full  = (int)ceil($remaining / $rate_per_day);
+    return [
+        'max_clients'   => $max,
+        'current_count' => $current,
+        'pct'           => $pct,
+        'recent_adds'   => $recent,
+        'window_days'   => $window_days,
+        'rate_per_day'  => round($rate_per_day, 3),
+        'days_to_full'  => $days_to_full,
+    ];
+}
