@@ -185,15 +185,21 @@ function site_links_with_sites(): array {
 /**
  * Great-circle distance between two lat/lng pairs, in kilometres.
  * Earth radius 6371 km. Good enough for short PTP / backhaul spans.
+ *
+ * Guarded with function_exists because auth/wireless.php declares an
+ * identical helper, and a page that loads both files (e.g. links.php)
+ * would otherwise fatal on redeclaration.
  */
-function haversine_km(float $lat1, float $lng1, float $lat2, float $lng2): float {
-    $R = 6371.0;
-    $phi1 = deg2rad($lat1);
-    $phi2 = deg2rad($lat2);
-    $dphi = deg2rad($lat2 - $lat1);
-    $dlam = deg2rad($lng2 - $lng1);
-    $a = sin($dphi / 2) ** 2 + cos($phi1) * cos($phi2) * sin($dlam / 2) ** 2;
-    return 2 * $R * asin(min(1.0, sqrt($a)));
+if (!function_exists('haversine_km')) {
+    function haversine_km(float $lat1, float $lng1, float $lat2, float $lng2): float {
+        $R = 6371.0;
+        $phi1 = deg2rad($lat1);
+        $phi2 = deg2rad($lat2);
+        $dphi = deg2rad($lat2 - $lat1);
+        $dlam = deg2rad($lng2 - $lng1);
+        $a = sin($dphi / 2) ** 2 + cos($phi1) * cos($phi2) * sin($dlam / 2) ** 2;
+        return 2 * $R * asin(min(1.0, sqrt($a)));
+    }
 }
 
 /* ---------------------------------------------------------- geocoding */
