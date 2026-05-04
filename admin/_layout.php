@@ -42,6 +42,7 @@ $nav = [
         ['key' => 'clients',  'label' => 'Clients',            'href' => '/admin/clients.php'],
         ['key' => 'invoices', 'label' => 'Invoices',           'href' => '/admin/invoices.php'],
         ['key' => 'products', 'label' => 'Products (billing)', 'href' => '/admin/products.php'],
+        ['key' => 'radius',   'label' => 'RADIUS / NAS',       'href' => '/admin/radius.php'],
     ]],
     ['group' => 'Website Content', 'items' => [
         ['key' => 'slides',  'label' => 'Hero slider',      'href' => '/admin/slides.php'],

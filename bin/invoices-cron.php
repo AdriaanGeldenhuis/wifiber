@@ -33,16 +33,23 @@ if (PHP_SAPI !== 'cli') {
 }
 
 require __DIR__ . '/../auth/invoices.php';
+if (is_file(__DIR__ . '/../auth/radius.php')) {
+    require __DIR__ . '/../auth/radius.php';
+}
+
+const DUNNING_SUSPEND_DAYS = 14; // overdue ≥ this many days → auto-suspend via RADIUS
 
 $opts = [
     'period'        => date('Y-m-01'),
     'no-generate'   => false,
     'no-reminders'  => false,
+    'no-suspend'    => false,
     'dry-run'       => false,
 ];
 foreach (array_slice($argv, 1) as $arg) {
     if ($arg === '--no-generate'  || $arg === '--skip-generate')  { $opts['no-generate']  = true; continue; }
     if ($arg === '--no-reminders' || $arg === '--skip-reminders') { $opts['no-reminders'] = true; continue; }
+    if ($arg === '--no-suspend'   || $arg === '--skip-suspend')   { $opts['no-suspend']   = true; continue; }
     if ($arg === '--dry-run')                                     { $opts['dry-run']      = true; continue; }
     if (strncmp($arg, '--period=', 9) === 0) {
         $opts['period'] = substr($arg, 9);
@@ -135,6 +142,51 @@ if (!$opts['no-reminders']) {
         }
     }
     echo "Result: {$sent} sent, {$failed} failed.\n";
+}
+
+/* ----------------------------------------------------- 3) dunning auto-suspend */
+
+if (!$opts['no-suspend'] && function_exists('radius_suspend')) {
+    echo "\n--- dunning auto-suspend (≥ " . DUNNING_SUSPEND_DAYS . "d overdue) ---\n";
+    $cutoff = date('Y-m-d', time() - DUNNING_SUSPEND_DAYS * 86400);
+    $stmt = pdo()->prepare(
+        "SELECT DISTINCT i.user_id, u.username, u.status,
+                MIN(i.due_at) AS oldest_due
+           FROM invoices i
+           JOIN users u ON u.id = i.user_id
+          WHERE i.status = 'unpaid'
+            AND i.due_at <= ?
+            AND u.role   = 'client'
+            AND u.status = 'active'
+          GROUP BY i.user_id, u.username, u.status"
+    );
+    $stmt->execute([$cutoff]);
+    $delinquent = $stmt->fetchAll();
+    echo count($delinquent) . " active customer(s) past the suspend threshold.\n";
+
+    $suspended = 0;
+    foreach ($delinquent as $d) {
+        if ($opts['dry-run']) {
+            echo "  [dry-run] would suspend {$d['username']} (oldest unpaid {$d['oldest_due']})\n";
+            continue;
+        }
+        try {
+            update_user((int)$d['user_id'], function (array $u) {
+                $u['status'] = 'suspended';
+                return $u;
+            });
+            radius_suspend((int)$d['user_id'], 'overdue ≥ ' . DUNNING_SUSPEND_DAYS . 'd');
+            audit_log('billing.auto_suspend', [
+                'target_type' => 'user', 'target_id' => (int)$d['user_id'],
+                'meta' => ['oldest_due' => (string)$d['oldest_due']],
+            ]);
+            echo "  ! suspended {$d['username']} (oldest unpaid {$d['oldest_due']})\n";
+            $suspended++;
+        } catch (Throwable $e) {
+            echo "  ! suspend failed for {$d['username']}: {$e->getMessage()}\n";
+        }
+    }
+    echo "Result: {$suspended} suspended.\n";
 }
 
 echo "\n[invoices-cron] done.\n";

@@ -200,6 +200,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'target_id'   => $id,
             'meta'        => ['account_no' => $patch['account_no'] ?? $client['account_no']],
         ]);
+        // Push status / product / rate-limit changes through to RADIUS so a
+        // suspend takes effect on the NAS immediately. Failures are logged
+        // but don't block the save — the bin/radius-sync.php cron will
+        // reconcile next minute.
+        if (is_file(__DIR__ . '/../auth/radius.php')) {
+            require_once __DIR__ . '/../auth/radius.php';
+            try { radius_provision_user($id); }
+            catch (Throwable $e) { error_log('radius provision failed: ' . $e->getMessage()); }
+        }
         flash('success', 'Client details saved.');
         header('Location: /admin/client-edit.php?id=' . $id);
         exit;
