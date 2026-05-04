@@ -153,6 +153,49 @@ function site_link_delete(int $id): bool {
     return pdo()->prepare("DELETE FROM site_links WHERE id = ?")->execute([$id]);
 }
 
+/**
+ * site_links joined to both endpoint sites, with great-circle distance
+ * between them in km. Used by /admin/links.php's backbone section so the
+ * admin sees something more useful than raw IDs.
+ */
+function site_links_with_sites(): array {
+    $rows = pdo()->query(
+        "SELECT sl.*,
+                fs.name AS from_name, fs.lat AS from_lat, fs.lng AS from_lng,
+                ts.name AS to_name,   ts.lat AS to_lat,   ts.lng AS to_lng
+           FROM site_links sl
+           JOIN sites fs ON fs.id = sl.from_site_id
+           JOIN sites ts ON ts.id = sl.to_site_id
+          ORDER BY sl.id ASC"
+    )->fetchAll();
+
+    foreach ($rows as &$r) {
+        $r['id']            = (int)$r['id'];
+        $r['from_site_id']  = (int)$r['from_site_id'];
+        $r['to_site_id']    = (int)$r['to_site_id'];
+        $r['capacity_mbps'] = $r['capacity_mbps'] !== null ? (float)$r['capacity_mbps'] : null;
+        $r['distance_km']   = haversine_km(
+            (float)$r['from_lat'], (float)$r['from_lng'],
+            (float)$r['to_lat'],   (float)$r['to_lng']
+        );
+    }
+    return $rows;
+}
+
+/**
+ * Great-circle distance between two lat/lng pairs, in kilometres.
+ * Earth radius 6371 km. Good enough for short PTP / backhaul spans.
+ */
+function haversine_km(float $lat1, float $lng1, float $lat2, float $lng2): float {
+    $R = 6371.0;
+    $phi1 = deg2rad($lat1);
+    $phi2 = deg2rad($lat2);
+    $dphi = deg2rad($lat2 - $lat1);
+    $dlam = deg2rad($lng2 - $lng1);
+    $a = sin($dphi / 2) ** 2 + cos($phi1) * cos($phi2) * sin($dlam / 2) ** 2;
+    return 2 * $R * asin(min(1.0, sqrt($a)));
+}
+
 /* ---------------------------------------------------------- geocoding */
 
 /**
