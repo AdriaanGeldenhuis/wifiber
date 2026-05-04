@@ -16,6 +16,7 @@ const DEVICE_STATUSES = ['online', 'offline', 'unknown', 'retired'];
 function device_normalise(array $r): array {
     $r['id']           = (int)$r['id'];
     $r['site_id']      = $r['site_id']      !== null ? (int)$r['site_id']      : null;
+    $r['customer_id']  = isset($r['customer_id']) && $r['customer_id'] !== null ? (int)$r['customer_id'] : null;
     $r['mgmt_port']    = $r['mgmt_port']    !== null ? (int)$r['mgmt_port']    : null;
     return $r;
 }
@@ -71,18 +72,19 @@ function device_save(array $data, ?int $id = null): int {
     $status = in_array($data['status'] ?? '', DEVICE_STATUSES, true)  ? $data['status'] : 'unknown';
 
     $args = [
-        'site_id'   => !empty($data['site_id']) && is_numeric($data['site_id']) ? (int)$data['site_id'] : null,
-        'name'      => trim((string)($data['name']    ?? '')),
-        'vendor'    => $vendor,
-        'model'     => trim((string)($data['model']   ?? '')),
-        'role'      => $role,
-        'serial'    => trim((string)($data['serial']  ?? '')),
-        'mac'       => strtoupper(trim((string)($data['mac'] ?? ''))),
-        'mgmt_ip'   => trim((string)($data['mgmt_ip'] ?? '')),
-        'mgmt_port' => is_numeric($data['mgmt_port'] ?? null) ? max(1, min(65535, (int)$data['mgmt_port'])) : null,
-        'firmware'  => trim((string)($data['firmware'] ?? '')),
-        'status'    => $status,
-        'notes'     => trim((string)($data['notes']    ?? '')) ?: null,
+        'site_id'     => !empty($data['site_id'])     && is_numeric($data['site_id'])     ? (int)$data['site_id']     : null,
+        'customer_id' => !empty($data['customer_id']) && is_numeric($data['customer_id']) ? (int)$data['customer_id'] : null,
+        'name'        => trim((string)($data['name']    ?? '')),
+        'vendor'      => $vendor,
+        'model'       => trim((string)($data['model']   ?? '')),
+        'role'        => $role,
+        'serial'      => trim((string)($data['serial']  ?? '')),
+        'mac'         => strtoupper(trim((string)($data['mac'] ?? ''))),
+        'mgmt_ip'     => trim((string)($data['mgmt_ip'] ?? '')),
+        'mgmt_port'   => is_numeric($data['mgmt_port'] ?? null) ? max(1, min(65535, (int)$data['mgmt_port'])) : null,
+        'firmware'    => trim((string)($data['firmware'] ?? '')),
+        'status'      => $status,
+        'notes'       => trim((string)($data['notes']    ?? '')) ?: null,
     ];
 
     if ($args['name'] === '') {
@@ -92,11 +94,11 @@ function device_save(array $data, ?int $id = null): int {
     if ($id) {
         pdo()->prepare(
             "UPDATE devices
-                SET site_id=?, name=?, vendor=?, model=?, role=?, serial=?, mac=?,
+                SET site_id=?, customer_id=?, name=?, vendor=?, model=?, role=?, serial=?, mac=?,
                     mgmt_ip=?, mgmt_port=?, firmware=?, status=?, notes=?
               WHERE id=?"
         )->execute([
-            $args['site_id'], $args['name'], $args['vendor'], $args['model'], $args['role'],
+            $args['site_id'], $args['customer_id'], $args['name'], $args['vendor'], $args['model'], $args['role'],
             $args['serial'], $args['mac'], $args['mgmt_ip'], $args['mgmt_port'],
             $args['firmware'], $args['status'], $args['notes'], $id,
         ]);
@@ -105,11 +107,11 @@ function device_save(array $data, ?int $id = null): int {
 
     pdo()->prepare(
         "INSERT INTO devices
-            (site_id, name, vendor, model, role, serial, mac, mgmt_ip, mgmt_port,
+            (site_id, customer_id, name, vendor, model, role, serial, mac, mgmt_ip, mgmt_port,
              firmware, status, notes)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     )->execute([
-        $args['site_id'], $args['name'], $args['vendor'], $args['model'], $args['role'],
+        $args['site_id'], $args['customer_id'], $args['name'], $args['vendor'], $args['model'], $args['role'],
         $args['serial'], $args['mac'], $args['mgmt_ip'], $args['mgmt_port'],
         $args['firmware'], $args['status'], $args['notes'],
     ]);
@@ -119,6 +121,36 @@ function device_save(array $data, ?int $id = null): int {
 function device_delete(int $id): bool {
     // ON DELETE CASCADE on device_health takes care of the history rows.
     return pdo()->prepare("DELETE FROM devices WHERE id = ?")->execute([$id]);
+}
+
+/**
+ * Devices linked to a particular customer (CPE/router/switch installed
+ * at their premises). Used by the client editor's "Linked devices"
+ * panel.
+ */
+function devices_for_customer(int $user_id): array {
+    if ($user_id <= 0) return [];
+    $stmt = pdo()->prepare(
+        "SELECT d.*, s.name AS site_name
+           FROM devices d
+           LEFT JOIN sites s ON s.id = d.site_id
+          WHERE d.customer_id = ?
+       ORDER BY d.role ASC, d.name ASC"
+    );
+    $stmt->execute([$user_id]);
+    $rows = $stmt->fetchAll();
+    foreach ($rows as &$r) $r = device_normalise($r);
+    return $rows;
+}
+
+/**
+ * Toggle the customer link on a device — used by attach / detach
+ * actions on the client editor without rewriting every field.
+ */
+function device_set_customer(int $device_id, ?int $user_id): bool {
+    return pdo()->prepare(
+        "UPDATE devices SET customer_id = ? WHERE id = ?"
+    )->execute([$user_id ?: null, $device_id]);
 }
 
 /**
