@@ -34,6 +34,189 @@ if (!empty($_GET['coverage_for'])) {
     exit;
 }
 
+// Map overlays — JSON feeds for the optional layers (live signal, RF
+// density, capacity, outage-history heatmap, throughput contours). Each
+// returns a small JSON payload the client can drop straight onto Leaflet
+// without further processing.
+if (!empty($_GET['overlay'])) {
+    while (ob_get_level() > 0) ob_end_clean();
+    header('Content-Type: application/json');
+    $kind = (string)$_GET['overlay'];
+    try {
+        switch ($kind) {
+
+            // Per-client signal — last known signal_dbm / snr_db on each
+            // client's wireless_link, joined to the client's lat/lng.
+            // Used to render small SNR-coloured dots on top of the
+            // existing client markers (so colour-blind admins still see
+            // the billing colour, layered with a network-quality halo).
+            case 'client_signal': {
+                $rows = pdo()->query(
+                    "SELECT u.id           AS client_id,
+                            u.username,
+                            u.account_no,
+                            u.lat, u.lng,
+                            wl.signal_dbm, wl.snr_db, wl.ccq_pct,
+                            wl.health_score,
+                            wl.last_evaluated_at
+                       FROM users u
+                       JOIN wireless_links wl ON wl.customer_id = u.id
+                      WHERE u.role = 'client'
+                        AND u.lat IS NOT NULL AND u.lng IS NOT NULL
+                        AND wl.signal_dbm IS NOT NULL"
+                )->fetchAll();
+                $out = [];
+                foreach ($rows as $r) {
+                    $out[] = [
+                        'client_id' => (int)$r['client_id'],
+                        'username'  => $r['username'],
+                        'account_no'=> $r['account_no'],
+                        'lat'       => (float)$r['lat'],
+                        'lng'       => (float)$r['lng'],
+                        'signal_dbm'=> (int)$r['signal_dbm'],
+                        'snr_db'    => $r['snr_db'] !== null ? (int)$r['snr_db'] : null,
+                        'ccq_pct'   => $r['ccq_pct'] !== null ? (float)$r['ccq_pct'] : null,
+                        'health'    => $r['health_score'] !== null ? (int)$r['health_score'] : null,
+                        'last_at'   => $r['last_evaluated_at'],
+                    ];
+                }
+                echo json_encode(['ok' => true, 'points' => $out]);
+                exit;
+            }
+
+            // RF interference density — for every AP device on a site,
+            // average RSSI seen during passive scans over the last 24 h.
+            // The map uses this as a noisy/quiet halo around each AP.
+            case 'rf_density': {
+                $rows = pdo()->query(
+                    "SELECT d.id AS device_id, d.name AS device_name, d.site_id,
+                            s.lat, s.lng, s.name AS site_name,
+                            AVG(rfe.rssi_dbm) AS avg_rssi,
+                            MAX(rfe.rssi_dbm) AS peak_rssi,
+                            COUNT(rfe.id)     AS sample_count,
+                            MAX(rfe.polled_at) AS last_scan_at
+                       FROM devices d
+                       JOIN sites s   ON s.id = d.site_id
+                  LEFT JOIN rf_environment_samples rfe
+                            ON rfe.device_id = d.id
+                           AND rfe.polled_at >= DATE_SUB(NOW(), INTERVAL 24 HOUR)
+                      WHERE d.role = 'ap'
+                        AND d.site_id IS NOT NULL
+                      GROUP BY d.id"
+                )->fetchAll();
+                $out = [];
+                foreach ($rows as $r) {
+                    if ($r['sample_count'] === null || (int)$r['sample_count'] === 0) continue;
+                    $out[] = [
+                        'device_id'   => (int)$r['device_id'],
+                        'device_name' => $r['device_name'],
+                        'site_id'     => (int)$r['site_id'],
+                        'site_name'   => $r['site_name'],
+                        'lat'         => (float)$r['lat'],
+                        'lng'         => (float)$r['lng'],
+                        'avg_rssi'    => round((float)$r['avg_rssi'], 1),
+                        'peak_rssi'   => (int)$r['peak_rssi'],
+                        'samples'     => (int)$r['sample_count'],
+                        'last_scan_at'=> $r['last_scan_at'],
+                    ];
+                }
+                echo json_encode(['ok' => true, 'points' => $out]);
+                exit;
+            }
+
+            // Outage history heatmap — count + total downtime minutes per
+            // tower over the requested window (30 or 90 days). Tied back
+            // to the tower's lat/lng so the map can render hot-spots
+            // separate from the live red-halo layer.
+            case 'outage_history': {
+                $days = (int)($_GET['days'] ?? 30);
+                if (!in_array($days, [30, 90], true)) $days = 30;
+                $stmt = pdo()->prepare(
+                    "SELECT s.id  AS site_id, s.name AS site_name,
+                            s.lat, s.lng,
+                            COUNT(o.id)                                                   AS event_count,
+                            SUM(TIMESTAMPDIFF(MINUTE, o.started_at,
+                                              COALESCE(o.resolved_at, NOW())))            AS down_minutes,
+                            MAX(o.started_at)                                             AS last_started
+                       FROM sites s
+                       JOIN outages o
+                            ON ((o.scope = 'tower'  AND o.scope_id = s.id)
+                             OR (o.scope = 'sector' AND o.scope_id IN
+                                  (SELECT id FROM sectors WHERE tower_id = s.id)))
+                      WHERE o.started_at >= DATE_SUB(NOW(), INTERVAL ? DAY)
+                      GROUP BY s.id"
+                );
+                $stmt->execute([$days]);
+                $rows = $stmt->fetchAll();
+                $out = [];
+                foreach ($rows as $r) {
+                    $out[] = [
+                        'site_id'      => (int)$r['site_id'],
+                        'site_name'    => $r['site_name'],
+                        'lat'          => (float)$r['lat'],
+                        'lng'          => (float)$r['lng'],
+                        'event_count'  => (int)$r['event_count'],
+                        'down_minutes' => (int)$r['down_minutes'],
+                        'last_started' => $r['last_started'],
+                    ];
+                }
+                echo json_encode(['ok' => true, 'days' => $days, 'points' => $out]);
+                exit;
+            }
+
+            // Throughput contours — sum local+remote throughput across
+            // all wireless_links on each sector, averaged over the last
+            // hour. Indexed by sector_id so the JS can find the cone
+            // and decorate it.
+            case 'throughput': {
+                $rows = pdo()->query(
+                    "SELECT sec.id AS sector_id, sec.name, sec.tower_id,
+                            t.lat, t.lng, sec.azimuth_deg, sec.beamwidth_deg,
+                            AVG(COALESCE(lhs.throughput_local_mbps, 0)
+                              + COALESCE(lhs.throughput_remote_mbps, 0))   AS avg_mbps,
+                            MAX(COALESCE(lhs.throughput_local_mbps, 0)
+                              + COALESCE(lhs.throughput_remote_mbps, 0))   AS peak_mbps,
+                            COUNT(DISTINCT wl.id) AS link_count,
+                            COUNT(lhs.id)         AS sample_count
+                       FROM sectors sec
+                       JOIN sites   t   ON t.id = sec.tower_id
+                  LEFT JOIN wireless_links wl  ON wl.sector_id = sec.id
+                  LEFT JOIN link_health_samples lhs
+                            ON lhs.link_id = wl.id
+                           AND lhs.polled_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)
+                      GROUP BY sec.id
+                     HAVING sample_count > 0"
+                )->fetchAll();
+                $out = [];
+                foreach ($rows as $r) {
+                    $out[] = [
+                        'sector_id'  => (int)$r['sector_id'],
+                        'sector_name'=> $r['name'],
+                        'tower_id'   => (int)$r['tower_id'],
+                        'lat'        => (float)$r['lat'],
+                        'lng'        => (float)$r['lng'],
+                        'azimuth'    => $r['azimuth_deg']   !== null ? (int)$r['azimuth_deg']   : null,
+                        'beamwidth'  => $r['beamwidth_deg'] !== null ? (int)$r['beamwidth_deg'] : null,
+                        'avg_mbps'   => round((float)$r['avg_mbps'], 1),
+                        'peak_mbps'  => round((float)$r['peak_mbps'], 1),
+                        'link_count' => (int)$r['link_count'],
+                        'samples'    => (int)$r['sample_count'],
+                    ];
+                }
+                echo json_encode(['ok' => true, 'points' => $out]);
+                exit;
+            }
+
+            default:
+                echo json_encode(['ok' => false, 'error' => 'Unknown overlay']);
+                exit;
+        }
+    } catch (Throwable $e) {
+        echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+        exit;
+    }
+}
+
 // Lightweight poll endpoint — JS calls this every ~30s to refresh
 // device statuses and outage state without reloading the whole map.
 if (($_GET['poll'] ?? '') === '1') {
@@ -847,6 +1030,19 @@ $map_data['wireless_link_summary'] = $wl_by_site;
 
     <div class="sep"></div>
 
+    <div class="group">
+      <label class="inline-check"><input type="checkbox" id="toggle-signal">      Signal</label>
+      <label class="inline-check"><input type="checkbox" id="toggle-rfdensity">   RF noise</label>
+      <label class="inline-check"><input type="checkbox" id="toggle-throughput">  Throughput</label>
+      <select id="toggle-outage-history" class="btn btn-ghost btn-sm" style="padding:4px 8px;">
+        <option value="">Outage hist…</option>
+        <option value="30">30 days</option>
+        <option value="90">90 days</option>
+      </select>
+    </div>
+
+    <div class="sep"></div>
+
     <div class="map-counts">
       <span>Sites <strong id="count-sites"><?= count($sites) ?></strong></span>
       <span>Links <strong id="count-links"><?= count($links) ?></strong></span>
@@ -876,6 +1072,8 @@ $map_data['wireless_link_summary'] = $wl_by_site;
       <span><i style="background:#fa0;"></i>suspended</span>
       <span><i style="background:#888;"></i>disconnected</span>
       <span class="pipe"><i style="background:#d44;width:6px;height:6px;"></i>AP down</span>
+      <span><i style="background:#f97316;width:6px;height:6px;"></i>≥85% full</span>
+      <span><i style="background:#d44;width:6px;height:6px;"></i>≥100% full</span>
     </div>
   </div>
 
@@ -1012,6 +1210,254 @@ $map_data['wireless_link_summary'] = $wl_by_site;
       ring.on('click', function () {
         window.location = '/admin/links.php';
       });
+    });
+  }
+  init();
+})();
+</script>
+
+<script>
+/* Section-1 overlays:
+     • Signal     — per-client SNR halo (live, from wireless_links)
+     • RF noise   — passive-scan noise density per AP (rf_environment_samples)
+     • Throughput — last-hour per-sector aggregate Mbps
+     • Outage hist — 30/90-day outage hot-spots per tower
+   Each layer is opt-in via its own toolbar toggle and lazy-fetched the
+   first time it's enabled, then cached for the page lifetime. */
+(function () {
+  function init() {
+    if (!window.WIFIBER_MAP || typeof L === 'undefined') return setTimeout(init, 250);
+    const map = window.WIFIBER_MAP;
+
+    const signalLayer     = L.layerGroup();
+    const rfDensityLayer  = L.layerGroup();
+    const throughputLayer = L.layerGroup();
+    const outageHistLayer = L.layerGroup();
+
+    let cache = { signal: null, rf: null, thr: null, hist: {} };
+
+    /* ---------- colour helpers ---------- */
+    function snrColour(snr_db, signal_dbm) {
+      // Prefer SNR; fall back to signal strength.
+      if (snr_db !== null && snr_db !== undefined) {
+        if (snr_db >= 30) return '#22c55e';
+        if (snr_db >= 22) return '#84cc16';
+        if (snr_db >= 15) return '#eab308';
+        if (snr_db >=  8) return '#f97316';
+        return '#dc2626';
+      }
+      if (signal_dbm >= -55) return '#22c55e';
+      if (signal_dbm >= -65) return '#84cc16';
+      if (signal_dbm >= -75) return '#eab308';
+      if (signal_dbm >= -85) return '#f97316';
+      return '#dc2626';
+    }
+    function noiseColour(rssi) {
+      // Higher RSSI in passive scan = noisier RF, bad.
+      if (rssi >= -55) return '#dc2626';
+      if (rssi >= -65) return '#f97316';
+      if (rssi >= -75) return '#eab308';
+      if (rssi >= -85) return '#84cc16';
+      return '#22c55e';
+    }
+    function throughputColour(mbps) {
+      if (mbps >= 200) return '#22c55e';
+      if (mbps >= 100) return '#84cc16';
+      if (mbps >=  50) return '#eab308';
+      if (mbps >=  10) return '#f97316';
+      return '#94a3b8';
+    }
+    function outageHeatColour(minutes) {
+      // Total downtime over the window. >24 h is a red dot, >2 h orange.
+      if (minutes >= 1440) return '#dc2626';
+      if (minutes >= 360)  return '#f97316';
+      if (minutes >= 60)   return '#eab308';
+      return '#84cc16';
+    }
+
+    /* ---------- fetch helpers ---------- */
+    async function fetchOverlay(kind, qs) {
+      const url = '/admin/map.php?overlay=' + encodeURIComponent(kind) + (qs || '');
+      try {
+        const r = await fetch(url, { credentials: 'same-origin' });
+        const j = await r.json();
+        return j && j.ok ? j : null;
+      } catch (e) { return null; }
+    }
+
+    /* ---------- Signal halo per client ---------- */
+    async function buildSignal() {
+      if (cache.signal) return cache.signal;
+      const j = await fetchOverlay('client_signal');
+      cache.signal = j;
+      return j;
+    }
+    function renderSignal(j) {
+      signalLayer.clearLayers();
+      if (!j || !j.points) return;
+      j.points.forEach(p => {
+        const ring = L.circleMarker([p.lat, p.lng], {
+          radius: 9,
+          color: snrColour(p.snr_db, p.signal_dbm),
+          weight: 2,
+          fill: false,
+          opacity: 0.85,
+          interactive: true,
+        });
+        const snrTxt = (p.snr_db !== null) ? p.snr_db + ' dB SNR · ' : '';
+        ring.bindTooltip(
+          '<strong>' + (p.account_no || p.username) + '</strong><br>' +
+          snrTxt + p.signal_dbm + ' dBm' +
+          (p.health !== null ? ' · health ' + p.health : '') +
+          (p.last_at ? '<br><small>' + p.last_at + '</small>' : ''),
+          { sticky: true }
+        );
+        ring.addTo(signalLayer);
+      });
+    }
+
+    /* ---------- RF noise density per AP ---------- */
+    async function buildRf() {
+      if (cache.rf) return cache.rf;
+      const j = await fetchOverlay('rf_density');
+      cache.rf = j;
+      return j;
+    }
+    function renderRf(j) {
+      rfDensityLayer.clearLayers();
+      if (!j || !j.points) return;
+      j.points.forEach(p => {
+        // Radius scales with sample count, capped at 280 m.
+        const radM = Math.min(280, 80 + Math.sqrt(p.samples) * 12);
+        const c = noiseColour(p.avg_rssi);
+        const ring = L.circle([p.lat, p.lng], {
+          radius: radM,
+          color: c,
+          fillColor: c,
+          fillOpacity: 0.18,
+          weight: 2,
+          opacity: 0.7,
+        });
+        ring.bindTooltip(
+          '<strong>' + p.site_name + ' · ' + p.device_name + '</strong><br>' +
+          'avg ' + p.avg_rssi + ' dBm · peak ' + p.peak_rssi + ' dBm<br>' +
+          p.samples + ' scan samples in 24 h' +
+          (p.last_scan_at ? '<br><small>last scan ' + p.last_scan_at + '</small>' : ''),
+          { sticky: true }
+        );
+        ring.addTo(rfDensityLayer);
+      });
+    }
+
+    /* ---------- Throughput contours per sector ---------- */
+    async function buildThroughput() {
+      if (cache.thr) return cache.thr;
+      const j = await fetchOverlay('throughput');
+      cache.thr = j;
+      return j;
+    }
+    function renderThroughput(j) {
+      throughputLayer.clearLayers();
+      if (!j || !j.points) return;
+      j.points.forEach(p => {
+        // Drop a sized chip at the cone's centerline tip.
+        const radM = Math.min(600, 120 + Math.sqrt(p.avg_mbps) * 22);
+        const c = throughputColour(p.avg_mbps);
+        const halo = L.circle([p.lat, p.lng], {
+          radius: radM,
+          color: c,
+          fillColor: c,
+          fillOpacity: 0.10,
+          weight: 1.5,
+          dashArray: '4 6',
+          opacity: 0.6,
+        });
+        halo.bindTooltip(
+          '<strong>' + p.sector_name + '</strong><br>' +
+          'avg ' + p.avg_mbps + ' Mbps · peak ' + p.peak_mbps + ' Mbps<br>' +
+          p.link_count + ' link' + (p.link_count === 1 ? '' : 's') +
+          ' · ' + p.samples + ' samples (last 1 h)',
+          { sticky: true }
+        );
+        halo.addTo(throughputLayer);
+      });
+    }
+
+    /* ---------- Outage history hot-spots ---------- */
+    async function buildHist(days) {
+      if (cache.hist[days]) return cache.hist[days];
+      const j = await fetchOverlay('outage_history', '&days=' + days);
+      cache.hist[days] = j;
+      return j;
+    }
+    function renderHist(j) {
+      outageHistLayer.clearLayers();
+      if (!j || !j.points) return;
+      j.points.forEach(p => {
+        const radM = Math.min(900, 200 + Math.sqrt(p.down_minutes) * 30);
+        const c = outageHeatColour(p.down_minutes);
+        const blob = L.circle([p.lat, p.lng], {
+          radius: radM,
+          color: c,
+          fillColor: c,
+          fillOpacity: 0.18,
+          weight: 1,
+          opacity: 0.55,
+        });
+        const hours = Math.floor(p.down_minutes / 60);
+        const mins  = p.down_minutes % 60;
+        blob.bindTooltip(
+          '<strong>' + p.site_name + '</strong><br>' +
+          p.event_count + ' outage' + (p.event_count === 1 ? '' : 's') +
+          ' · ' + hours + 'h ' + mins + 'm down<br>' +
+          (p.last_started ? '<small>last: ' + p.last_started + '</small>' : ''),
+          { sticky: true }
+        );
+        blob.addTo(outageHistLayer);
+      });
+    }
+
+    /* ---------- toolbar wiring ---------- */
+    const toggleSignal = document.getElementById('toggle-signal');
+    if (toggleSignal) toggleSignal.addEventListener('change', async (e) => {
+      if (e.target.checked) {
+        const j = await buildSignal();
+        renderSignal(j);
+        signalLayer.addTo(map);
+      } else {
+        map.removeLayer(signalLayer);
+      }
+    });
+
+    const toggleRf = document.getElementById('toggle-rfdensity');
+    if (toggleRf) toggleRf.addEventListener('change', async (e) => {
+      if (e.target.checked) {
+        const j = await buildRf();
+        renderRf(j);
+        rfDensityLayer.addTo(map);
+      } else {
+        map.removeLayer(rfDensityLayer);
+      }
+    });
+
+    const toggleThr = document.getElementById('toggle-throughput');
+    if (toggleThr) toggleThr.addEventListener('change', async (e) => {
+      if (e.target.checked) {
+        const j = await buildThroughput();
+        renderThroughput(j);
+        throughputLayer.addTo(map);
+      } else {
+        map.removeLayer(throughputLayer);
+      }
+    });
+
+    const histPicker = document.getElementById('toggle-outage-history');
+    if (histPicker) histPicker.addEventListener('change', async (e) => {
+      const v = e.target.value;
+      if (!v) { map.removeLayer(outageHistLayer); return; }
+      const j = await buildHist(parseInt(v, 10));
+      renderHist(j);
+      outageHistLayer.addTo(map);
     });
   }
   init();
