@@ -105,16 +105,19 @@ foreach ($devices as $d) {
 }
 
 // Site links touching this site, joined to the other endpoint's name.
+// Use positional placeholders rather than reusing :id — PDO with
+// EMULATE_PREPARES = false (set in auth/helpers.php) refuses to bind
+// the same named placeholder twice and would 500 the page.
 $stmt = pdo()->prepare(
     "SELECT sl.*,
             fs.name AS from_name, ts.name AS to_name
        FROM site_links sl
        JOIN sites fs ON fs.id = sl.from_site_id
        JOIN sites ts ON ts.id = sl.to_site_id
-      WHERE sl.from_site_id = :id OR sl.to_site_id = :id
+      WHERE sl.from_site_id = ? OR sl.to_site_id = ?
       ORDER BY sl.id ASC"
 );
-$stmt->execute([':id' => $id]);
+$stmt->execute([$id, $id]);
 $links = $stmt->fetchAll();
 
 // Sectors anchored on this site (only meaningful for towers).

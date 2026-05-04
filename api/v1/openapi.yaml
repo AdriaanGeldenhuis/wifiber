@@ -1,0 +1,364 @@
+openapi: 3.1.0
+info:
+  title: WiFIBER REST API
+  version: "1.0.0"
+  description: |
+    Read + write access to the WiFIBER customer / network / billing tables.
+    See the corresponding admin pages for human-friendly equivalents.
+
+    **Auth**: Bearer token in the `Authorization` header. Issue tokens at
+    `/admin/integrations.php`. Per-token rate limit is 60 requests / minute;
+    breaching it returns `429` with a `Retry-After` header.
+
+    **Pagination**: list endpoints accept `?limit=` (default 50, max 200) and
+    `?cursor=`. The response includes `next_cursor` (an integer) when more
+    pages exist; pass it as the next `?cursor=` value.
+
+servers:
+  - url: https://wifiber.co.za/api/v1
+    description: production
+
+security:
+  - BearerAuth: []
+
+tags:
+  - name: Read
+    description: Read-only telemetry and lists. Requires the `read` scope.
+  - name: Customers
+    description: CRUD for client accounts. Requires `write:customers`.
+  - name: Devices
+    description: CRUD for radios / routers / switches. Requires `write:devices`.
+  - name: Sectors
+    description: CRUD for sector / AP configurations. Requires `write:sectors`.
+  - name: Sites
+    description: CRUD for towers / PoPs. Requires `write:sites`.
+  - name: Billing
+    description: Invoices / products / payments. Scopes vary per resource.
+  - name: Webhooks
+    description: Inbound HMAC-signed webhook endpoint.
+
+paths:
+
+  /me:
+    get:
+      summary: Identify the current token
+      tags: [Read]
+      responses:
+        "200":
+          description: Token identity + scopes
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Me" }
+
+  /links:
+    get:
+      summary: Wireless links
+      tags: [Read]
+      responses:
+        "200": { description: Array of wireless_links rows }
+
+  /links/{id}/samples:
+    get:
+      summary: Per-link health samples
+      tags: [Read]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+        - { name: from, in: query, schema: { type: string }, description: "ISO date or relative ('-7 days')" }
+        - { name: to,   in: query, schema: { type: string } }
+      responses:
+        "200": { description: link_health_samples rows }
+
+  /devices/{id}/health:
+    get:
+      summary: Last 24 h of device health samples
+      tags: [Read]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: device_health rows }
+
+  /outages:
+    get:
+      summary: Active and recently-resolved outages
+      tags: [Read]
+      responses:
+        "200": { description: { active, recent_resolved } arrays }
+
+  /diagnostics:
+    post:
+      summary: Enqueue iperf3 / traceroute / sustained ping
+      tags: [Read]
+      description: "Requires the `diag` scope."
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [kind, scope, scope_id]
+              properties:
+                kind:     { type: string, enum: [iperf3, traceroute, sustained_ping, bgp_state] }
+                scope:    { type: string, enum: [link, device] }
+                scope_id: { type: integer }
+                payload:  { type: object, additionalProperties: true }
+      responses:
+        "201": { description: Job queued, returns job_id }
+
+  /customers:
+    get:
+      summary: List customers (cursor-paginated)
+      tags: [Customers, Read]
+      parameters:
+        - { name: limit,  in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: cursor, in: query, schema: { type: integer } }
+      responses:
+        "200":
+          description: Page of customers + next_cursor
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  ok:          { type: boolean }
+                  customers:   { type: array, items: { $ref: "#/components/schemas/Customer" } }
+                  next_cursor: { type: integer, nullable: true }
+    post:
+      summary: Create a customer
+      tags: [Customers]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [username, name, surname]
+              properties:
+                username:      { type: string }
+                password:      { type: string, description: "auto-generated if omitted" }
+                name:          { type: string }
+                surname:       { type: string }
+                email:         { type: string, format: email }
+                phone:         { type: string }
+                address:       { type: string }
+                customer_type: { type: string, enum: [residential, business] }
+                product_id:    { type: integer }
+      responses:
+        "201": { description: Customer created }
+
+  /customers/{id}:
+    patch:
+      summary: Update a customer
+      tags: [Customers]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/Customer" }
+      responses:
+        "200": { description: Updated customer row }
+
+  /devices:
+    get:
+      summary: List devices (cursor-paginated)
+      tags: [Devices, Read]
+      responses:
+        "200": { description: Page of devices }
+    post:
+      summary: Create a device
+      tags: [Devices]
+      responses:
+        "201": { description: Created device }
+
+  /devices/{id}:
+    patch:
+      summary: Update a device
+      tags: [Devices]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Updated device }
+    delete:
+      summary: Delete a device
+      tags: [Devices]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: '{ deleted: id }' }
+
+  /sectors:
+    get:
+      summary: List sectors (cursor-paginated)
+      tags: [Sectors, Read]
+      responses:
+        "200": { description: Page of sectors }
+    post:
+      summary: Create a sector
+      tags: [Sectors]
+      responses:
+        "201": { description: Created sector }
+
+  /sectors/{id}:
+    patch:
+      summary: Update a sector
+      tags: [Sectors]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Updated sector }
+
+  /sites:
+    get:
+      summary: List sites (cursor-paginated)
+      tags: [Sites, Read]
+      responses:
+        "200": { description: Page of sites }
+    post:
+      summary: Create a site
+      tags: [Sites]
+      responses:
+        "201": { description: Created site }
+
+  /sites/{id}:
+    patch:
+      summary: Update a site
+      tags: [Sites]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Updated site }
+
+  /invoices:
+    get:
+      summary: List invoices (cursor-paginated)
+      tags: [Billing, Read]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [unpaid, paid, cancelled] } }
+        - { name: limit,  in: query, schema: { type: integer, default: 50, maximum: 200 } }
+        - { name: cursor, in: query, schema: { type: integer } }
+      responses:
+        "200": { description: Page of invoices }
+    post:
+      summary: Create an invoice
+      tags: [Billing]
+      responses:
+        "201": { description: Created invoice }
+
+  /invoices/{id}/mark-paid:
+    post:
+      summary: Mark an invoice paid
+      tags: [Billing]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Updated invoice }
+
+  /products:
+    get:
+      summary: List products
+      tags: [Billing, Read]
+      responses:
+        "200": { description: Page of products }
+    post:
+      summary: Create a product
+      tags: [Billing]
+      responses:
+        "201": { description: Created product }
+
+  /products/{id}:
+    patch:
+      summary: Update a product
+      tags: [Billing]
+      parameters:
+        - { name: id, in: path, required: true, schema: { type: integer } }
+      responses:
+        "200": { description: Updated product }
+
+  /payments:
+    get:
+      summary: List payments (newest first)
+      tags: [Billing, Read]
+      responses:
+        "200": { description: Page of payments }
+    post:
+      summary: Record a payment
+      tags: [Billing]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [user_id, amount]
+              properties:
+                user_id:    { type: integer }
+                invoice_id: { type: integer, nullable: true }
+                method:     { type: string, enum: [eft, debit_order, cash, card, payfast, yoco, stripe, credit_note, other] }
+                amount:     { type: number, format: float }
+                currency:   { type: string, default: ZAR }
+                reference:  { type: string }
+                external_id: { type: string }
+      responses:
+        "201": { description: Created payment }
+
+  /webhooks/in.php:
+    post:
+      summary: Inbound HMAC-signed webhook
+      tags: [Webhooks]
+      description: |
+        Accepts a signed POST from a registered source.  The source is
+        identified by `?source=NAME` and the signature lives in the
+        header configured for that source (defaults to
+        `X-Hub-Signature-256`).  Verified deliveries are re-fired
+        internally as `inbound.<source>.<event>` so existing webhook
+        subscribers can chain on them.
+      parameters:
+        - { name: source, in: query, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json: {}
+      responses:
+        "200":
+          description: Verified and recorded
+          content:
+            text/plain: {}
+        "400":
+          description: Signature mismatch / malformed
+        "404":
+          description: Unknown source
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: token
+  schemas:
+    Me:
+      type: object
+      properties:
+        ok: { type: boolean }
+        user_id: { type: integer, nullable: true }
+        scopes:  { type: array, items: { type: string } }
+        token_id: { type: integer }
+        rate_limit:
+          type: object
+          properties:
+            per_minute: { type: integer }
+    Customer:
+      type: object
+      properties:
+        id:            { type: integer, readOnly: true }
+        username:      { type: string }
+        account_no:    { type: string, readOnly: true }
+        name:          { type: string }
+        surname:       { type: string }
+        email:         { type: string }
+        phone:         { type: string }
+        address:       { type: string }
+        status:        { type: string, enum: [active, lead, suspended, disconnected] }
+        customer_type: { type: string, enum: [residential, business] }
+        billing_day:   { type: integer, minimum: 1, maximum: 31 }
+        product_id:    { type: integer, nullable: true }

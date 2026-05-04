@@ -64,6 +64,14 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
                             update_user((int)$created['id'], fn(array $u) => array_merge($u, $patch));
                             $created = find_user_by_id((int)$created['id']) ?? $created;
                         }
+                        // Mint RADIUS attributes for new clients so the NAS will
+                        // accept them immediately.  Admins get nothing — they
+                        // don't ride the customer plane.
+                        if ($role === 'client' && is_file(__DIR__ . '/../auth/radius.php')) {
+                            require_once __DIR__ . '/../auth/radius.php';
+                            try { radius_provision_user((int)$created['id']); }
+                            catch (Throwable $e) { error_log('radius provision failed: ' . $e->getMessage()); }
+                        }
                     }
                     $msg = ucfirst($role) . " '{$username}' created";
                     if (!empty($created['account_no'])) {

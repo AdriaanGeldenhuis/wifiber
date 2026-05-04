@@ -59,7 +59,14 @@ function product_save(array $data, ?int $id = null): int {
     if ($args['name'] === '') {
         throw new InvalidArgumentException('Product name is required.');
     }
+    // Detect a Mbps change so we know whether to re-push the rate-limit to
+    // RADIUS for every attached customer afterwards.
+    $rate_changed = true;
     if ($id) {
+        $prev = products_find($id);
+        $rate_changed = !$prev
+            || (float)$prev['down_mbps'] !== $args['down_mbps']
+            || (float)$prev['up_mbps']   !== $args['up_mbps'];
         $stmt = pdo()->prepare(
             "UPDATE products
                 SET tier_key=?, name=?, down_mbps=?, up_mbps=?, monthly_price=?,
@@ -72,6 +79,7 @@ function product_save(array $data, ?int $id = null): int {
             $args['install_24mo'], $args['install_mtm'], $args['contention'], $args['description'] ?: null,
             $args['is_active'], $args['sort_order'], $id,
         ]);
+        if ($rate_changed) product_resync_radius($id);
         return $id;
     }
     $stmt = pdo()->prepare(
@@ -87,6 +95,23 @@ function product_save(array $data, ?int $id = null): int {
         $args['is_active'], $args['sort_order'],
     ]);
     return (int)pdo()->lastInsertId();
+}
+
+/**
+ * Re-push the Mikrotik-Rate-Limit for every customer attached to this
+ * product.  Called when the product's down/up mbps changes so existing
+ * subscribers get the new speed without an admin opening every client
+ * card by hand.  Best-effort — failures are logged, not raised.
+ */
+function product_resync_radius(int $product_id): void {
+    if (!is_file(__DIR__ . '/radius.php')) return;
+    require_once __DIR__ . '/radius.php';
+    $stmt = pdo()->prepare("SELECT id FROM users WHERE product_id = ? AND role = 'client'");
+    $stmt->execute([$product_id]);
+    foreach ($stmt as $row) {
+        try { radius_provision_user((int)$row['id']); }
+        catch (Throwable $e) { error_log('radius provision failed: ' . $e->getMessage()); }
+    }
 }
 
 function product_delete(int $id): bool {

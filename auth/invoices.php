@@ -294,9 +294,12 @@ function invoice_subscription_create_for_user(int $user_id, string $period_start
     $u = find_user_by_id($user_id);
     if (!$u) return null;
     if (($u['role'] ?? '') !== 'client')      return null;
-    if (empty($u['package']))                  return null;
 
-    $price = package_price_lookup((string)$u['package']);
+    // Prefer the linked product (Phase 28 product-aware billing) and fall
+    // back to the legacy pricing.json lookup if the user only has a
+    // free-text package on file. This keeps imports + manual customers
+    // billing without forcing every account onto a product first.
+    $price = invoice_subscription_price_for_user($u);
     if (!$price || $price['price'] <= 0)       return null;
 
     // Idempotent: if there's already a subscription invoice for this period, skip.
@@ -486,8 +489,360 @@ function send_invoice_reminder(array $invoice): array {
 
     $sent = @mail($email, "Reminder: invoice {$invoice['number']} overdue", $body, $headers);
     if ($sent) {
-        pdo()->prepare("UPDATE invoices SET last_reminder_at = CURRENT_TIMESTAMP WHERE id = ?")
-            ->execute([(int)$invoice['id']]);
+        pdo()->prepare(
+            "UPDATE invoices
+                SET last_reminder_at = CURRENT_TIMESTAMP,
+                    reminder_count   = reminder_count + 1
+              WHERE id = ?"
+        )->execute([(int)$invoice['id']]);
     }
     return ['ok' => (bool)$sent, 'reason' => $sent ? 'sent' : 'mail() failed'];
+}
+
+/* =========================================================================
+ * Phase 28 — product-aware subscription, prorated changes, credit notes,
+ * outstanding-balance helpers. Layers on top of invoices/invoice_items
+ * without rewriting the existing helpers above.
+ * ========================================================================= */
+
+/**
+ * Resolve the canonical subscription price for a customer.
+ *
+ * Order of preference:
+ *   1. users.product_id → products row (the source of truth post-Phase 22)
+ *   2. users.package text → pricing.json (legacy, kept for imports + leads)
+ *
+ * Returns the same shape package_price_lookup() does so callers don't
+ * have to special-case which path won.
+ */
+function invoice_subscription_price_for_user(array $user): ?array {
+    $pid = (int)($user['product_id'] ?? 0);
+    if ($pid > 0) {
+        $stmt = pdo()->prepare("SELECT * FROM products WHERE id = ? AND is_active = 1 LIMIT 1");
+        $stmt->execute([$pid]);
+        $p = $stmt->fetch();
+        if ($p && (float)$p['monthly_price'] > 0) {
+            return [
+                'tier_key'   => (string)($p['tier_key'] ?? ''),
+                'tier_name'  => (string)$p['name'],
+                'down'       => (float)$p['down_mbps'],
+                'up'         => (float)$p['up_mbps'],
+                'price'      => (float)$p['monthly_price'], // inc-VAT
+                'product_id' => (int)$p['id'],
+            ];
+        }
+    }
+    if (!empty($user['package'])) {
+        $price = package_price_lookup((string)$user['package']);
+        if ($price) return $price;
+    }
+    return null;
+}
+
+/**
+ * The day of the month a customer should be billed on. Defaults to 1 if
+ * unset so existing accounts keep their pre-Phase-28 schedule.
+ *
+ * Real months don't all have 31 days, so day-31 customers in February
+ * fall back to the last day of the month.
+ */
+function invoice_billing_day_for_month(int $billing_day, string $month_iso): string {
+    $billing_day = max(1, min(31, $billing_day ?: 1));
+    $base = strtotime($month_iso);
+    if ($base === false) $base = time();
+    $year  = (int)date('Y', $base);
+    $month = (int)date('n', $base);
+    $last  = (int)date('t', mktime(0, 0, 0, $month, 1, $year));
+    $day   = min($billing_day, $last);
+    return sprintf('%04d-%02d-%02d', $year, $month, $day);
+}
+
+/**
+ * Prorate a customer's mid-month product change.
+ *
+ * Workflow:
+ *   1. Find the customer's open subscription invoice for the current period.
+ *   2. Credit the unused days at the OLD price (negative line).
+ *   3. Charge the unused days at the NEW price (positive line).
+ *   4. Re-total the invoice.
+ *
+ * Idempotent within the same calendar day — a second call on the same day
+ * with the same old/new price won't double-prorate.
+ *
+ * Returns ['credit' => float, 'debit' => float, 'net' => float] or null
+ * if no current invoice exists (operator handles billing manually).
+ */
+function invoice_reprice_user(int $user_id, ?array $old_product, ?array $new_product, ?string $today_iso = null): ?array {
+    if (!$old_product && !$new_product) return null;
+    $today_iso = $today_iso ?: date('Y-m-d');
+    $period_start = date('Y-m-01', strtotime($today_iso));
+
+    $stmt = pdo()->prepare(
+        "SELECT * FROM invoices
+          WHERE user_id = ?
+            AND period_start = ?
+            AND status = 'unpaid'
+          ORDER BY id DESC
+          LIMIT 1"
+    );
+    $stmt->execute([$user_id, $period_start]);
+    $inv = $stmt->fetch();
+    if (!$inv) return null;
+
+    $period_days   = (int)date('t', strtotime($period_start));
+    $today_day     = (int)date('j', strtotime($today_iso));
+    $remaining     = max(0, $period_days - $today_day + 1);
+    if ($remaining <= 0) return null;
+
+    $old_price = $old_product ? (float)$old_product['monthly_price'] : 0.0;
+    $new_price = $new_product ? (float)$new_product['monthly_price'] : 0.0;
+
+    // VAT rules of the existing invoice apply.
+    $vat_rate = (float)$inv['vat_rate'];
+
+    $factor = $remaining / $period_days;
+    $credit_inc = round($old_price * $factor, 2);
+    $debit_inc  = round($new_price * $factor, 2);
+
+    if ($credit_inc <= 0 && $debit_inc <= 0) return null;
+
+    $items = invoice_items((int)$inv['id']);
+
+    $today = date('Y-m-d', strtotime($today_iso));
+    $ext_credit = "Prorate credit ({$remaining}/{$period_days} days · {$today})";
+    $ext_debit  = "Prorate charge ({$remaining}/{$period_days} days · {$today})";
+
+    foreach ($items as $existing) {
+        $d = (string)($existing['description'] ?? '');
+        if ($d === $ext_credit || $d === $ext_debit) return null; // already done today
+    }
+
+    if ($credit_inc > 0 && $old_product) {
+        $line = invoice_strip_vat($credit_inc, $vat_rate);
+        $items[] = [
+            'description' => mb_substr($ext_credit . ' — ' . $old_product['name'], 0, 200),
+            'quantity'    => 1,
+            'unit_price'  => -1 * $line,
+        ];
+    }
+    if ($debit_inc > 0 && $new_product) {
+        $line = invoice_strip_vat($debit_inc, $vat_rate);
+        $items[] = [
+            'description' => mb_substr($ext_debit . ' — ' . $new_product['name'], 0, 200),
+            'quantity'    => 1,
+            'unit_price'  => $line,
+        ];
+    }
+
+    $clean = invoice_normalise_items($items);
+    [$subtotal, $vat_amount, $total] = invoice_compute_totals($clean, $vat_rate);
+
+    $pdo = pdo();
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare(
+            "UPDATE invoices
+                SET subtotal=?, vat_amount=?, total=?
+              WHERE id=?"
+        )->execute([$subtotal, $vat_amount, $total, (int)$inv['id']]);
+        $pdo->prepare("DELETE FROM invoice_items WHERE invoice_id = ?")->execute([(int)$inv['id']]);
+        invoice_insert_items((int)$inv['id'], $clean);
+        $pdo->commit();
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+        throw $e;
+    }
+    audit_log('invoice.reprice', [
+        'target_type' => 'invoice', 'target_id' => (int)$inv['id'],
+        'meta' => [
+            'remaining_days' => $remaining,
+            'period_days'    => $period_days,
+            'credit_inc'     => $credit_inc,
+            'debit_inc'      => $debit_inc,
+            'old_product_id' => $old_product['id'] ?? null,
+            'new_product_id' => $new_product['id'] ?? null,
+        ],
+    ]);
+    return [
+        'invoice_id' => (int)$inv['id'],
+        'credit'     => $credit_inc,
+        'debit'      => $debit_inc,
+        'net'        => $debit_inc - $credit_inc,
+        'remaining'  => $remaining,
+    ];
+}
+
+function invoice_strip_vat(float $inc_vat, float $vat_rate): float {
+    if ($vat_rate <= 0) return round($inc_vat, 2);
+    return round($inc_vat - ($inc_vat - ($inc_vat * 100 / (100 + $vat_rate))), 2);
+}
+
+/**
+ * Sum of unpaid invoices for a customer, minus any unallocated credit
+ * (open credit notes + payments without invoice_id).  Negative balance
+ * means the customer is in credit.
+ */
+function invoice_outstanding_balance(int $user_id): array {
+    $stmt = pdo()->prepare(
+        "SELECT COALESCE(SUM(total), 0) FROM invoices WHERE user_id = ? AND status = 'unpaid'"
+    );
+    $stmt->execute([$user_id]);
+    $unpaid = (float)$stmt->fetchColumn();
+
+    $credit = 0.0;
+    try {
+        $stmt = pdo()->prepare(
+            "SELECT COALESCE(SUM(amount), 0) FROM credit_notes WHERE user_id = ? AND status = 'open'"
+        );
+        $stmt->execute([$user_id]);
+        $credit += (float)$stmt->fetchColumn();
+    } catch (Throwable $e) { /* table may not exist yet */ }
+    try {
+        $stmt = pdo()->prepare(
+            "SELECT COALESCE(SUM(amount), 0)
+               FROM payments
+              WHERE user_id = ?
+                AND invoice_id IS NULL
+                AND status = 'received'"
+        );
+        $stmt->execute([$user_id]);
+        $credit += (float)$stmt->fetchColumn();
+    } catch (Throwable $e) { /* table may not exist yet */ }
+
+    return [
+        'unpaid'  => round($unpaid, 2),
+        'credit'  => round($credit, 2),
+        'balance' => round($unpaid - $credit, 2),
+    ];
+}
+
+/* ----------------------------------------------------------- credit notes */
+
+function credit_note_format_number(int $id, string $issued_at_iso): string {
+    $year = (int)substr($issued_at_iso, 0, 4) ?: (int)date('Y');
+    return sprintf('CN-%04d-%05d', $year, $id);
+}
+
+function credit_note_create(int $user_id, float $amount, string $reason, ?int $invoice_id = null, ?int $created_by = null): int {
+    if ($user_id <= 0)       throw new InvalidArgumentException('Pick a customer.');
+    if ($amount <= 0)        throw new InvalidArgumentException('Amount must be positive.');
+    if (!find_user_by_id($user_id)) throw new InvalidArgumentException('Customer not found.');
+
+    $issued = date('Y-m-d');
+    $temp   = 'TMP-' . bin2hex(random_bytes(6));
+    $stmt = pdo()->prepare(
+        "INSERT INTO credit_notes
+            (number, user_id, invoice_id, amount, reason, status, issued_at, created_by)
+         VALUES (?, ?, ?, ?, ?, 'open', ?, ?)"
+    );
+    $stmt->execute([
+        $temp, $user_id, $invoice_id, round($amount, 2),
+        mb_substr($reason, 0, 255), $issued, $created_by,
+    ]);
+    $id = (int)pdo()->lastInsertId();
+    $num = credit_note_format_number($id, $issued);
+    pdo()->prepare("UPDATE credit_notes SET number = ? WHERE id = ?")->execute([$num, $id]);
+    audit_log('credit_note.create', [
+        'target_type' => 'credit_note', 'target_id' => $id,
+        'meta' => ['user_id' => $user_id, 'amount' => $amount, 'invoice_id' => $invoice_id],
+    ]);
+    return $id;
+}
+
+/**
+ * Apply an open credit note to an invoice.  Records a payments row of
+ * method='credit_note' and flips the credit note status to 'applied'. If
+ * the invoice goes to zero or below, mark it paid.
+ */
+function credit_note_apply(int $credit_note_id, int $invoice_id, ?int $applied_by = null): array {
+    $cn = pdo()->prepare("SELECT * FROM credit_notes WHERE id = ? LIMIT 1");
+    $cn->execute([$credit_note_id]);
+    $note = $cn->fetch();
+    if (!$note)                     throw new RuntimeException('Credit note not found.');
+    if ($note['status'] !== 'open') throw new RuntimeException('Credit note is not open.');
+
+    $inv = invoice_find($invoice_id);
+    if (!$inv)                                  throw new RuntimeException('Invoice not found.');
+    if ((int)$inv['user_id'] !== (int)$note['user_id']) {
+        throw new InvalidArgumentException('Credit note belongs to a different customer.');
+    }
+    if ($inv['status'] === 'paid')              throw new RuntimeException('Invoice is already paid.');
+
+    $pdo = pdo();
+    $pdo->beginTransaction();
+    try {
+        $pdo->prepare(
+            "INSERT INTO payments
+                (user_id, invoice_id, method, amount, currency, reference,
+                 status, received_at, source, recorded_by, notes)
+             VALUES (?, ?, 'credit_note', ?, ?, ?, 'received', NOW(), 'credit_note', ?, ?)"
+        )->execute([
+            (int)$note['user_id'], $invoice_id, (float)$note['amount'],
+            (string)($note['currency'] ?? 'ZAR'),
+            (string)$note['number'],
+            $applied_by,
+            'Applied credit note ' . (string)$note['number'],
+        ]);
+
+        $pdo->prepare(
+            "UPDATE credit_notes
+                SET status='applied', invoice_id=?, applied_at=NOW()
+              WHERE id=?"
+        )->execute([$invoice_id, $credit_note_id]);
+
+        // Mark invoice paid if the credit covers it. Payments aren't yet
+        // partial-aware, so the simple rule: if total credits + payments
+        // ≥ invoice total, status = paid.
+        $sum = (float)$pdo->query(
+            "SELECT COALESCE(SUM(amount), 0)
+               FROM payments
+              WHERE invoice_id = " . (int)$invoice_id . "
+                AND status = 'received'"
+        )->fetchColumn();
+        if ($sum + 0.005 >= (float)$inv['total']) {
+            $pdo->prepare(
+                "UPDATE invoices SET status='paid', paid_at=CURRENT_TIMESTAMP WHERE id=?"
+            )->execute([$invoice_id]);
+        }
+        $pdo->commit();
+    } catch (Throwable $e) {
+        $pdo->rollBack();
+        throw $e;
+    }
+    audit_log('credit_note.apply', [
+        'target_type' => 'credit_note', 'target_id' => $credit_note_id,
+        'meta' => ['invoice_id' => $invoice_id, 'amount' => (float)$note['amount']],
+    ]);
+    return ['credit_note_id' => $credit_note_id, 'invoice_id' => $invoice_id];
+}
+
+function credit_note_void(int $credit_note_id): bool {
+    $ok = pdo()->prepare(
+        "UPDATE credit_notes SET status='void' WHERE id=? AND status='open'"
+    )->execute([$credit_note_id]);
+    if ($ok) audit_log('credit_note.void', ['target_type' => 'credit_note', 'target_id' => $credit_note_id]);
+    return $ok;
+}
+
+function credit_notes_for_user(int $user_id): array {
+    $stmt = pdo()->prepare(
+        "SELECT * FROM credit_notes WHERE user_id = ? ORDER BY issued_at DESC, id DESC"
+    );
+    $stmt->execute([$user_id]);
+    return $stmt->fetchAll();
+}
+
+function credit_notes_all(?string $status = null): array {
+    $sql = "SELECT cn.*, u.username, u.name AS client_name
+              FROM credit_notes cn
+              LEFT JOIN users u ON u.id = cn.user_id";
+    $args = [];
+    if ($status && in_array($status, ['open','applied','void'], true)) {
+        $sql .= " WHERE cn.status = ?";
+        $args[] = $status;
+    }
+    $sql .= " ORDER BY cn.issued_at DESC, cn.id DESC";
+    $stmt = pdo()->prepare($sql);
+    $stmt->execute($args);
+    return $stmt->fetchAll();
 }

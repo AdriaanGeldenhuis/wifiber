@@ -194,13 +194,45 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             // Cleared the picker — leave whatever they typed in `package`.
         }
 
+        // Snapshot the previous product so we can prorate when it changes.
+        $old_product_id = (int)($client['product_id'] ?? 0);
+        $new_product_id = (int)($patch['product_id'] ?? 0);
+
         update_user($id, fn(array $u) => array_merge($u, $patch));
         audit_log('client.update', [
             'target_type' => 'user',
             'target_id'   => $id,
             'meta'        => ['account_no' => $patch['account_no'] ?? $client['account_no']],
         ]);
-        flash('success', 'Client details saved.');
+
+        // Prorate any open invoice when the product changes mid-period.
+        // No-op when the customer is on the same plan.
+        if ($old_product_id !== $new_product_id) {
+            $old_p = $old_product_id > 0 ? products_find($old_product_id) : null;
+            $new_p = $new_product_id > 0 ? products_find($new_product_id) : null;
+            try {
+                $r = invoice_reprice_user($id, $old_p, $new_p);
+                if ($r) {
+                    flash('success', sprintf(
+                        'Plan change prorated: −R%s + R%s on invoice #%d.',
+                        number_format($r['credit'], 2), number_format($r['debit'], 2), $r['invoice_id']
+                    ));
+                }
+            } catch (Throwable $e) {
+                error_log('reprice failed: ' . $e->getMessage());
+            }
+        }
+
+        // Push status / product / rate-limit changes through to RADIUS so a
+        // suspend takes effect on the NAS immediately. Failures are logged
+        // but don't block the save — the bin/radius-sync.php cron will
+        // reconcile next minute.
+        if (is_file(__DIR__ . '/../auth/radius.php')) {
+            require_once __DIR__ . '/../auth/radius.php';
+            try { radius_provision_user($id); }
+            catch (Throwable $e) { error_log('radius provision failed: ' . $e->getMessage()); }
+        }
+        if (empty($_SESSION['_flash'])) flash('success', 'Client details saved.');
         header('Location: /admin/client-edit.php?id=' . $id);
         exit;
     }

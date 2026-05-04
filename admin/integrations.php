@@ -6,6 +6,7 @@ $page_title = 'Integrations';
 $active_key = 'integrations';
 require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/webhooks.php';
+require_once __DIR__ . '/../auth/api.php';
 
 $self = '/admin/integrations.php';
 $flash_token = null;
@@ -47,11 +48,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     if ($action === 'token_create') {
         $label  = (string)($_POST['label'] ?? '');
-        $scopes = array_intersect((array)($_POST['scopes'] ?? []), ['read','diag']);
+        // Allow read, diag, and any of the Phase 30 write scopes.
+        $allowed_scopes = array_merge(['read', 'diag'], array_keys(API_WRITE_SCOPES));
+        $scopes  = array_values(array_intersect((array)($_POST['scopes'] ?? []), $allowed_scopes));
         $expires = trim((string)($_POST['expires_at'] ?? ''));
-        $r = api_token_create((int)$user['id'], $label, array_values($scopes),
+        $r = api_token_create((int)$user['id'], $label, $scopes,
             $expires !== '' ? str_replace('T', ' ', $expires) . ':00' : null);
-        audit_log('api_token.create', ['target_type' => 'api_token', 'target_id' => $r['id']]);
+        audit_log('api_token.create', ['target_type' => 'api_token', 'target_id' => $r['id'], 'meta' => ['scopes' => $scopes]]);
         $flash_token = $r['token']; // shown ONCE below
         flash('success', 'Token created. Copy it now — we never show it again.');
     }
@@ -66,10 +69,46 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         header('Location: ' . $self);
         exit;
     }
+
+    if ($action === 'inbound_save') {
+        try {
+            $id = (int)($_POST['id'] ?? 0);
+            inbound_webhook_save([
+                'name'             => $_POST['name']             ?? '',
+                'description'      => $_POST['description']      ?? '',
+                'secret'           => $_POST['secret']           ?? '',
+                'algo'             => $_POST['algo']             ?? 'sha256',
+                'signature_header' => $_POST['signature_header'] ?? 'X-Hub-Signature-256',
+                'signature_prefix' => $_POST['signature_prefix'] ?? 'sha256=',
+                'is_active'        => !empty($_POST['is_active']),
+                'created_by'       => $user['id'],
+            ], $id ?: null);
+            audit_log('inbound_webhook.save', ['target_type' => 'inbound_webhook', 'target_id' => $id ?: 0]);
+            flash('success', $id ? 'Inbound source updated.' : 'Inbound source added.');
+        } catch (Throwable $e) {
+            flash('error', $e->getMessage());
+        }
+        header('Location: ' . $self);
+        exit;
+    }
+
+    if ($action === 'inbound_delete') {
+        $id = (int)($_POST['id'] ?? 0);
+        if ($id) {
+            inbound_webhook_delete($id);
+            audit_log('inbound_webhook.delete', ['target_type' => 'inbound_webhook', 'target_id' => $id]);
+            flash('success', 'Inbound source deleted.');
+        }
+        header('Location: ' . $self);
+        exit;
+    }
 }
 
-$hooks  = webhooks_all();
-$tokens = api_tokens_for_user((int)$user['id']);
+$hooks      = webhooks_all();
+$inbound    = inbound_webhooks_all();
+$inbound_recent = inbound_deliveries_recent(20);
+$tokens     = api_tokens_for_user((int)$user['id']);
+$base_url   = (!empty($_SERVER['HTTPS']) ? 'https' : 'http') . '://' . ($_SERVER['HTTP_HOST'] ?? 'wifiber.co.za');
 $h = fn ($v) => htmlspecialchars((string)$v, ENT_QUOTES);
 ?>
 
@@ -163,11 +202,16 @@ $h = fn ($v) => htmlspecialchars((string)$v, ENT_QUOTES);
   <form method="post" class="form form-grid">
     <?= csrf_field() ?>
     <input type="hidden" name="action" value="token_create">
-    <div class="field"><label>Label</label>
+    <div class="field" style="grid-column:1/-1;"><label>Label</label>
       <input type="text" name="label" required maxlength="80" placeholder="grafana, splynx-bridge…"></div>
-    <div class="field"><label>Scopes</label>
-      <label><input type="checkbox" name="scopes[]" value="read" checked> read</label>&nbsp;&nbsp;
-      <label><input type="checkbox" name="scopes[]" value="diag"> diag</label>
+    <div class="field" style="grid-column:1/-1;"><label>Read scopes</label>
+      <label><input type="checkbox" name="scopes[]" value="read" checked> <code>read</code> — every GET endpoint</label><br>
+      <label><input type="checkbox" name="scopes[]" value="diag"> <code>diag</code> — POST /diagnostics</label>
+    </div>
+    <div class="field" style="grid-column:1/-1;"><label>Write scopes</label>
+      <?php foreach (API_WRITE_SCOPES as $scope => $label): ?>
+        <label style="display:block;"><input type="checkbox" name="scopes[]" value="<?= $h($scope) ?>"> <code><?= $h($scope) ?></code> — <?= $h($label) ?></label>
+      <?php endforeach; ?>
     </div>
     <div class="field"><label>Expires <span class="muted">(optional)</span></label>
       <input type="datetime-local" name="expires_at"></div>
@@ -175,4 +219,86 @@ $h = fn ($v) => htmlspecialchars((string)$v, ENT_QUOTES);
       <button class="btn btn-primary btn-sm">Create token</button>
     </div>
   </form>
+  <p class="muted"><small>Per-token rate limit: <strong><?= API_RATE_LIMIT_PER_MIN ?> requests/minute</strong>. The full machine-readable spec is at <a href="/api/v1/openapi.yaml"><code>/api/v1/openapi.yaml</code></a>.</small></p>
+</div>
+
+<div class="portal-card">
+  <h2>Inbound webhooks <span class="muted">(<?= count($inbound) ?>)</span></h2>
+  <p class="muted" style="margin-top:-4px;">External systems POST signed payloads to <code><?= $h($base_url) ?>/api/v1/webhooks/in.php?source=NAME</code>. Verified deliveries fire internally as <code>inbound.&lt;name&gt;.&lt;event&gt;</code> so subscribed outbound webhooks can chain on them.</p>
+  <?php if ($inbound): ?>
+    <div class="table-scroll">
+    <table class="data-table">
+      <thead><tr><th>Name</th><th>Description</th><th>Algo</th><th>Header</th><th>Active</th><th style="text-align:right;">Deliveries</th><th>Last received</th><th></th></tr></thead>
+      <tbody>
+        <?php foreach ($inbound as $w): ?>
+          <tr>
+            <td><strong><code><?= $h($w['name']) ?></code></strong></td>
+            <td><small><?= $h($w['description']) ?></small></td>
+            <td><small><?= $h($w['algo']) ?></small></td>
+            <td><small><code><?= $h($w['signature_header']) ?></code></small></td>
+            <td><?= $w['is_active'] ? '✓' : '<small class="muted">no</small>' ?></td>
+            <td style="text-align:right;"><?= (int)$w['delivery_count'] ?></td>
+            <td><small><?= $h($w['last_received_at'] ?? 'never') ?></small></td>
+            <td>
+              <details style="display:inline-block;">
+                <summary class="btn btn-ghost btn-sm">Secret</summary>
+                <pre style="user-select:all;background:#111;color:#0f0;padding:6px;border-radius:4px;font-size:11px;"><?= $h($w['secret']) ?></pre>
+              </details>
+              <form method="post" class="inline-form" data-confirm="Delete inbound source &quot;<?= $h($w['name']) ?>&quot;?">
+                <?= csrf_field() ?>
+                <input type="hidden" name="action" value="inbound_delete">
+                <input type="hidden" name="id" value="<?= (int)$w['id'] ?>">
+                <button class="btn btn-danger btn-sm">×</button>
+              </form>
+            </td>
+          </tr>
+        <?php endforeach; ?>
+      </tbody>
+    </table>
+    </div>
+  <?php endif; ?>
+  <h3>Add inbound source</h3>
+  <form method="post" class="form form-grid">
+    <?= csrf_field() ?>
+    <input type="hidden" name="action" value="inbound_save">
+    <div class="field"><label>Name <span class="muted">(URL-safe)</span></label>
+      <input type="text" name="name" required maxlength="40" placeholder="splynx" pattern="[a-z0-9_-]{2,40}"></div>
+    <div class="field"><label>Algo</label>
+      <select name="algo">
+        <option value="sha256" selected>HMAC-SHA256</option>
+        <option value="sha1">HMAC-SHA1</option>
+        <option value="md5">HMAC-MD5</option>
+      </select>
+    </div>
+    <div class="field"><label>Signature header</label>
+      <input type="text" name="signature_header" value="X-Hub-Signature-256" maxlength="60"></div>
+    <div class="field"><label>Signature prefix</label>
+      <input type="text" name="signature_prefix" value="sha256=" maxlength="20"></div>
+    <div class="field"><label>Secret <span class="muted">(blank = autogenerate)</span></label>
+      <input type="text" name="secret" maxlength="200"></div>
+    <div class="field"><label><input type="checkbox" name="is_active" value="1" checked> Active</label></div>
+    <div class="field" style="grid-column:1/-1;"><label>Description</label>
+      <input type="text" name="description" maxlength="200" placeholder="Splynx events bridge"></div>
+    <div class="form-actions" style="grid-column:1/-1;">
+      <button class="btn btn-primary btn-sm">Add source</button>
+    </div>
+  </form>
+  <?php if ($inbound_recent): ?>
+    <h3 style="margin-top:24px;">Recent deliveries</h3>
+    <table class="data-table">
+      <thead><tr><th>When</th><th>Source</th><th>Event</th><th>Status</th><th>Reason</th><th>Remote</th></tr></thead>
+      <tbody>
+        <?php foreach ($inbound_recent as $d): ?>
+          <tr>
+            <td><small><?= $h($d['received_at']) ?></small></td>
+            <td><small><code><?= $h($d['source_name']) ?></code></small></td>
+            <td><small><?= $h($d['event']) ?></small></td>
+            <td><span class="status-pill status-<?= $h($d['status']) ?>"><?= $h($d['status']) ?></span></td>
+            <td><small><?= $h($d['reason']) ?></small></td>
+            <td><small><?= $h($d['remote_ip']) ?></small></td>
+          </tr>
+        <?php endforeach; ?>
+      </tbody>
+    </table>
+  <?php endif; ?>
 </div>

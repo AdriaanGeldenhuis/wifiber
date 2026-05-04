@@ -96,6 +96,19 @@ $billing = invoice_billing_settings();
           </strong>
         </li>
       </ul>
+      <?php
+      // Phase 28 — offer a PayFast checkout link when the gateway is
+      // configured.  Customers can still pay by EFT using the bank
+      // details above; this is just a convenience.
+      if (is_file(__DIR__ . '/../auth/payments/payfast.php')) {
+          require_once __DIR__ . '/../auth/payments/payfast.php';
+          if (payfast_is_configured()) {
+              $base = (!empty($_SERVER['HTTPS']) ? 'https' : 'http') . '://' . ($_SERVER['HTTP_HOST'] ?? 'wifiber.co.za');
+              $pay_url = payfast_checkout_url($invoice, $base);
+              echo '<p style="margin-top:14px;"><a class="btn btn-primary" href="' . htmlspecialchars($pay_url, ENT_QUOTES) . '">Pay online with PayFast</a> &nbsp;<small class="muted">(card / instant EFT)</small></p>';
+          }
+      }
+      ?>
       <?php if ($billing['payment_instructions']): ?>
         <p class="muted small" style="margin-top:14px;"><?= nl2br(htmlspecialchars($billing['payment_instructions'])) ?></p>
       <?php endif; ?>
