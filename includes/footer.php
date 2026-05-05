@@ -2,7 +2,8 @@
 <footer class="site-footer">
   <div class="container footer-grid">
     <div class="footer-brand">
-      <img src="<?= asset('images/footer-logo-2x.webp') ?>" alt="<?= htmlspecialchars($site['name']) ?>" class="footer-logo">
+      <?php $brand_logo_url = !empty($site['brand']['logo_url']) ? $site['brand']['logo_url'] : asset('images/footer-logo-2x.webp'); ?>
+      <img src="<?= htmlspecialchars($brand_logo_url) ?>" alt="<?= htmlspecialchars($site['name']) ?>" class="footer-logo">
       <p class="footer-mission">Wireless internet for the Vaal Triangle. Built on top-tier equipment, backed by people who actually answer the phone.</p>
       <div class="socials">
         <a href="<?= htmlspecialchars($site['social']['facebook']) ?>" aria-label="Facebook">

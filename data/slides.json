@@ -2,33 +2,45 @@
     "slides": [
         {
             "image": "slider-1.webp",
+            "image_mobile": "",
             "eyebrow": "Fiber-grade speed",
             "heading": "Speed That Connects.",
             "heading_accent": "Reliability That Lasts.",
             "subtext": "Wireless internet for home and business across the Vaal Triangle &mdash; built on top-tier networking equipment with multiple backup systems.",
             "cta_label": "View Coverage Map",
             "cta_link": "/coverage",
-            "position": "left"
+            "position": "left",
+            "overlay": 55,
+            "overlay_style": "left",
+            "focal_mobile": "center center"
         },
         {
             "image": "slider-2.webp",
+            "image_mobile": "",
             "eyebrow": "Always connected",
             "heading": "Every device.",
             "heading_accent": "Every corner of your home.",
             "subtext": "Stream, work, game, video-call &mdash; all at the same time. Uncapped, unshaped, and unshared on our premium tiers.",
             "cta_label": "See Pricing",
             "cta_link": "/pricing",
-            "position": "left"
+            "position": "left",
+            "overlay": 55,
+            "overlay_style": "left",
+            "focal_mobile": "center center"
         },
         {
             "image": "slider-3.webp",
+            "image_mobile": "",
             "eyebrow": "Business-ready",
             "heading": "Built for business.",
             "heading_accent": "VoIP, cloud, the lot.",
             "subtext": "Low-latency 1:1 contention links, redundant uplinks and 24/7 support. The internet your business needs to keep running.",
             "cta_label": "Talk to us",
             "cta_link": "/#contact",
-            "position": "left"
+            "position": "left",
+            "overlay": 55,
+            "overlay_style": "left",
+            "focal_mobile": "center center"
         }
     ]
 }

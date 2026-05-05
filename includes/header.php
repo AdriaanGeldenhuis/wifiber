@@ -103,7 +103,8 @@ $twitter_handle = trim((string)($seo['twitter_handle'] ?? ''));
 <header class="site-header">
   <div class="container header-inner">
     <a href="/" class="logo" aria-label="<?= htmlspecialchars($site['name']) ?> home">
-      <img src="<?= asset('images/header-logo-2x.webp') ?>" alt="<?= htmlspecialchars($site['name']) ?> logo">
+      <?php $brand_logo_url = !empty($site['brand']['logo_url']) ? $site['brand']['logo_url'] : asset('images/header-logo-2x.webp'); ?>
+      <img src="<?= htmlspecialchars($brand_logo_url) ?>" alt="<?= htmlspecialchars($site['name']) ?> logo">
       <span class="logo-text"><?= htmlspecialchars($site['name']) ?></span>
     </a>
     <button class="nav-toggle" aria-controls="main-nav" aria-expanded="false" aria-label="Toggle menu">

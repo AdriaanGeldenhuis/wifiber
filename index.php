@@ -8,17 +8,30 @@ require __DIR__ . '/includes/header.php';
 
 <section class="hero-slider" aria-roledescription="carousel" aria-label="WiFIBER highlights">
   <div class="slides">
-    <?php foreach ($slides as $i => $s):
-      $img      = '/assets/images/slider/' . htmlspecialchars($s['image']);
-      $position = $s['position'] ?? 'left';
+    <?php
+      $focal_options = ['center center','center top','center bottom','left center','right center','left top','right top','left bottom','right bottom'];
+      $overlay_styles = ['left','bottom','even'];
+      foreach ($slides as $i => $s):
+        $img         = '/assets/images/slider/' . htmlspecialchars($s['image']);
+        $img_mobile  = !empty($s['image_mobile']) ? '/assets/images/slider/' . htmlspecialchars($s['image_mobile']) : '';
+        $position    = $s['position'] ?? 'left';
+        $overlay_pct = isset($s['overlay']) ? max(0, min(100, (int)$s['overlay'])) : 55;
+        $overlay_a   = number_format($overlay_pct / 100, 2, '.', '');
+        $ostyle      = in_array($s['overlay_style'] ?? 'left', $overlay_styles, true) ? $s['overlay_style'] : 'left';
+        $focal_m     = in_array($s['focal_mobile'] ?? '', $focal_options, true) ? $s['focal_mobile'] : 'center center';
+
+        $css_vars  = "--overlay-alpha:{$overlay_a};";
+        $css_vars .= "--slide-img-desktop:url('{$img}');";
+        if ($img_mobile !== '') $css_vars .= "--slide-img-mobile:url('{$img_mobile}');";
+        $css_vars .= "--slide-focal-mobile:{$focal_m};";
     ?>
       <div class="slide<?= $i === 0 ? ' is-active' : '' ?>"
            data-slide="<?= $i ?>"
            role="group"
            aria-roledescription="slide"
            aria-label="Slide <?= $i + 1 ?> of <?= count($slides) ?>"
-           style="background-image: url('<?= $img ?>');">
-        <div class="slide-overlay"></div>
+           style="<?= $css_vars ?>">
+        <div class="slide-overlay overlay-style-<?= $ostyle ?>"></div>
         <div class="container">
           <div class="slide-content slide-<?= htmlspecialchars($position) ?>">
             <?php if (!empty($s['eyebrow'])): ?>
