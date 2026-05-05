@@ -337,6 +337,10 @@
   }
 
   function sitePopupHTML(s) {
+    // Slim popup — just the title and admin actions. The bottom detail
+    // panel surfaces the full overview, and the right sidebar lists
+    // every device / sector / link connected to this site, so there's
+    // no need to repeat any of that here.
     return ''
       + '<div class="map-popup">'
       +   '<strong>' + escapeHtml(s.name) + '</strong><br>'
@@ -348,9 +352,10 @@
       +     (s.type === 'tower'
             ? '<button type="button" class="btn btn-primary btn-sm" data-add-sector="' + s.id + '">+ Sector</button>'
             : '')
+      +     (s.type === 'tower'
+            ? '<button type="button" class="btn btn-ghost btn-sm" data-add-device="' + s.id + '">+ Device</button>'
+            : '')
       +   '</div>'
-      +   deviceListHTML(s.id)
-      +   (s.type === 'tower' ? sectorListHTML(s.id) : '')
       + '</div>';
   }
 
@@ -757,9 +762,10 @@
   }
 
   function sectorPopupHTML(s, towerName) {
-    const fq = s.frequency_mhz != null
-      ? s.frequency_mhz + ' MHz' + (s.channel_width_mhz ? ' @ ' + s.channel_width_mhz + ' MHz wide' : '')
-      : null;
+    // Slim popup — title + outage badge + admin actions only. The
+    // bottom detail panel already shows azimuth / beam / frequency /
+    // TX / AP / capacity / link health, and the right sidebar lists
+    // every customer assigned to this sector, so we don't repeat it.
     const outage = outageBySectorId[s.id];
     const outageBlock = outage
       ? '<div class="pp-outage">'
@@ -769,35 +775,11 @@
         + outage.affected_count + ' customer' + (outage.affected_count === 1 ? '' : 's') + ' affected'
         + '</div>'
       : '';
-    const kv = [];
-    kv.push(['Azimuth', s.azimuth_deg   != null ? s.azimuth_deg   + '°' : '—']);
-    kv.push(['Beam',    s.beamwidth_deg != null ? s.beamwidth_deg + '°' : '—']);
-    if (fq)                       kv.push(['Freq',  fq]);
-    if (s.tx_power_dbm   != null) kv.push(['TX',    s.tx_power_dbm + ' dBm']);
-    if (s.ap_device_name)         kv.push(['AP',    s.ap_device_name]);
-    const kvHtml = '<dl class="pp-kv">'
-      + kv.map(([k, v]) => '<dt>' + escapeHtml(k) + '</dt><dd>' + escapeHtml(String(v)) + '</dd>').join('')
-      + '</dl>';
-
-    // Capacity bar — only when both customer_count and max_clients are set.
-    let capHtml = '';
-    if (s.max_clients != null && s.max_clients > 0 && s.customer_count != null) {
-      const pct = Math.min(100, Math.round((s.customer_count / s.max_clients) * 100));
-      const cls = pct >= 100 ? ' cap-full' : (pct >= 80 ? ' cap-warn' : '');
-      capHtml = '<div style="margin-top:8px;font-size:11px;">'
-        + '<div style="display:flex;justify-content:space-between;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;font-weight:600;">'
-        +   '<span>Capacity</span><span>' + s.customer_count + ' / ' + s.max_clients + ' · ' + pct + '%</span>'
-        + '</div>'
-        + '<div class="cap-bar"><span class="cap-bar-fill' + cls + '" style="width:' + pct + '%;"></span></div>'
-        + '</div>';
-    }
     return ''
       + '<div class="map-popup">'
       +   '<strong>' + escapeHtml(s.name) + '</strong><br>'
       +   '<small>' + escapeHtml(towerName) + ' · ' + escapeHtml(s.band) + '</small>'
       +   outageBlock
-      +   kvHtml
-      +   capHtml
       +   '<div class="pp-actions">'
       +     '<button type="button" class="btn btn-ghost btn-sm" data-edit-sector="' + s.id + '">Edit</button>'
       +     '<button type="button" class="btn btn-danger btn-sm" data-delete-sector="' + s.id + '">Delete</button>'
