@@ -968,17 +968,18 @@ $map_data['wireless_link_summary'] = $wl_by_site;
   body:has(.map-fs) .portal-main  { padding: 0 !important; overflow: hidden; }
   body:has(.map-fs) .portal-inner { max-width: none !important; width: 100%; }
 
-  /* ---------- Map-page sidebar (rewritten from scratch) ----------
-     Approach: take the .portal-side aside out of flow with
-     position:fixed and park it OFF-SCREEN to the left.  Clicking
-     the floating chevron button slides it in via JS (inline style
-     change on the element), no class-based CSS specificity tricks.
-     The map gets the full viewport.
+  /* ---------- Map-page sidebar ----------
+     Take the .portal-side aside out of flow with position:fixed and
+     park it OFF-SCREEN to the left. The map uses the full viewport.
+     Clicking the floating chevron toggles a `.map-side-open` class
+     on <body>; CSS slides the sidebar in. State lives in one place
+     (the body class) so DevTools, the script and the cascade can
+     never disagree.
 
-     We use !important on the off-screen rules to be defensive
-     against portal.css's base .portal-side { width: 252px; ... }
-     and the @media (max-width:720px) override that resets
-     position:static. */
+     !important is used on the layout rules so portal.css's base
+     .portal-side { width: 252px; position: sticky; ... } and its
+     @media (max-width:720px) override (which resets position:static)
+     can't reach in and undo us. */
   body:has(.map-fs) .portal-side {
     position: fixed !important;
     left: 0 !important;
@@ -992,8 +993,14 @@ $map_data['wireless_link_summary'] = $wl_by_site;
     border-right: 1px solid var(--border);
     box-shadow: 8px 0 24px rgba(0,0,0,.5);
     overflow-y: auto;
-    transform: translateX(-100%);
+    transform: translateX(-100%) !important;
     transition: transform .25s cubic-bezier(.2,.7,.2,1);
+  }
+  /* Open state — slide the sidebar back into view. !important keeps
+     us above the off-screen rule above (which also uses !important
+     for defensiveness) without depending on selector specificity. */
+  body.map-side-open:has(.map-fs) .portal-side {
+    transform: translateX(0) !important;
   }
 
   /* Floating chevron — the only opener for the sidebar on the map. */
@@ -1035,9 +1042,18 @@ $map_data['wireless_link_summary'] = $wl_by_site;
     transition: transform .25s cubic-bezier(.2,.7,.2,1);
     pointer-events: none;     /* let clicks always hit the button itself */
   }
+  /* When the sidebar is open: slide the chevron over to the sidebar's
+     edge and flip it so it points back (close affordance). */
+  body.map-side-open:has(.map-fs) .map-sidebar-toggle {
+    left: 260px;
+  }
+  body.map-side-open:has(.map-fs) .map-sidebar-toggle svg {
+    transform: rotate(180deg);
+  }
   /* On narrow viewports the sidebar takes the full screen when open. */
   @media (max-width: 600px) {
     body:has(.map-fs) .portal-side { width: 100vw !important; }
+    body.map-side-open:has(.map-fs) .map-sidebar-toggle { left: calc(100vw - 50px); }
   }
 
   .map-fs {
@@ -2209,11 +2225,12 @@ $map_data['wireless_link_summary'] = $wl_by_site;
   }
 </style>
 
-<!-- Sidebar pin toggle — primary trigger for touch devices (no hover),
-     also a one-click alternative on desktop. Click toggles body class
-     map-side-pinned which the .portal-side rules above pick up. -->
+<!-- Sidebar opener — the only way to open the admin nav on the map page.
+     Clicking it toggles the body class .map-side-open, which the CSS
+     rules above pick up to slide the sidebar in/out. -->
 <button id="map-sidebar-toggle" class="map-sidebar-toggle" type="button"
-        aria-label="Toggle navigation" aria-expanded="false">
+        aria-label="Toggle navigation" aria-expanded="false"
+        aria-controls="portal-side">
   <svg viewBox="0 0 16 16" aria-hidden="true">
     <path d="M5 2l6 6-6 6"/>
   </svg>
@@ -2370,50 +2387,48 @@ $map_data['wireless_link_summary'] = $wl_by_site;
 <script src="/assets/js/admin-map.js" defer></script>
 
 <script>
-/* Map sidebar — fresh rewrite.
-   • Sidebar is parked off-screen via CSS (transform: translateX(-100%)).
-   • Click the chevron → set inline transform: translateX(0) to slide
-     it in.  Click again, click the map, or press Esc → slide out.
-   • Inline styles beat any cached or third-party CSS that might be
-     fighting us.
-   • Logs a one-line breadcrumb to the console on first wire-up so
-     you can confirm in DevTools that the script attached. */
+/* Map sidebar toggle.
+   • Sidebar is parked off-screen via CSS.
+   • Click the chevron → toggle .map-side-open on <body>; CSS slides
+     the sidebar in.  Click outside, click the chevron again, or
+     press Esc → close.
+   • State is owned by the body class so the cascade and the script
+     can never disagree.  Logs one wire-up breadcrumb to the console
+     so DevTools can confirm the script attached. */
 (function () {
   function wire() {
-    const btn  = document.getElementById('map-sidebar-toggle');
-    const side = document.querySelector('.portal-side');
+    var btn = document.getElementById('map-sidebar-toggle');
     if (!btn) { console.warn('[map-sidebar] toggle button missing'); return; }
-    if (!side) { console.warn('[map-sidebar] .portal-side missing'); return; }
+    if (!document.querySelector('.portal-side')) {
+      console.warn('[map-sidebar] .portal-side missing — nav will not render');
+      return;
+    }
     console.log('[map-sidebar] wired — click the chevron to open the nav');
 
-    let isOpen = false;
-    function open()  { isOpen = true;  side.style.transform = 'translateX(0)';    btn.setAttribute('aria-expanded', 'true');  rotateChevron(true); }
-    function close() { isOpen = false; side.style.transform = 'translateX(-100%)'; btn.setAttribute('aria-expanded', 'false'); rotateChevron(false); }
-    function rotateChevron(opened) {
-      const svg = btn.querySelector('svg');
-      if (svg) svg.style.transform = opened ? 'rotate(180deg)' : 'rotate(0deg)';
-      btn.style.left = opened ? '260px' : '14px';
+    var body = document.body;
+    function isOpen() { return body.classList.contains('map-side-open'); }
+    function setOpen(open) {
+      body.classList.toggle('map-side-open', open);
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
     }
 
     btn.addEventListener('click', function (e) {
       e.preventDefault();
       e.stopPropagation();
-      isOpen ? close() : open();
+      setOpen(!isOpen());
     });
-    // Tap the map closes it.
+    // Click anywhere outside the sidebar (and not on the chevron) closes it.
     document.addEventListener('click', function (e) {
-      if (!isOpen) return;
+      if (!isOpen()) return;
       if (e.target.closest('.portal-side')) return;
-      if (e.target.closest('.map-sidebar-toggle')) return;
-      close();
+      if (e.target.closest('#map-sidebar-toggle')) return;
+      setOpen(false);
     });
     document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && isOpen) close();
+      if (e.key === 'Escape' && isOpen()) setOpen(false);
     });
   }
 
-  // Run as soon as the DOM has both elements; defer / DOMContentLoaded
-  // safe because the inline script lives at the bottom of the page.
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', wire);
   } else {
