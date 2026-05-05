@@ -38,7 +38,32 @@
   }
 
   /* ---------- map + layers ---------- */
-  const map = L.map('map', { zoomControl: true }).setView(boot.center, boot.zoom);
+
+  // Persisted view state — operator returns to the same zoom, pan,
+  // tile (Streets / Satellite) and toggle layout they left.
+  // Versioned so we can change the schema without colliding with
+  // somebody's stale entry.
+  const MAP_STATE_KEY = 'wifiber.admin-map.v1';
+  function loadMapState() {
+    try { return JSON.parse(localStorage.getItem(MAP_STATE_KEY) || 'null'); }
+    catch (e) { return null; }
+  }
+  function saveMapState(patch) {
+    try {
+      const cur = loadMapState() || {};
+      const merged = Object.assign(cur, patch);
+      if (patch && patch.toggles) {
+        merged.toggles = Object.assign(cur.toggles || {}, patch.toggles);
+      }
+      localStorage.setItem(MAP_STATE_KEY, JSON.stringify(merged));
+    } catch (e) { /* localStorage unavailable / quota — ignore */ }
+  }
+  const savedState = loadMapState();
+  const initialCenter = (savedState && Array.isArray(savedState.center) && savedState.center.length === 2)
+                        ? savedState.center : boot.center;
+  const initialZoom   = (savedState && typeof savedState.zoom === 'number') ? savedState.zoom : boot.zoom;
+
+  const map = L.map('map', { zoomControl: true }).setView(initialCenter, initialZoom);
   // Expose the map for inline overlays (wireless link health rings, etc.)
   // that live in PHP files rather than this bundle.
   window.WIFIBER_MAP = map;
@@ -53,8 +78,22 @@
       { attribution: 'Tiles &copy; Esri', maxZoom: 19 }
     ),
   };
-  tileLayers.Streets.addTo(map);
+  const initialTile = (savedState && tileLayers[savedState.tile]) ? savedState.tile : 'Streets';
+  tileLayers[initialTile].addTo(map);
   L.control.layers(tileLayers, {}, { position: 'topright', collapsed: false }).addTo(map);
+
+  // Persist viewport + tile choice on every change.  Round to 6 dp so
+  // the localStorage payload doesn't churn on sub-meter pan jitter.
+  map.on('moveend zoomend', () => {
+    const c = map.getCenter();
+    saveMapState({
+      center: [+c.lat.toFixed(6), +c.lng.toFixed(6)],
+      zoom:   map.getZoom(),
+    });
+  });
+  map.on('baselayerchange', (e) => {
+    if (e && e.name) saveMapState({ tile: e.name });
+  });
 
   const sitesLayer    = L.layerGroup().addTo(map);
   const linksLayer    = L.layerGroup().addTo(map);
@@ -180,6 +219,64 @@
     e.target.checked ? sectorsLayer.addTo(map) : map.removeLayer(sectorsLayer);
   });
 
+  // Persist + restore per-toggle state across page loads. Covers the
+  // base layer toggles above and the overlay toggles defined in the
+  // inline scripts at the bottom of map.php (which install their own
+  // change handlers — our listener piggybacks rather than fighting
+  // them, and the restore step dispatches a synthetic change so the
+  // existing handlers wire/unwire their layers).
+  const PERSISTED_TOGGLES = [
+    'toggle-sites', 'toggle-links', 'toggle-clients',
+    'toggle-coverage', 'toggle-sectors',
+    'toggle-signal', 'toggle-rfdensity', 'toggle-throughput',
+  ];
+  PERSISTED_TOGGLES.forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', () => {
+      saveMapState({ toggles: { [id]: el.checked } });
+    });
+  });
+  // Outage history is a <select>, not a checkbox.
+  const outagePicker = document.getElementById('toggle-outage-history');
+  if (outagePicker) {
+    outagePicker.addEventListener('change', () => {
+      saveMapState({ outage_history: outagePicker.value || '' });
+    });
+  }
+  // Restore on load — set the checkbox to its saved state and
+  // dispatch a synthetic change so the existing handler add/removes
+  // the layer to match.  Two passes: an immediate one for the toggles
+  // wired here in admin-map.js (sites/links/clients/coverage/sectors),
+  // and a deferred one ~350ms later for the signal / RF / throughput
+  // toggles whose handlers are bound by the inline scripts at the
+  // bottom of map.php (those poll for window.WIFIBER_MAP every 250ms).
+  function restoreToggles(ids) {
+    if (!savedState || !savedState.toggles) return;
+    ids.forEach((id) => {
+      const want = savedState.toggles[id];
+      if (want === undefined) return;
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.checked = !!want;
+      el.dispatchEvent(new Event('change'));
+    });
+  }
+  setTimeout(() => restoreToggles([
+    'toggle-sites', 'toggle-links', 'toggle-clients',
+    'toggle-coverage', 'toggle-sectors',
+  ]), 0);
+  setTimeout(() => restoreToggles([
+    'toggle-signal', 'toggle-rfdensity', 'toggle-throughput',
+  ]), 350);
+  if (savedState && savedState.outage_history && outagePicker) {
+    setTimeout(() => {
+      if (outagePicker.value === savedState.outage_history) return;
+      outagePicker.value = savedState.outage_history;
+      outagePicker.dispatchEvent(new Event('change'));
+    }, 350);
+  }
+
   /* ---------- geometry: cone polygon from azimuth + beamwidth + range ---------- */
   // Walks an arc on the WGS84 sphere from (azimuth - beamwidth/2) to
   // (azimuth + beamwidth/2). Good enough for sectors a few km wide;
@@ -302,6 +399,9 @@
     // Pass a function so the popup re-renders its sector/device lists
     // each time it opens — counts and rows stay fresh after AJAX adds.
     marker.bindPopup(() => sitePopupHTML(s));
+    // Stash the site id on the marker so the popupopen dispatcher (used
+    // by the bottom detail panel) can resolve it without a Map scan.
+    marker.wfSiteId = s.id;
     marker.on('dragend', async (e) => {
       const ll = e.target.getLatLng();
       const r = await postAction('move_site', { id: s.id, lat: ll.lat, lng: ll.lng });
@@ -334,6 +434,10 @@
   }
 
   function sitePopupHTML(s) {
+    // Slim popup — just the title and admin actions. The bottom detail
+    // panel surfaces the full overview, and the right sidebar lists
+    // every device / sector / link connected to this site, so there's
+    // no need to repeat any of that here.
     return ''
       + '<div class="map-popup">'
       +   '<strong>' + escapeHtml(s.name) + '</strong><br>'
@@ -345,9 +449,10 @@
       +     (s.type === 'tower'
             ? '<button type="button" class="btn btn-primary btn-sm" data-add-sector="' + s.id + '">+ Sector</button>'
             : '')
+      +     (s.type === 'tower'
+            ? '<button type="button" class="btn btn-ghost btn-sm" data-add-device="' + s.id + '">+ Device</button>'
+            : '')
       +   '</div>'
-      +   deviceListHTML(s.id)
-      +   (s.type === 'tower' ? sectorListHTML(s.id) : '')
       + '</div>';
   }
 
@@ -379,10 +484,49 @@
       weight: l.type === 'fiber' ? 4 : 3,
       dashArray: l.type === 'ptmp' ? '6 4' : null,
       opacity: 0.85,
+      className: 'wf-link',
     });
     line.bindPopup(linkPopupHTML(l, a.data, b.data));
+    // UISP-style rich tooltip on hover (distance + capacity + endpoints).
+    line.bindTooltip(linkTooltipHTML(l, a.data, b.data), {
+      sticky: true,
+      direction: 'top',
+      offset: [0, -8],
+      className: 'leaflet-link-tip',
+    });
+    // Stash link metadata on the polyline so the detail panel module
+    // can pull it out from a click event without crossing IIFE walls.
+    line.wfLinkId = l.id;
     line.addTo(linksLayer);
     linkLines.set(l.id, { line, data: l });
+  }
+
+  // Great-circle distance in metres. Used by the hover tooltip + detail
+  // panel; kept inline so we don't depend on the PHP-side haversine
+  // which only runs server-side.
+  function distanceMetres(lat1, lng1, lat2, lng2) {
+    const R = 6371000;
+    const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
+    const Δφ = (lat2 - lat1) * Math.PI / 180;
+    const Δλ = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(Δφ/2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2) ** 2;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+  }
+  function fmtDistance(m) {
+    if (m >= 1000) return (m / 1000).toFixed(2) + ' km';
+    return Math.round(m) + ' m';
+  }
+
+  function linkTooltipHTML(l, from, to) {
+    const dist = distanceMetres(from.lat, from.lng, to.lat, to.lng);
+    const cap  = l.capacity_mbps != null ? l.capacity_mbps + ' Mbps' : '—';
+    const freq = l.frequency ? escapeHtml(l.frequency) : '—';
+    return ''
+      + '<div class="ltip-title">' + escapeHtml(l.label || (l.type.toUpperCase() + ' link')) + '</div>'
+      + '<div class="ltip-row"><span>Distance</span><strong>' + fmtDistance(dist) + '</strong></div>'
+      + '<div class="ltip-row"><span>Capacity</span><strong>' + cap + '</strong></div>'
+      + '<div class="ltip-row"><span>Frequency</span><strong>' + freq + '</strong></div>'
+      + '<div class="ltip-route">' + escapeHtml(from.name) + ' ↔ ' + escapeHtml(to.name) + '</div>';
   }
 
   function linkPopupHTML(l, from, to) {
@@ -420,6 +564,7 @@
       icon: dotIcon(STATUS_COLOR[c.status] || '#888', 11, badge),
     });
     marker.bindPopup(clientPopupHTML(c));
+    marker.wfClientId = c.id;
     marker.on('dragend', async (e) => {
       const ll = e.target.getLatLng();
       const r = await postAction('move_client', { id: c.id, lat: ll.lat, lng: ll.lng });
@@ -681,6 +826,7 @@
       }
     );
     poly.bindPopup(sectorPopupHTML(sector, tower.data.name));
+    poly.wfSectorId = sector.id;
     poly.addTo(sectorsLayer);
     sectorIndex.set(sector.id, { data: sector, layer: poly });
     addSectorToTowerIndex(sector);
@@ -713,9 +859,10 @@
   }
 
   function sectorPopupHTML(s, towerName) {
-    const fq = s.frequency_mhz != null
-      ? s.frequency_mhz + ' MHz' + (s.channel_width_mhz ? ' @ ' + s.channel_width_mhz + ' MHz wide' : '')
-      : null;
+    // Slim popup — title + outage badge + admin actions only. The
+    // bottom detail panel already shows azimuth / beam / frequency /
+    // TX / AP / capacity / link health, and the right sidebar lists
+    // every customer assigned to this sector, so we don't repeat it.
     const outage = outageBySectorId[s.id];
     const outageBlock = outage
       ? '<div class="pp-outage">'
@@ -725,35 +872,11 @@
         + outage.affected_count + ' customer' + (outage.affected_count === 1 ? '' : 's') + ' affected'
         + '</div>'
       : '';
-    const kv = [];
-    kv.push(['Azimuth', s.azimuth_deg   != null ? s.azimuth_deg   + '°' : '—']);
-    kv.push(['Beam',    s.beamwidth_deg != null ? s.beamwidth_deg + '°' : '—']);
-    if (fq)                       kv.push(['Freq',  fq]);
-    if (s.tx_power_dbm   != null) kv.push(['TX',    s.tx_power_dbm + ' dBm']);
-    if (s.ap_device_name)         kv.push(['AP',    s.ap_device_name]);
-    const kvHtml = '<dl class="pp-kv">'
-      + kv.map(([k, v]) => '<dt>' + escapeHtml(k) + '</dt><dd>' + escapeHtml(String(v)) + '</dd>').join('')
-      + '</dl>';
-
-    // Capacity bar — only when both customer_count and max_clients are set.
-    let capHtml = '';
-    if (s.max_clients != null && s.max_clients > 0 && s.customer_count != null) {
-      const pct = Math.min(100, Math.round((s.customer_count / s.max_clients) * 100));
-      const cls = pct >= 100 ? ' cap-full' : (pct >= 80 ? ' cap-warn' : '');
-      capHtml = '<div style="margin-top:8px;font-size:11px;">'
-        + '<div style="display:flex;justify-content:space-between;color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;font-weight:600;">'
-        +   '<span>Capacity</span><span>' + s.customer_count + ' / ' + s.max_clients + ' · ' + pct + '%</span>'
-        + '</div>'
-        + '<div class="cap-bar"><span class="cap-bar-fill' + cls + '" style="width:' + pct + '%;"></span></div>'
-        + '</div>';
-    }
     return ''
       + '<div class="map-popup">'
       +   '<strong>' + escapeHtml(s.name) + '</strong><br>'
       +   '<small>' + escapeHtml(towerName) + ' · ' + escapeHtml(s.band) + '</small>'
       +   outageBlock
-      +   kvHtml
-      +   capHtml
       +   '<div class="pp-actions">'
       +     '<button type="button" class="btn btn-ghost btn-sm" data-edit-sector="' + s.id + '">Edit</button>'
       +     '<button type="button" class="btn btn-danger btn-sm" data-delete-sector="' + s.id + '">Delete</button>'
@@ -1028,6 +1151,1257 @@
   boot.site_links.forEach(renderLink);
   boot.clients.forEach(renderClient);
   (boot.sectors || []).forEach(renderSector);
+
+  /* ==========================================================
+     UISP-style enhancements
+     ----------------------------------------------------------
+     Adds: bottom detail panel for links/sites, hover tooltip
+     on links (already wired in renderLink), live cursor coord
+     readout, fit-all / locate / measure tools, search jump.
+     Self-contained — only reads from already-built indices.
+     ========================================================== */
+
+  /* ---------- live coord readout ---------- */
+  const coordLat  = document.getElementById('coord-lat');
+  const coordLng  = document.getElementById('coord-lng');
+  const coordZoom = document.getElementById('coord-zoom');
+  function fmtCoord(v) { return (v >= 0 ? ' ' : '') + v.toFixed(5); }
+  if (coordLat && coordLng) {
+    map.on('mousemove', (e) => {
+      coordLat.textContent = fmtCoord(e.latlng.lat);
+      coordLng.textContent = fmtCoord(e.latlng.lng);
+    });
+  }
+  if (coordZoom) {
+    const updateZ = () => { coordZoom.textContent = String(map.getZoom()); };
+    map.on('zoomend', updateZ);
+    updateZ();
+  }
+
+  /* ---------- fit-all + locate + measure quick-tools ---------- */
+  const fitBtn     = document.getElementById('qt-fit-all');
+  const locateBtn  = document.getElementById('qt-locate');
+  const measureBtn = document.getElementById('qt-measure');
+
+  if (fitBtn) {
+    fitBtn.addEventListener('click', () => {
+      const pts = [];
+      siteIndex.forEach((e) => pts.push([e.data.lat, e.data.lng]));
+      // Include placed clients too so the bound is faithful to what's drawn.
+      (boot.clients || []).forEach((c) => {
+        if (c.lat != null && c.lng != null) pts.push([c.lat, c.lng]);
+      });
+      if (!pts.length) return;
+      map.fitBounds(L.latLngBounds(pts), { padding: [50, 50], maxZoom: 16 });
+    });
+  }
+  if (locateBtn) {
+    locateBtn.addEventListener('click', () => {
+      map.setView(boot.center, boot.zoom);
+    });
+  }
+
+  // ----- distance measure tool -----
+  // Click once to set point A, second click locks point B and shows
+  // the live distance as a small chip on the dashed line. Esc clears.
+  let measureActive = false;
+  let measureA      = null;
+  let measureLine   = null;
+  let measureDot    = null;
+  let measureTip    = null;
+  function clearMeasure() {
+    measureActive = false;
+    measureA = null;
+    if (measureLine)  { map.removeLayer(measureLine);  measureLine = null; }
+    if (measureDot)   { map.removeLayer(measureDot);   measureDot = null; }
+    if (measureTip)   { map.removeLayer(measureTip);   measureTip = null; }
+    if (measureBtn) measureBtn.classList.remove('is-active');
+    map.getContainer().classList.remove('mdp-measuring');
+    map.getContainer().style.cursor = '';
+    setHint('');
+  }
+  function startMeasure() {
+    if (measureActive) { clearMeasure(); return; }
+    // Don't fight the existing add-site / add-link / add-sector modes.
+    if (mode !== 'pan') setMode('pan');
+    measureActive = true;
+    if (measureBtn) measureBtn.classList.add('is-active');
+    map.getContainer().style.cursor = 'crosshair';
+    setHint('Click two points on the map to measure distance. Esc cancels.');
+  }
+  if (measureBtn) measureBtn.addEventListener('click', startMeasure);
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && measureActive) clearMeasure();
+  });
+
+  map.on('click', (e) => {
+    if (!measureActive) return;
+    L.DomEvent.stopPropagation(e);
+    if (!measureA) {
+      measureA = e.latlng;
+      measureDot = L.circleMarker(measureA, {
+        radius: 4, color: '#05DAFD', weight: 2,
+        fillColor: '#001218', fillOpacity: 1,
+      }).addTo(map);
+      return;
+    }
+    // Second click — lock the line and leave the chip in place. Click
+    // the measure button again (or Esc) to clear.
+    const b = e.latlng;
+    if (measureLine) { map.removeLayer(measureLine); measureLine = null; }
+    if (measureTip)  { map.removeLayer(measureTip);  measureTip = null; }
+    measureLine = L.polyline([measureA, b], {
+      color: '#05DAFD', weight: 2, dashArray: '6 5', opacity: .9,
+    }).addTo(map);
+    const dist = distanceMetres(measureA.lat, measureA.lng, b.lat, b.lng);
+    const mid = [(measureA.lat + b.lat) / 2, (measureA.lng + b.lng) / 2];
+    measureTip = L.tooltip({
+      permanent: true, direction: 'center',
+      className: 'leaflet-measure-tip', offset: [0, 0],
+    }).setLatLng(mid).setContent(fmtDistance(dist)).addTo(map);
+    L.circleMarker(b, {
+      radius: 4, color: '#05DAFD', weight: 2,
+      fillColor: '#001218', fillOpacity: 1,
+    }).addTo(map);
+    measureA = null;  // ready for next pair, but keep tool active
+    setHint('Click two more points, or press Esc to finish.');
+  });
+
+  // Live preview while drawing the second leg.
+  map.on('mousemove', (e) => {
+    if (!measureActive || !measureA) return;
+    if (measureLine) map.removeLayer(measureLine);
+    measureLine = L.polyline([measureA, e.latlng], {
+      color: '#05DAFD', weight: 2, dashArray: '4 4', opacity: .55,
+    }).addTo(map);
+    if (measureTip) map.removeLayer(measureTip);
+    const dist = distanceMetres(measureA.lat, measureA.lng, e.latlng.lat, e.latlng.lng);
+    measureTip = L.tooltip({
+      permanent: true, direction: 'top', offset: [0, -8],
+      className: 'leaflet-measure-tip',
+    }).setLatLng(e.latlng).setContent(fmtDistance(dist)).addTo(map);
+  });
+
+  /* ---------- search box ---------- */
+  const searchInput   = document.getElementById('map-search-input');
+  const searchResults = document.getElementById('map-search-results');
+  let searchCursor    = -1;
+  let searchHits      = [];
+
+  function buildSearchHits() {
+    const hits = [];
+    siteIndex.forEach((e) => {
+      hits.push({ kind: 'site', id: e.data.id, label: e.data.name,
+                  meta: siteTypeLabel(e.data.type),
+                  color: SITE_COLOR[e.data.type] || '#888',
+                  lat: e.data.lat, lng: e.data.lng, ref: e });
+    });
+    linkLines.forEach((e) => {
+      const a = siteIndex.get(e.data.from_site_id);
+      const b = siteIndex.get(e.data.to_site_id);
+      if (!a || !b) return;
+      hits.push({ kind: 'link', id: e.data.id,
+                  label: e.data.label || (a.data.name + ' ↔ ' + b.data.name),
+                  meta: e.data.type,
+                  color: LINK_COLOR[e.data.type] || '#888',
+                  lat: (a.data.lat + b.data.lat) / 2,
+                  lng: (a.data.lng + b.data.lng) / 2,
+                  ref: e });
+    });
+    (boot.clients || []).forEach((c) => {
+      if (c.lat == null || c.lng == null) return;
+      hits.push({ kind: 'client', id: c.id,
+                  label: c.account_no || c.username || c.name || ('client ' + c.id),
+                  meta: c.name || '',
+                  color: STATUS_COLOR[c.status] || '#888',
+                  lat: c.lat, lng: c.lng });
+    });
+    return hits;
+  }
+  let allHits = buildSearchHits();
+
+  function renderSearchResults(q) {
+    if (!searchResults) return;
+    if (!q) {
+      searchResults.classList.remove('is-open');
+      searchResults.innerHTML = '';
+      searchHits = [];
+      searchCursor = -1;
+      return;
+    }
+    const ql = q.toLowerCase();
+    searchHits = allHits.filter((h) => {
+      return (h.label || '').toLowerCase().includes(ql)
+          || (h.meta  || '').toLowerCase().includes(ql);
+    }).slice(0, 12);
+    searchCursor = searchHits.length ? 0 : -1;
+    if (!searchHits.length) {
+      searchResults.innerHTML = '<div class="msr-empty">No matches</div>';
+    } else {
+      searchResults.innerHTML = searchHits.map((h, i) => ''
+        + '<div class="msr-row' + (i === searchCursor ? ' is-cursor' : '') + '" data-idx="' + i + '">'
+        +   '<span class="msr-dot" style="background:' + h.color + ';"></span>'
+        +   '<span>' + escapeHtml(h.label) + '</span>'
+        +   '<span class="msr-meta">' + escapeHtml(h.kind === 'link' ? ('link · ' + h.meta) : h.meta) + '</span>'
+        + '</div>').join('');
+    }
+    searchResults.classList.add('is-open');
+  }
+  function jumpToHit(h) {
+    if (!h) return;
+    map.setView([h.lat, h.lng], Math.max(map.getZoom(), 14), { animate: true });
+    if (h.kind === 'site' && h.ref && h.ref.marker) {
+      h.ref.marker.openPopup();
+      openSiteDetail(h.ref.data);
+    } else if (h.kind === 'link' && h.ref && h.ref.line) {
+      h.ref.line.openPopup();
+      openLinkDetail(h.ref.data);
+    }
+  }
+  if (searchInput && searchResults) {
+    searchInput.addEventListener('input', (e) => {
+      // Refresh hits each keystroke so newly added sites are findable
+      // without a full reload.
+      allHits = buildSearchHits();
+      renderSearchResults(e.target.value.trim());
+    });
+    searchInput.addEventListener('focus', () => {
+      if (searchInput.value.trim()) renderSearchResults(searchInput.value.trim());
+    });
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' && searchHits.length) {
+        e.preventDefault();
+        searchCursor = (searchCursor + 1) % searchHits.length;
+        renderSearchResults(searchInput.value.trim());
+      } else if (e.key === 'ArrowUp' && searchHits.length) {
+        e.preventDefault();
+        searchCursor = (searchCursor - 1 + searchHits.length) % searchHits.length;
+        renderSearchResults(searchInput.value.trim());
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (searchCursor >= 0 && searchHits[searchCursor]) {
+          jumpToHit(searchHits[searchCursor]);
+          searchResults.classList.remove('is-open');
+          searchInput.blur();
+        }
+      } else if (e.key === 'Escape') {
+        searchResults.classList.remove('is-open');
+        searchInput.blur();
+      }
+    });
+    searchResults.addEventListener('mousedown', (e) => {
+      const row = e.target.closest('.msr-row');
+      if (!row) return;
+      const i = parseInt(row.dataset.idx, 10);
+      jumpToHit(searchHits[i]);
+      searchResults.classList.remove('is-open');
+      searchInput.blur();
+    });
+    document.addEventListener('click', (e) => {
+      if (!searchResults.contains(e.target) && e.target !== searchInput) {
+        searchResults.classList.remove('is-open');
+      }
+    });
+  }
+
+  /* ---------- detail panel ---------- */
+  const panel       = document.getElementById('map-detail-panel');
+  const panelGrid   = document.getElementById('mdp-grid');
+  const panelClose  = document.getElementById('mdp-close');
+  const shellEl     = document.querySelector('.map-shell');
+  let selectedFeature = null;   // {kind, id, layer}
+  let pulseRing       = null;
+
+  // Mirror the bottom-strip's actual rendered height into a CSS
+  // custom property so the right-side panel can sit exactly 12px
+  // above it regardless of content.  Without this the sidebar
+  // either overlaps the strip on tall content or leaves a gap on
+  // short content.
+  if (panel && shellEl && typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const h = Math.round(entry.contentRect.height);
+        if (h > 0) shellEl.style.setProperty('--mdp-h', h + 'px');
+      }
+    });
+    ro.observe(panel);
+  }
+
+  /* ---------- right-side panel (related entities) ----------
+     Opened in addition to the bottom panel — gives the operator the
+     "list of things connected to what you clicked": sectors+links
+     for a tower, clients for a sector, etc.  Each tab renders
+     [{kind, id, name, meta, color, pill}] rows; clicking a row
+     triggers the same flow as clicking the feature on the map. */
+  const sidePanel    = document.getElementById('map-side-panel');
+  const spTitleEl    = document.getElementById('msp-title');
+  const spSubtitleEl = document.getElementById('msp-subtitle');
+  const spTabsEl     = document.getElementById('msp-tabs');
+  const spBodyEl     = document.getElementById('msp-body');
+  const spCloseEl    = document.getElementById('msp-close');
+  let sideContext = null;        // { tabs: [...], activeIdx }
+
+  function closeSidePanel() {
+    if (!sidePanel) return;
+    sidePanel.classList.remove('is-open');
+    sidePanel.setAttribute('aria-hidden', 'true');
+    if (shellEl) shellEl.classList.remove('is-side-open');
+    sideContext = null;
+  }
+  function openSidePanel(opts) {
+    if (!sidePanel) return;
+    spTitleEl.textContent    = opts.title    || '—';
+    spSubtitleEl.textContent = opts.subtitle || '';
+    sideContext = { tabs: opts.tabs || [], activeIdx: 0 };
+    renderSideTabs();
+    renderSideBody();
+    sidePanel.classList.add('is-open');
+    sidePanel.setAttribute('aria-hidden', 'false');
+    if (shellEl) shellEl.classList.add('is-side-open');
+  }
+  function renderSideTabs() {
+    if (!sideContext) return;
+    spTabsEl.innerHTML = sideContext.tabs.map((t, i) => ''
+      + '<button type="button" class="msp-tab' + (i === sideContext.activeIdx ? ' is-active' : '') + '" data-tab="' + i + '" role="tab">'
+      +   escapeHtml(t.label)
+      +   ' <span class="msp-tab-count">' + ((t.items && t.items.length) || 0) + '</span>'
+      + '</button>'
+    ).join('');
+  }
+  function renderSideBody() {
+    if (!sideContext) return;
+    const tab = sideContext.tabs[sideContext.activeIdx];
+    if (!tab || !tab.items || !tab.items.length) {
+      spBodyEl.innerHTML = '<div class="msp-empty">' + escapeHtml((tab && tab.empty) || 'Nothing connected.') + '</div>';
+      return;
+    }
+    spBodyEl.innerHTML = '<ul class="msp-list">'
+      + tab.items.map((it) => ''
+        + '<li class="msp-item" data-msp-kind="' + escapeHtml(it.kind || '') + '" data-msp-id="' + escapeHtml(String(it.id ?? '')) + '">'
+        +   '<span class="msp-item-dot" style="background:' + (it.color || '#888') + ';"></span>'
+        +   '<div class="msp-item-body">'
+        +     '<div class="msp-item-name">' + escapeHtml(it.name || '') + '</div>'
+        +     (it.meta ? '<div class="msp-item-meta">' + escapeHtml(it.meta) + '</div>' : '')
+        +   '</div>'
+        +   (it.pill ? '<span class="msp-item-pill' + (it.pillClass ? ' ' + it.pillClass : '') + '">' + escapeHtml(it.pill) + '</span>' : '')
+        + '</li>').join('')
+      + '</ul>';
+  }
+  if (spCloseEl) spCloseEl.addEventListener('click', closeSidePanel);
+  if (spTabsEl) {
+    spTabsEl.addEventListener('click', (e) => {
+      const t = e.target.closest('.msp-tab');
+      if (!t || !sideContext) return;
+      const i = parseInt(t.dataset.tab, 10);
+      if (isNaN(i)) return;
+      sideContext.activeIdx = i;
+      renderSideTabs();
+      renderSideBody();
+    });
+  }
+  if (spBodyEl) {
+    spBodyEl.addEventListener('click', (e) => {
+      const li = e.target.closest('.msp-item');
+      if (!li) return;
+      const kind = li.dataset.mspKind;
+      const id   = parseInt(li.dataset.mspId, 10);
+      if (!kind || isNaN(id)) return;
+      // Reuse the same dispatch flow as a real click on the map: open
+      // the popup which then triggers popupopen → openXDetail.
+      if (kind === 'site' || kind === 'tower') {
+        const entry = siteIndex.get(id);
+        if (entry) {
+          map.setView([entry.data.lat, entry.data.lng], Math.max(map.getZoom(), 15), { animate: true });
+          entry.marker.openPopup();
+        }
+      } else if (kind === 'sector') {
+        const entry = sectorIndex.get(id);
+        if (entry && entry.layer) {
+          map.fitBounds(entry.layer.getBounds(), { maxZoom: 16, padding: [40, 40] });
+          entry.layer.openPopup();
+        }
+      } else if (kind === 'link') {
+        const entry = linkLines.get(id);
+        if (entry) {
+          map.fitBounds(entry.line.getBounds(), { padding: [60, 60], maxZoom: 16 });
+          entry.line.openPopup();
+        }
+      } else if (kind === 'client') {
+        const c = clientById.get(id);
+        if (c && c.lat != null && c.lng != null) {
+          map.setView([c.lat, c.lng], Math.max(map.getZoom(), 17), { animate: true });
+          openClientDetail(c);
+        }
+      }
+    });
+  }
+
+  /* ---------- builders for sidebar contents per feature ---------- */
+  function buildTowerSidebarTabs(site) {
+    // Sectors at this tower
+    const sectorIds = sectorsByTower.get(site.id) || new Set();
+    const sectorItems = [...sectorIds].map((sid) => sectorIndex.get(sid)).filter(Boolean).map((e) => {
+      const s = e.data;
+      const az = s.azimuth_deg != null ? 'az ' + s.azimuth_deg + '°' : '';
+      const bw = s.beamwidth_deg != null ? 'bw ' + s.beamwidth_deg + '°' : '';
+      const fq = s.frequency_mhz != null ? s.frequency_mhz + ' MHz' : '';
+      const meta = [s.band, az, bw, fq].filter(Boolean).join(' · ');
+      const cap = (s.max_clients && s.customer_count != null)
+                ? s.customer_count + ' / ' + s.max_clients : null;
+      const apOff = outageSectorIds && outageSectorIds.has(s.id);
+      return {
+        kind: 'sector', id: s.id, name: s.name, meta: meta,
+        color: BAND_COLOR[s.band] || '#888',
+        pill: apOff ? 'outage' : (cap || s.band),
+        pillClass: apOff ? 'is-danger' : (s.max_clients && s.customer_count >= s.max_clients ? 'is-warn' : ''),
+      };
+    });
+
+    // Backbone links touching this tower
+    const linkItems = [];
+    linkLines.forEach((e) => {
+      const l = e.data;
+      if (l.from_site_id !== site.id && l.to_site_id !== site.id) return;
+      const otherId = l.from_site_id === site.id ? l.to_site_id : l.from_site_id;
+      const other = siteIndex.get(otherId);
+      if (!other) return;
+      const dist = distanceMetres(site.lat, site.lng, other.data.lat, other.data.lng);
+      const meta = [l.type ? l.type.toUpperCase() : null,
+                    l.capacity_mbps ? l.capacity_mbps + ' Mbps' : null,
+                    l.frequency || null,
+                    fmtDistance(dist)].filter(Boolean).join(' · ');
+      linkItems.push({
+        kind: 'link', id: l.id,
+        name: l.label || (other.data.name + ' link'),
+        meta: '→ ' + other.data.name + ' · ' + meta,
+        color: LINK_COLOR[l.type] || '#888',
+        pill: l.type, pillClass: 'is-muted',
+      });
+    });
+
+    // Devices at this tower
+    const devs = devicesBySite.get(site.id) || [];
+    const devItems = devs.map((d) => ({
+      kind: 'device', id: d.id, name: d.name,
+      meta: [d.role, d.vendor + (d.model ? ' ' + d.model : '')].filter(Boolean).join(' · '),
+      color: DEVICE_COLOR[d.status] || '#888',
+      pill: d.status,
+      pillClass: d.status === 'offline' ? 'is-danger' : (d.status === 'online' ? '' : 'is-muted'),
+    }));
+
+    return [
+      { label: 'Sectors', items: sectorItems, empty: 'No sectors on this tower.' },
+      { label: 'Links',   items: linkItems,   empty: 'No backbone links from here.' },
+      { label: 'Devices', items: devItems,    empty: 'No devices on this tower.' },
+    ];
+  }
+
+  function buildSectorSidebarTabs(sector) {
+    // Clients keyed to this sector via boot.clients[].sector_id
+    const items = (boot.clients || [])
+      .filter((c) => Number(c.sector_id) === Number(sector.id))
+      .map((c) => {
+        const apOff = c.network_status === 'offline';
+        const placed = c.lat != null && c.lng != null;
+        return {
+          kind: 'client', id: c.id,
+          name: c.account_no || c.username || c.name || ('client ' + c.id),
+          meta: [c.name, placed ? null : 'unplaced', c.address].filter(Boolean).join(' · '),
+          color: STATUS_COLOR[c.status] || '#888',
+          pill: apOff ? 'AP down' : c.status,
+          pillClass: apOff ? 'is-danger' : (c.status === 'suspended' ? 'is-warn' : ''),
+        };
+      });
+    return [
+      { label: 'Clients', items, empty: 'No customers assigned to this sector.' },
+    ];
+  }
+
+  function buildLinkSidebarTabs(link) {
+    const a = siteIndex.get(link.from_site_id);
+    const b = siteIndex.get(link.to_site_id);
+    function tabFor(siteEntry) {
+      if (!siteEntry) return { label: '?', items: [] };
+      const site = siteEntry.data;
+      const sectorIds = sectorsByTower.get(site.id) || new Set();
+      const sectorItems = [...sectorIds].map((sid) => sectorIndex.get(sid)).filter(Boolean).map((e) => {
+        const s = e.data;
+        const az = s.azimuth_deg != null ? 'az ' + s.azimuth_deg + '°' : '';
+        const bw = s.beamwidth_deg != null ? 'bw ' + s.beamwidth_deg + '°' : '';
+        const fq = s.frequency_mhz != null ? s.frequency_mhz + ' MHz' : '';
+        const meta = [s.band, az, bw, fq].filter(Boolean).join(' · ');
+        return {
+          kind: 'sector', id: s.id, name: s.name, meta,
+          color: BAND_COLOR[s.band] || '#888',
+        };
+      });
+      return { label: site.name, items: sectorItems, empty: 'No sectors on this site.' };
+    }
+    return [tabFor(a), tabFor(b)];
+  }
+  function clearSelection() {
+    if (selectedFeature && selectedFeature.layer && selectedFeature.layer._path) {
+      selectedFeature.layer._path.classList.remove('is-mdp-selected');
+    }
+    if (pulseRing) { map.removeLayer(pulseRing); pulseRing = null; }
+    selectedFeature = null;
+  }
+  function closePanel() {
+    if (!panel) return;
+    panel.classList.remove('is-open');
+    panel.setAttribute('aria-hidden', 'true');
+    if (shellEl) shellEl.classList.remove('is-bottom-open');
+    clearSelection();
+    closeSidePanel();
+  }
+  if (panelClose) panelClose.addEventListener('click', closePanel);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      if (sidePanel && sidePanel.classList.contains('is-open')) {
+        closeSidePanel();
+        return;
+      }
+      if (panel && panel.classList.contains('is-open')) closePanel();
+    }
+  });
+
+  // Health-bar marker position from a 0..100 score, returns a percentage.
+  function healthPct(score) {
+    if (score == null || isNaN(score)) return 50;   // unknown → middle
+    return Math.max(0, Math.min(100, score));
+  }
+
+  function siteCardHTML(site, role) {
+    const devs    = (devicesBySite.get(site.id) || []);
+    const onlineD = devs.filter((d) => d.status === 'online').length;
+    const sectors = (sectorsByTower.get(site.id) || new Set()).size;
+    const wl      = (boot.wireless_link_summary && boot.wireless_link_summary[site.id]) || null;
+    const typeLbl = siteTypeLabel(site.type);
+    const typeCol = SITE_COLOR[site.type] || '#888';
+    const pillStyle = 'color:' + typeCol + ';background:' + typeCol + '20;';
+    const cells = [];
+    cells.push(['Location', site.lat.toFixed(5) + ', ' + site.lng.toFixed(5)]);
+    if (site.coverage_radius_m) cells.push(['Coverage', site.coverage_radius_m + ' m']);
+    cells.push(['Devices', devs.length + (devs.length ? ' · ' + onlineD + ' online' : '')]);
+    if (site.type === 'tower') cells.push(['Sectors', String(sectors)]);
+    if (wl) cells.push(['Wireless links', wl.count + (wl.degraded ? ' · ' + wl.degraded + ' degraded' : '')]);
+    return ''
+      + '<div class="mdp-card" data-role="' + role + '">'
+      +   '<div class="mdp-name">'
+      +     '<input type="text" value="' + escapeHtml(site.name) + '" readonly>'
+      +     '<span class="mdp-type-pill" style="' + pillStyle + '">' + escapeHtml(typeLbl) + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-kv">'
+      +     cells.map(([k, v]) => ''
+      +         '<div class="mdp-cell' + (k === 'Location' ? ' mdp-cell-wide' : '') + '">'
+      +         '<span class="mdp-label">' + escapeHtml(k) + '</span>'
+      +         '<span class="mdp-val" title="' + escapeHtml(String(v)) + '">' + escapeHtml(String(v)) + '</span>'
+      +       '</div>').join('')
+      +   '</div>'
+      + '</div>';
+  }
+
+  // Heuristic: with no measured signal on site_links, infer a notional
+  // "expected" signal from distance + capacity. Lets the gradient bar
+  // give the operator a visual cue rather than always sitting blank.
+  function expectedSignalDbm(distM, capMbps, freq) {
+    // Simplified free-space path loss approximation, anchored so
+    // 1 km at 5 GHz lands around -55 dBm and 10 km lands around -75 dBm.
+    // Capacity slightly biases — high-capacity links tend to be tighter LoS.
+    if (!distM) return null;
+    const km = distM / 1000;
+    let dbm = -55 - 20 * Math.log10(Math.max(0.1, km));
+    if (capMbps && capMbps > 500) dbm += 2;   // assume better link budget
+    if (freq && /60\s*GHz/i.test(freq)) dbm -= 6;
+    return Math.round(dbm);
+  }
+  function dbmToPct(dbm) {
+    // Map -95..-45 dBm to 0..100 % for the gradient marker.
+    if (dbm == null) return 50;
+    const p = ((dbm + 95) / 50) * 100;
+    return Math.max(0, Math.min(100, p));
+  }
+
+  async function openLinkDetail(link) {
+    if (!panel || !panelGrid) return;
+    const a = siteIndex.get(link.from_site_id);
+    const b = siteIndex.get(link.to_site_id);
+    if (!a || !b) return;
+    const fromSite = a.data, toSite = b.data;
+
+    // Render an immediate skeleton from in-memory data so the panel is
+    // visible right away; the fetch fills in real signal/SNR/throughput
+    // when it arrives.
+    panel.classList.remove('is-site');
+    renderLinkPanel({
+      from: { id: fromSite.id, name: fromSite.name, type: fromSite.type, lat: fromSite.lat, lng: fromSite.lng },
+      to:   { id: toSite.id,   name: toSite.name,   type: toSite.type,   lat: toSite.lat,   lng: toSite.lng },
+      link: { id: link.id, type: link.type, label: link.label,
+              capacity_mbps: link.capacity_mbps, frequency: link.frequency },
+      distance_km: distanceMetres(fromSite.lat, fromSite.lng, toSite.lat, toSite.lng) / 1000,
+      wireless_link: null,
+    });
+    panel.classList.add('is-open');
+    panel.setAttribute('aria-hidden', 'false');
+    if (shellEl) shellEl.classList.add('is-bottom-open');
+
+    clearSelection();
+    const entry = linkLines.get(link.id);
+    if (entry) {
+      selectedFeature = { kind: 'link', id: link.id, layer: entry.line };
+      if (entry.line._path) entry.line._path.classList.add('is-mdp-selected');
+    }
+
+    // Sidebar: sectors at each endpoint tower (so the operator can
+    // see "what's behind this link" at a glance).
+    openSidePanel({
+      title: (fromSite.name + ' ↔ ' + toSite.name),
+      subtitle: 'Link · sectors at each endpoint',
+      tabs: buildLinkSidebarTabs(link),
+    });
+
+    const j = await fetchDetail('link', link.id);
+    if (!j) return;
+    if (!selectedFeature || selectedFeature.kind !== 'link' || selectedFeature.id !== link.id) return;
+    renderLinkPanel(j);
+  }
+
+  // Renders the link panel from a {from, to, link, distance_km, wireless_link}
+  // payload. Used both for the in-memory skeleton render and the API
+  // response render — same template, just more data populated when the
+  // API replies.
+  function renderLinkPanel(j) {
+    const link = j.link;
+    const cap  = link.capacity_mbps;
+    const distM = (j.distance_km || 0) * 1000;
+    const wl   = j.wireless_link;
+
+    // Prefer real measured signal from the matched wireless_link;
+    // fall back to a free-space-loss heuristic so the bar isn't empty.
+    let sig = null, snr = null, ccq = null, hp = null;
+    let tputL = null, tputR = null, capL = null, capR = null;
+    let modu = null, mode = null, lastAge = null;
+    if (wl) {
+      sig = wl.signal_dbm != null ? wl.signal_dbm : null;
+      snr = wl.snr_db     != null ? wl.snr_db     : null;
+      ccq = wl.ccq_pct    != null ? wl.ccq_pct    : null;
+      hp  = wl.health_score != null ? wl.health_score : null;
+      tputL = wl.throughput_local_mbps  != null ? wl.throughput_local_mbps  : null;
+      tputR = wl.throughput_remote_mbps != null ? wl.throughput_remote_mbps : null;
+      capL  = wl.capacity_local_mbps    != null ? wl.capacity_local_mbps    : null;
+      capR  = wl.capacity_remote_mbps   != null ? wl.capacity_remote_mbps   : null;
+      modu  = wl.modulation || null;
+      mode  = wl.wireless_mode || null;
+      lastAge = wl.last_evaluated_at ? fmtAge(wl.last_evaluated_at) : null;
+    }
+    const sigShown = sig != null ? sig : expectedSignalDbm(distM, cap, link.frequency);
+    const sigPct   = dbmToPct(sigShown);
+    const capPct   = cap ? Math.max(8, Math.min(100, (cap / 1000) * 100)) : 35;
+    const linkTypeLabel = (link.type || '').toUpperCase();
+    const linkLabel     = link.label || (linkTypeLabel + ' link');
+    const totalT = (tputL != null || tputR != null) ? ((tputL || 0) + (tputR || 0)) : null;
+    const health = healthBucket(hp);
+    const signalLabel = wl ? 'Measured signal' + (lastAge ? ' · ' + lastAge : '') : 'Expected signal';
+
+    const wlBlock = wl ? ''
+      + '<div class="mdp-kv" style="grid-template-columns:repeat(4,1fr);margin-top:6px;">'
+      +   kvCell('Signal',     fmtDbm(sig))
+      +   kvCell('SNR',        snr != null ? snr + ' dB' : '—')
+      +   kvCell('CCQ',        ccq != null ? Math.round(ccq) + '%' : '—')
+      +   kvCell('Health',     hp != null ? hp + ' / 100' : '—', { color: health.c })
+      +   kvCell('Throughput', totalT != null ? fmtMbps(totalT) : '—')
+      +   kvCell('Capacity',   capL || capR ? fmtMbps((capL || 0) + (capR || 0)) : (cap != null ? cap + ' Mbps' : '—'))
+      +   kvCell('Mode',       mode || '—')
+      +   kvCell('Modulation', modu || '—')
+      + '</div>'
+      : '';
+
+    const centerHTML = ''
+      + '<div class="mdp-center">'
+      +   '<div class="mdp-cap-row">'
+      +     '<span>' + escapeHtml(linkLabel) + '</span>'
+      +     '<span class="mdp-cap-val">' + (cap != null ? cap + ' Mbps' : 'Capacity —') + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-cap-bar"><div class="mdp-cap-fill" style="width:' + capPct.toFixed(0) + '%;"></div></div>'
+      +   '<div class="mdp-distance">'
+      +     '<span>' + escapeHtml(j.from.name) + '</span>'
+      +     '<span class="mdp-arrow"></span>'
+      +     '<span class="mdp-dist-val">' + fmtDistance(distM) + '</span>'
+      +     '<span class="mdp-arrow"></span>'
+      +     '<span>' + escapeHtml(j.to.name) + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-signal-bar">'
+      +     '<div class="mdp-signal-marker" style="left:calc(' + sigPct.toFixed(0) + '% - 1.5px);" title="' + (sigShown != null ? sigShown + ' dBm' : 'unknown') + '"></div>'
+      +   '</div>'
+      +   '<div class="mdp-signal-meta">'
+      +     '<span>' + signalLabel + '</span>'
+      +     '<span>' + (sigShown != null ? sigShown + ' dBm' : 'no data') + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-kv" style="grid-template-columns:1fr 1fr 1fr;">'
+      +     kvCell('Type',      linkTypeLabel)
+      +     kvCell('Frequency', link.frequency || '—')
+      +     kvCell('Capacity',  cap != null ? cap + ' Mbps' : '—')
+      +   '</div>'
+      +   wlBlock
+      +   '<div class="mdp-actions">'
+      +     '<button type="button" class="btn btn-ghost btn-sm" data-mdp-zoom-link="' + link.id + '">Zoom to</button>'
+      +     (wl && wl.id ? '<a class="btn btn-ghost btn-sm" href="/admin/link-view.php?id=' + wl.id + '">Live link</a>' : '')
+      +     '<button type="button" class="btn btn-danger btn-sm" data-delete-link="' + link.id + '">Delete</button>'
+      +   '</div>'
+      + '</div>';
+
+    panelGrid.innerHTML = siteCardFromDetail(j.from, 'a') + centerHTML + siteCardFromDetail(j.to, 'b');
+  }
+
+  function openSiteDetail(site) {
+    if (!panel || !panelGrid) return;
+    const devs    = (devicesBySite.get(site.id) || []);
+    const onlineD = devs.filter((d) => d.status === 'online').length;
+    const sectors = (sectorsByTower.get(site.id) || new Set()).size;
+    const wl      = (boot.wireless_link_summary && boot.wireless_link_summary[site.id]) || null;
+
+    // Connected backbone links from this site (PTP / fibre / backhaul rows).
+    const connections = [];
+    linkLines.forEach((e) => {
+      if (e.data.from_site_id === site.id || e.data.to_site_id === site.id) {
+        const otherId = e.data.from_site_id === site.id ? e.data.to_site_id : e.data.from_site_id;
+        const other = siteIndex.get(otherId);
+        if (other) {
+          const d = distanceMetres(site.lat, site.lng, other.data.lat, other.data.lng);
+          connections.push({ name: other.data.name, type: e.data.type, dist: d, cap: e.data.capacity_mbps });
+        }
+      }
+    });
+
+    const wlScore = wl && wl.worst != null ? wl.worst : null;
+    const sigPct  = healthPct(wlScore);
+    const cap     = connections.reduce((sum, c) => sum + (c.cap || 0), 0);
+    const capPct  = cap ? Math.max(8, Math.min(100, (cap / 1000) * 100)) : 35;
+
+    const centerHTML = ''
+      + '<div class="mdp-center">'
+      +   '<div class="mdp-cap-row">'
+      +     '<span>Site overview</span>'
+      +     '<span class="mdp-cap-val">' + (cap ? cap + ' Mbps backbone' : (devs.length + ' device' + (devs.length === 1 ? '' : 's'))) + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-cap-bar"><div class="mdp-cap-fill" style="width:' + capPct.toFixed(0) + '%;"></div></div>'
+      + (connections.length
+          ? '<div class="mdp-distance" style="border:none;padding:2px 0;font-size:11px;">'
+            + '<span style="color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;font-weight:600;font-size:10px;">Connections</span>'
+            + '<span style="margin-left:auto;color:var(--text-dim);">'
+            + connections.map((c) => escapeHtml(c.name) + ' (' + fmtDistance(c.dist) + ')').join(' · ')
+            + '</span>'
+            + '</div>'
+          : ''
+        )
+      +   '<div class="mdp-signal-bar">'
+      +     '<div class="mdp-signal-marker" style="left:calc(' + sigPct.toFixed(0) + '% - 1.5px);"></div>'
+      +   '</div>'
+      +   '<div class="mdp-signal-meta">'
+      +     '<span>Wireless link health</span>'
+      +     '<span>' + (wlScore != null ? wlScore + ' / 100' : 'no data') + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-kv" style="grid-template-columns:1fr 1fr 1fr;">'
+      +     '<div class="mdp-cell"><span class="mdp-label">Devices</span><span class="mdp-val">' + devs.length + ' · ' + onlineD + ' online</span></div>'
+      +     '<div class="mdp-cell"><span class="mdp-label">Sectors</span><span class="mdp-val">' + sectors + '</span></div>'
+      +     '<div class="mdp-cell"><span class="mdp-label">Backbone</span><span class="mdp-val">' + connections.length + ' link' + (connections.length === 1 ? '' : 's') + '</span></div>'
+      +   '</div>'
+      +   '<div class="mdp-actions">'
+      +     '<button type="button" class="btn btn-ghost btn-sm" data-mdp-zoom-site="' + site.id + '">Zoom to</button>'
+      +     (site.type === 'tower'
+            ? '<button type="button" class="btn btn-primary btn-sm" data-add-sector="' + site.id + '">+ Sector</button>'
+            : '')
+      +     '<button type="button" class="btn btn-ghost btn-sm" data-edit-site="' + site.id + '">Edit</button>'
+      +     '<button type="button" class="btn btn-danger btn-sm" data-delete-site="' + site.id + '">Delete</button>'
+      +   '</div>'
+      + '</div>';
+
+    panel.classList.remove('is-site');
+    panelGrid.innerHTML = siteCardHTML(site, 'a') + centerHTML;
+    panel.classList.add('is-open', 'is-site');
+    panel.setAttribute('aria-hidden', 'false');
+    if (shellEl) shellEl.classList.add('is-bottom-open');
+
+    // Pulse ring under the selected site marker.
+    clearSelection();
+    pulseRing = L.marker([site.lat, site.lng], {
+      interactive: false,
+      icon: L.divIcon({
+        className: '',
+        html: '<div class="mdp-pulse-marker"></div>',
+        iconSize: [22, 22], iconAnchor: [11, 11],
+      }),
+    }).addTo(map);
+    selectedFeature = { kind: 'site', id: site.id };
+
+    // Sidebar: sectors + backbone links + devices for this site
+    // (the operator-asked "everything connected to this tower").
+    openSidePanel({
+      title: site.name,
+      subtitle: siteTypeLabel(site.type) + ' · everything connected',
+      tabs: buildTowerSidebarTabs(site),
+    });
+  }
+
+  // Zoom-to handlers in the panel
+  document.addEventListener('click', (e) => {
+    const zl = e.target.closest('[data-mdp-zoom-link]');
+    if (zl) {
+      const id = parseInt(zl.dataset.mdpZoomLink, 10);
+      const entry = linkLines.get(id);
+      if (entry) map.fitBounds(entry.line.getBounds(), { padding: [60, 60], maxZoom: 16 });
+      return;
+    }
+    const zs = e.target.closest('[data-mdp-zoom-site]');
+    if (zs) {
+      const id = parseInt(zs.dataset.mdpZoomSite, 10);
+      const entry = siteIndex.get(id);
+      if (entry) map.setView([entry.data.lat, entry.data.lng], Math.max(map.getZoom(), 16), { animate: true });
+      return;
+    }
+  });
+
+  // Index clients by id once so the detail panel doesn't have to scan
+  // the boot list every time something is selected.
+  const clientById = new Map();
+  (boot.clients || []).forEach((c) => clientById.set(c.id, c));
+
+  // ----- detail-fetch helper (?detail=kind&id=...) ----------------
+  async function fetchDetail(kind, id) {
+    try {
+      const r = await fetch('/admin/map.php?detail=' + encodeURIComponent(kind)
+                          + '&id=' + encodeURIComponent(id),
+                          { credentials: 'same-origin' });
+      const j = await r.json();
+      return (j && j.ok) ? j : null;
+    } catch (e) { return null; }
+  }
+
+  // ----- formatting helpers used by every panel ------------------
+  function fmtDbm(v)  { return v != null ? v + ' dBm' : '—'; }
+  function fmtMbps(v) { return v != null ? (Math.abs(v) >= 100 ? Math.round(v) : v.toFixed(1)) + ' Mbps' : '—'; }
+  function fmtPct(v)  { return v != null ? Math.round(v) + '%' : '—'; }
+  function fmtAge(iso) {
+    if (!iso) return '—';
+    const t = Date.parse(iso);
+    if (isNaN(t)) return iso;
+    const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
+    if (sec < 60)   return sec + 's ago';
+    if (sec < 3600) return Math.floor(sec / 60)  + 'm ago';
+    if (sec < 86400)return Math.floor(sec / 3600)+ 'h ago';
+    return Math.floor(sec / 86400) + 'd ago';
+  }
+  function healthBucket(score) {
+    if (score == null) return { c: '#888',     l: 'unknown' };
+    if (score >= 75)   return { c: '#22c55e',  l: 'healthy' };
+    if (score >= 50)   return { c: '#eab308',  l: 'fair'    };
+    if (score >= 25)   return { c: '#f97316',  l: 'degraded'};
+    return { c: '#dc2626', l: 'critical' };
+  }
+  function snrPct(snr) {
+    if (snr == null) return null;
+    return Math.max(0, Math.min(100, ((snr - 5) / 35) * 100));   // 5..40 dB → 0..100 %
+  }
+  function dbmToPctStrict(dbm) {
+    if (dbm == null) return null;
+    return Math.max(0, Math.min(100, ((dbm + 95) / 50) * 100));  // -95..-45 dBm
+  }
+
+  // Generic key/value cell row — used by every panel for compact stats
+  function kvCell(label, value, opts) {
+    opts = opts || {};
+    const wide = opts.wide ? ' mdp-cell-wide' : '';
+    const cls  = opts.color ? ' style="color:' + opts.color + ';"' : '';
+    return '<div class="mdp-cell' + wide + '">'
+         +   '<span class="mdp-label">' + escapeHtml(label) + '</span>'
+         +   '<span class="mdp-val"' + cls + ' title="' + escapeHtml(String(value)) + '">'
+         +     escapeHtml(String(value)) + '</span>'
+         + '</div>';
+  }
+
+  // Decorate a thin {id,name,type,lat,lng} reference with counts the
+  // panel needs (devices / sectors / backbone links). Pulled straight
+  // from the in-memory indices so it's free even when the API detail
+  // payload doesn't carry them — keeps the right-side endpoint card
+  // from sitting half-empty in sector/link panels.
+  function enrichSiteForCard(s) {
+    if (!s || s.id == null) return s || {};
+    const id = Number(s.id);
+    const out = Object.assign({}, s);
+    const devs = devicesBySite.get(id) || [];
+    out.devices = {
+      n: (s.devices && s.devices.n != null) ? s.devices.n : devs.length,
+      online: (s.devices && s.devices.online != null)
+              ? s.devices.online
+              : devs.filter((d) => d.status === 'online').length,
+    };
+    out.sector_count = (sectorsByTower.get(id) || new Set()).size;
+    let lc = 0;
+    linkLines.forEach((e) => {
+      if (e.data.from_site_id === id || e.data.to_site_id === id) lc++;
+    });
+    out.backbone_count = lc;
+    const entry = siteIndex.get(id);
+    if (entry && out.coverage_radius_m == null) out.coverage_radius_m = entry.data.coverage_radius_m;
+    return out;
+  }
+
+  // Shared "endpoint card" for any site (used by link + sector panels)
+  function siteCardFromDetail(s, role) {
+    if (!s) return '<div class="mdp-card" data-role="' + role + '"><div class="mdp-name"><input value="—" readonly></div></div>';
+    const e = enrichSiteForCard(s);
+    const typeLbl = siteTypeLabel(e.type);
+    const typeCol = SITE_COLOR[e.type] || '#888';
+    const cells = [];
+    cells.push(kvCell('Location', (e.lat != null ? e.lat.toFixed(5) : '—') + ', ' + (e.lng != null ? e.lng.toFixed(5) : '—'), { wide: true }));
+    if (e.devices) {
+      cells.push(kvCell('Devices', e.devices.n + (e.devices.online != null ? ' · ' + e.devices.online + ' on' : '')));
+    }
+    if (e.sector_count != null && (e.type === 'tower' || e.sector_count > 0)) {
+      cells.push(kvCell('Sectors', String(e.sector_count)));
+    }
+    if (e.backbone_count != null) {
+      cells.push(kvCell('Backbone', e.backbone_count + ' link' + (e.backbone_count === 1 ? '' : 's')));
+    }
+    if (e.coverage_radius_m) cells.push(kvCell('Coverage', e.coverage_radius_m + ' m'));
+    return ''
+      + '<div class="mdp-card" data-role="' + role + '">'
+      +   '<div class="mdp-name">'
+      +     '<input type="text" value="' + escapeHtml(e.name) + '" readonly>'
+      +     '<span class="mdp-type-pill" style="color:' + typeCol + ';background:' + typeCol + '20;">' + escapeHtml(typeLbl) + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-kv">' + cells.join('') + '</div>'
+      + '</div>';
+  }
+
+  /* ---------- Sector detail ---------- */
+  async function openSectorDetail(sector) {
+    if (!panel || !panelGrid) return;
+    // Skeleton with what's in memory (sectorIndex) — fill in from API
+    // when the fetch returns. Lets the panel feel snappy on slow links.
+    const towerEntry = siteIndex.get(sector.tower_id);
+    showSectorSkeleton(sector, towerEntry ? towerEntry.data : null);
+    selectedFeature = { kind: 'sector', id: sector.id, layer: (sectorIndex.get(sector.id) || {}).layer };
+    if (selectedFeature.layer && selectedFeature.layer._path) selectedFeature.layer._path.classList.add('is-mdp-selected');
+    if (pulseRing) { map.removeLayer(pulseRing); pulseRing = null; }
+
+    // Sidebar: clients connected to this sector
+    openSidePanel({
+      title: sector.name,
+      subtitle: 'Sector · clients on this AP',
+      tabs: buildSectorSidebarTabs(sector),
+    });
+
+    const j = await fetchDetail('sector', sector.id);
+    if (!j) return;
+    if (!selectedFeature || selectedFeature.kind !== 'sector' || selectedFeature.id !== sector.id) return; // user moved on
+    renderSectorDetail(j);
+  }
+
+  function showSectorSkeleton(s, tower) {
+    const sec = s;
+    const towerCard = tower ? siteCardFromDetail({
+      id: tower.id, name: tower.name, type: tower.type, lat: tower.lat, lng: tower.lng,
+    }, 'tower') : '<div class="mdp-card"></div>';
+    panel.classList.remove('is-site');
+    panelGrid.innerHTML = ''
+      + sectorCardHTML(sec, null, null, null)
+      + sectorCenterHTML(sec, null, null, null)
+      + towerCard;
+    panel.classList.add('is-open');
+    panel.setAttribute('aria-hidden', 'false');
+    if (shellEl) shellEl.classList.add('is-bottom-open');
+  }
+
+  function renderSectorDetail(j) {
+    const s = j.sector, t = j.tower, ap = j.ap_device, st = j.stats || {}, oa = j.outage;
+    const towerCard = t ? siteCardFromDetail({
+      id: t.id, name: t.name, type: t.type, lat: t.lat, lng: t.lng,
+    }, 'tower') : '<div class="mdp-card"></div>';
+    panel.classList.remove('is-site');
+    panelGrid.innerHTML = ''
+      + sectorCardHTML(s, ap, j.customer_count, oa)
+      + sectorCenterHTML(s, ap, st, oa)
+      + towerCard;
+  }
+
+  function sectorCardHTML(s, ap, customerCount, outage) {
+    const az = s.azimuth_deg != null ? s.azimuth_deg + '°' : '—';
+    const bw = s.beamwidth_deg != null ? s.beamwidth_deg + '°' : '—';
+    const fq = s.frequency_mhz != null
+             ? s.frequency_mhz + ' MHz' + (s.channel_width_mhz ? ' / ' + s.channel_width_mhz + ' MHz' : '')
+             : '—';
+    const tx = s.tx_power_dbm != null ? s.tx_power_dbm + ' dBm' : '—';
+    const bandCol = BAND_COLOR[s.band] || BAND_COLOR.other;
+    const cells = [
+      kvCell('Azimuth', az), kvCell('Beamwidth', bw),
+      kvCell('Frequency', fq, { wide: true }),
+      kvCell('TX power', tx),
+      kvCell('Mode', s.wireless_mode || '—'),
+    ];
+    if (s.ssid)        cells.push(kvCell('SSID', s.ssid, { wide: true }));
+    if (s.security)    cells.push(kvCell('Security', s.security));
+    if (ap)            cells.push(kvCell('AP', ap.name + ' · ' + ap.status));
+    if (s.max_clients) {
+      const cnt = customerCount != null ? customerCount : '—';
+      cells.push(kvCell('Customers', cnt + ' / ' + s.max_clients));
+    } else if (customerCount != null) {
+      cells.push(kvCell('Customers', String(customerCount)));
+    }
+    return ''
+      + '<div class="mdp-card" data-role="sector">'
+      +   '<div class="mdp-name">'
+      +     '<input type="text" value="' + escapeHtml(s.name) + '" readonly>'
+      +     '<span class="mdp-type-pill" style="color:' + bandCol + ';background:' + bandCol + '20;">' + escapeHtml(s.band) + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-kv">' + cells.join('') + '</div>'
+      + '</div>';
+  }
+
+  function sectorCenterHTML(s, ap, st, outage) {
+    const cap = (s.max_clients && s.max_clients > 0 && st && st.link_count != null)
+              ? Math.min(100, Math.round((st.link_count / s.max_clients) * 100))
+              : null;
+    const capPct = cap != null ? cap : 35;
+    const health = st && st.avg_health != null ? st.avg_health : null;
+    const sigPct = health != null ? health : 50;
+    const tput   = st && st.total_throughput != null ? st.total_throughput : null;
+    const peak   = st && st.peak_throughput  != null ? st.peak_throughput  : null;
+    const apOff  = ap && ap.status === 'offline';
+    const outageBlock = outage
+      ? '<div class="pp-outage" style="margin:0 0 8px;">'
+        + '<strong>Active outage</strong> · started ' + escapeHtml(outage.started_at)
+        + (outage.cause ? ' · ' + escapeHtml(outage.cause) : '')
+        + (outage.affected_count ? ' · ' + outage.affected_count + ' affected' : '')
+        + '</div>'
+      : '';
+    return ''
+      + '<div class="mdp-center">'
+      +   outageBlock
+      +   '<div class="mdp-cap-row">'
+      +     '<span>Capacity</span>'
+      +     '<span class="mdp-cap-val">' + (cap != null ? cap + '%' : '—') + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-cap-bar"><div class="mdp-cap-fill" style="width:' + capPct + '%;background:' + (cap != null && cap >= 90 ? 'linear-gradient(90deg,#f97316,#dc2626)' : (cap != null && cap >= 70 ? 'linear-gradient(90deg,#eab308,#f97316)' : 'linear-gradient(90deg,#05DAFD,#0c8)')) + ';"></div></div>'
+      +   '<div class="mdp-distance">'
+      +     '<span>Throughput</span>'
+      +     '<span class="mdp-arrow"></span>'
+      +     '<span class="mdp-dist-val">' + (tput != null ? fmtMbps(tput) : 'no data') + '</span>'
+      +     '<span class="mdp-arrow"></span>'
+      +     '<span>peak ' + (peak != null ? fmtMbps(peak) : '—') + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-signal-bar">'
+      +     '<div class="mdp-signal-marker" style="left:calc(' + sigPct + '% - 1.5px);"></div>'
+      +   '</div>'
+      +   '<div class="mdp-signal-meta">'
+      +     '<span>Avg link health</span>'
+      +     '<span>' + (health != null ? health + ' / 100' : 'no data') + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-kv" style="grid-template-columns:repeat(4,1fr);">'
+      +     kvCell('Links',      st && st.link_count != null ? st.link_count : 0)
+      +     kvCell('Avg signal', st && st.avg_signal != null ? st.avg_signal + ' dBm' : '—')
+      +     kvCell('Avg SNR',    st && st.avg_snr    != null ? st.avg_snr    + ' dB'  : '—')
+      +     kvCell('Avg CCQ',    st && st.avg_ccq    != null ? Math.round(st.avg_ccq) + '%' : '—')
+      +   '</div>'
+      +   '<div class="mdp-actions">'
+      +     '<button type="button" class="btn btn-ghost btn-sm" data-edit-sector="' + s.id + '">Edit</button>'
+      +     '<button type="button" class="btn btn-danger btn-sm" data-delete-sector="' + s.id + '">Delete</button>'
+      +     (s.id ? '<a class="btn btn-ghost btn-sm" href="/admin/sector-edit.php?id=' + s.id + '">Open</a>' : '')
+      +     (ap && ap.id ? '<a class="btn btn-ghost btn-sm" href="/admin/device-view.php?id=' + ap.id + '">AP</a>' : '')
+      +   '</div>'
+      + '</div>';
+  }
+
+  /* ---------- Client detail ---------- */
+  async function openClientDetail(client) {
+    if (!panel || !panelGrid) return;
+    showClientSkeleton(client);
+    selectedFeature = { kind: 'client', id: client.id };
+    if (pulseRing) { map.removeLayer(pulseRing); pulseRing = null; }
+    // Clients don't carry a useful related-list of their own — the
+    // sector that owns them is already shown in the right card of
+    // the bottom panel. Close the sidebar to give the map back.
+    closeSidePanel();
+    if (client.lat != null && client.lng != null) {
+      pulseRing = L.marker([client.lat, client.lng], {
+        interactive: false,
+        icon: L.divIcon({ className: '', html: '<div class="mdp-pulse-marker"></div>',
+                          iconSize: [22, 22], iconAnchor: [11, 11] }),
+      }).addTo(map);
+    }
+    const j = await fetchDetail('client', client.id);
+    if (!j) return;
+    if (!selectedFeature || selectedFeature.kind !== 'client' || selectedFeature.id !== client.id) return;
+    renderClientDetail(j);
+  }
+
+  function showClientSkeleton(c) {
+    panel.classList.remove('is-site');
+    panelGrid.innerHTML = ''
+      + clientCardHTML(c)
+      + clientCenterHTML(c, null, null, null)
+      + '<div class="mdp-card"><div class="mdp-name"><input value="…" readonly></div></div>';
+    panel.classList.add('is-open');
+    panel.setAttribute('aria-hidden', 'false');
+    if (shellEl) shellEl.classList.add('is-bottom-open');
+  }
+
+  function renderClientDetail(j) {
+    const c   = j.client;
+    const sec = j.sector;
+    const t   = j.tower;
+    const ap  = j.ap_device;
+    const wl  = j.wireless_link;
+    const sectorCardHTML = sec ? ''
+      + '<div class="mdp-card" data-role="sector">'
+      +   '<div class="mdp-name">'
+      +     '<input type="text" value="' + escapeHtml(sec.name) + '" readonly>'
+      +     '<span class="mdp-type-pill" style="color:' + (BAND_COLOR[sec.band] || '#888') + ';background:' + (BAND_COLOR[sec.band] || '#888') + '20;">' + escapeHtml(sec.band || '') + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-kv">'
+      +     kvCell('Tower', t ? t.name : '—', { wide: true })
+      +     kvCell('Azimuth',   sec.azimuth_deg != null ? sec.azimuth_deg + '°' : '—')
+      +     kvCell('Beamwidth', sec.beamwidth_deg != null ? sec.beamwidth_deg + '°' : '—')
+      +     kvCell('Frequency', sec.frequency_mhz != null ? sec.frequency_mhz + ' MHz' : '—')
+      +     kvCell('Channel',   sec.channel_width_mhz != null ? sec.channel_width_mhz + ' MHz' : '—')
+      +     (ap ? kvCell('AP', ap.name + ' · ' + ap.status, { wide: true, color: ap.status === 'offline' ? '#dc2626' : null }) : '')
+      +   '</div>'
+      + '</div>'
+      : '<div class="mdp-card"><div class="mdp-name"><input value="No sector assigned" readonly></div></div>';
+
+    panel.classList.remove('is-site');
+    panelGrid.innerHTML = clientCardHTML(c) + clientCenterHTML(c, wl, j.distance_km, ap) + sectorCardHTML;
+  }
+
+  function clientCardHTML(c) {
+    const statusCol = STATUS_COLOR[c.status] || '#888';
+    const cells = [];
+    cells.push(kvCell('Username',  c.username || '—', { wide: true }));
+    if (c.name)     cells.push(kvCell('Name',    c.name,    { wide: true }));
+    if (c.address)  cells.push(kvCell('Address', c.address, { wide: true }));
+    if (c.phone)    cells.push(kvCell('Phone',   c.phone));
+    if (c.email)    cells.push(kvCell('Email',   c.email));
+    if (c.lat != null && c.lng != null) {
+      cells.push(kvCell('Coords', c.lat.toFixed(5) + ', ' + c.lng.toFixed(5), { wide: true }));
+    }
+    return ''
+      + '<div class="mdp-card" data-role="client">'
+      +   '<div class="mdp-name">'
+      +     '<input type="text" value="' + escapeHtml(c.account_no || c.username || ('client ' + c.id)) + '" readonly>'
+      +     '<span class="mdp-type-pill" style="color:' + statusCol + ';background:' + statusCol + '20;">' + escapeHtml(c.status || '') + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-kv">' + cells.join('') + '</div>'
+      + '</div>';
+  }
+
+  function clientCenterHTML(c, wl, distKm, ap) {
+    const sig = wl && wl.signal_dbm != null ? wl.signal_dbm : null;
+    const snr = wl && wl.snr_db     != null ? wl.snr_db     : null;
+    const ccq = wl && wl.ccq_pct    != null ? wl.ccq_pct    : null;
+    const hp  = wl && wl.health_score != null ? wl.health_score : null;
+    const tx  = wl && wl.tx_rate_mbps != null ? wl.tx_rate_mbps : null;
+    const rx  = wl && wl.rx_rate_mbps != null ? wl.rx_rate_mbps : null;
+    const tputL = wl && wl.throughput_local_mbps != null ? wl.throughput_local_mbps : null;
+    const tputR = wl && wl.throughput_remote_mbps != null ? wl.throughput_remote_mbps : null;
+    const totalT = (tputL != null || tputR != null)
+                   ? ((tputL || 0) + (tputR || 0)) : null;
+    const cap   = wl && (wl.capacity_local_mbps || wl.capacity_remote_mbps);
+    const sigPct = (() => {
+      const p = dbmToPctStrict(sig);
+      if (p != null) return p;
+      const sp = snrPct(snr);
+      return sp != null ? sp : 50;
+    })();
+    const health = healthBucket(hp);
+    const lastAge = wl && wl.last_evaluated_at ? fmtAge(wl.last_evaluated_at) : null;
+    const apOff = ap && ap.status === 'offline';
+
+    const apBanner = apOff
+      ? '<div class="pp-outage" style="margin:0 0 8px;background:rgba(220,68,68,.18);border-left-color:#d44;">'
+        + '<strong>AP offline</strong> · ' + escapeHtml(ap.name)
+        + (ap.last_seen_at ? ' · last seen ' + fmtAge(ap.last_seen_at) : '')
+        + '</div>'
+      : '';
+    const noWlBanner = !wl
+      ? '<div class="pp-outage" style="margin:0 0 8px;background:rgba(120,140,160,.16);border-left-color:#888;">'
+        + 'No live wireless-link sample for this client yet.'
+        + '</div>'
+      : '';
+
+    return ''
+      + '<div class="mdp-center">'
+      +   apBanner
+      +   noWlBanner
+      +   '<div class="mdp-cap-row">'
+      +     '<span>Throughput' + (lastAge ? ' · ' + lastAge : '') + '</span>'
+      +     '<span class="mdp-cap-val">' + (totalT != null ? fmtMbps(totalT) : '—') + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-cap-bar"><div class="mdp-cap-fill" style="width:' + (totalT != null && cap ? Math.min(100, (totalT / cap) * 100) : 35).toFixed(0) + '%;"></div></div>'
+      +   '<div class="mdp-distance">'
+      +     '<span>Tower</span>'
+      +     '<span class="mdp-arrow"></span>'
+      +     '<span class="mdp-dist-val">' + (distKm != null ? distKm + ' km' : '—') + '</span>'
+      +     '<span class="mdp-arrow"></span>'
+      +     '<span>CPE</span>'
+      +   '</div>'
+      +   '<div class="mdp-signal-bar">'
+      +     '<div class="mdp-signal-marker" style="left:calc(' + sigPct.toFixed(0) + '% - 1.5px);" title="' + (sig != null ? sig + ' dBm' : (snr != null ? snr + ' dB SNR' : 'unknown')) + '"></div>'
+      +   '</div>'
+      +   '<div class="mdp-signal-meta">'
+      +     '<span>' + (sig != null ? 'Signal ' + sig + ' dBm' : (snr != null ? 'SNR ' + snr + ' dB' : 'No signal data')) + '</span>'
+      +     '<span style="color:' + health.c + ';font-weight:600;">' + (hp != null ? 'Health ' + hp : health.l) + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-kv" style="grid-template-columns:repeat(4,1fr);">'
+      +     kvCell('Signal', fmtDbm(sig))
+      +     kvCell('SNR',    snr != null ? snr + ' dB' : '—')
+      +     kvCell('CCQ',    ccq != null ? Math.round(ccq) + '%' : '—')
+      +     kvCell('Mode',   wl && wl.wireless_mode ? wl.wireless_mode : '—')
+      +     kvCell('TX rate', tx != null ? fmtMbps(tx) : '—')
+      +     kvCell('RX rate', rx != null ? fmtMbps(rx) : '—')
+      +     kvCell('TX power', wl && wl.tx_power_dbm_local != null ? wl.tx_power_dbm_local + ' dBm' : '—')
+      +     kvCell('Modulation', wl && wl.modulation ? wl.modulation : '—')
+      +   '</div>'
+      +   '<div class="mdp-actions">'
+      +     '<a class="btn btn-ghost btn-sm" href="/admin/client-edit.php?id=' + c.id + '">Open record</a>'
+      +     (wl && wl.id ? '<a class="btn btn-ghost btn-sm" href="/admin/link-view.php?id=' + wl.id + '">Live link</a>' : '')
+      +   '</div>'
+      + '</div>';
+  }
+
+  /* ---------- Wire popupopen → open the right detail panel ---------- */
+  map.on('popupopen', (e) => {
+    const src = e.popup && e.popup._source;
+    if (!src) return;
+    if (src.wfLinkId != null) {
+      const entry = linkLines.get(src.wfLinkId);
+      if (entry) openLinkDetail(entry.data);
+      return;
+    }
+    if (src.wfSectorId != null) {
+      const entry = sectorIndex.get(src.wfSectorId);
+      if (entry) openSectorDetail(entry.data);
+      return;
+    }
+    if (src.wfSiteId != null) {
+      const entry = siteIndex.get(src.wfSiteId);
+      if (entry) openSiteDetail(entry.data);
+      return;
+    }
+    if (src.wfClientId != null) {
+      const c = clientById.get(src.wfClientId);
+      if (c) openClientDetail(c);
+      return;
+    }
+  });
+  map.on('popupclose', (e) => {
+    const src = e.popup && e.popup._source;
+    if (!selectedFeature || !src) return;
+    if      (selectedFeature.kind === 'link'   && src.wfLinkId   === selectedFeature.id) closePanel();
+    else if (selectedFeature.kind === 'sector' && src.wfSectorId === selectedFeature.id) closePanel();
+    else if (selectedFeature.kind === 'site'   && src.wfSiteId   === selectedFeature.id) closePanel();
+    else if (selectedFeature.kind === 'client' && src.wfClientId === selectedFeature.id) closePanel();
+  });
 
   /* ---------- live refresh (device status + active outages) ----------
      Every 30 seconds we hit /admin/map.php?poll=1 for a snapshot of

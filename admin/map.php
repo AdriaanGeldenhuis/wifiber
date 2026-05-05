@@ -217,6 +217,392 @@ if (!empty($_GET['overlay'])) {
     }
 }
 
+// Rich detail endpoint — the bottom panel calls this on click for
+// sectors, clients, links and sites. We return everything the panel
+// needs to render: live wireless_link signal/SNR/CCQ/health, sector
+// throughput rollups, AP device status, customer counts, distances,
+// active outages, etc.  Kept here (rather than on /admin/links.php
+// or per-entity pages) so the map UI doesn't fan out to 4 endpoints.
+if (!empty($_GET['detail'])) {
+    while (ob_get_level() > 0) ob_end_clean();
+    header('Content-Type: application/json');
+    $kind = (string)$_GET['detail'];
+    $id   = (int)($_GET['id'] ?? 0);
+    if ($id <= 0) { echo json_encode(['ok' => false, 'error' => 'No id']); exit; }
+
+    try {
+        switch ($kind) {
+
+            // Backbone link — the polyline drawn between two sites. We
+            // also surface any wireless_links we can find between
+            // devices on those two sites (because site_links is just
+            // an admin-tagged backbone label; the radio truth lives
+            // in wireless_links keyed by ap/cpe device pairs).
+            case 'link': {
+                $stmt = pdo()->prepare(
+                    "SELECT sl.*,
+                            fs.name AS from_name, fs.type AS from_type, fs.lat AS from_lat, fs.lng AS from_lng,
+                            ts.name AS to_name,   ts.type AS to_type,   ts.lat AS to_lat,   ts.lng AS to_lng
+                       FROM site_links sl
+                       JOIN sites fs ON fs.id = sl.from_site_id
+                       JOIN sites ts ON ts.id = sl.to_site_id
+                      WHERE sl.id = ? LIMIT 1"
+                );
+                $stmt->execute([$id]);
+                $row = $stmt->fetch();
+                if (!$row) { echo json_encode(['ok' => false, 'error' => 'Link not found']); exit; }
+
+                $dist_km = haversine_km(
+                    (float)$row['from_lat'], (float)$row['from_lng'],
+                    (float)$row['to_lat'],   (float)$row['to_lng']
+                );
+
+                // Best-effort match on wireless_links between these two sites.
+                $wstmt = pdo()->prepare(
+                    "SELECT wl.id, wl.signal_dbm, wl.signal_dbm_remote,
+                            wl.snr_db, wl.snr_db_remote, wl.ccq_pct,
+                            wl.tx_rate_mbps, wl.rx_rate_mbps,
+                            wl.throughput_local_mbps, wl.throughput_remote_mbps,
+                            wl.capacity_local_mbps, wl.capacity_remote_mbps,
+                            wl.frequency_mhz, wl.channel_width_mhz,
+                            wl.tx_power_dbm_local, wl.tx_power_dbm_remote,
+                            wl.distance_km, wl.health_score, wl.last_evaluated_at,
+                            wl.modulation, wl.wireless_mode, wl.ssid,
+                            ap.name AS ap_name, cpe.name AS cpe_name,
+                            ap.site_id AS ap_site, cpe.site_id AS cpe_site
+                       FROM wireless_links wl
+                       JOIN devices ap       ON ap.id = wl.ap_device_id
+                       LEFT JOIN devices cpe ON cpe.id = wl.cpe_device_id
+                      WHERE (ap.site_id = ? AND cpe.site_id = ?)
+                         OR (ap.site_id = ? AND cpe.site_id = ?)
+                      ORDER BY wl.health_score IS NULL, wl.health_score DESC
+                      LIMIT 1"
+                );
+                $wstmt->execute([
+                    (int)$row['from_site_id'], (int)$row['to_site_id'],
+                    (int)$row['to_site_id'],   (int)$row['from_site_id'],
+                ]);
+                $wl = $wstmt->fetch() ?: null;
+
+                $devCounts = pdo()->prepare(
+                    "SELECT site_id, COUNT(*) AS n,
+                            SUM(status='online') AS online
+                       FROM devices WHERE site_id IN (?, ?) GROUP BY site_id"
+                );
+                $devCounts->execute([(int)$row['from_site_id'], (int)$row['to_site_id']]);
+                $byd = [];
+                foreach ($devCounts->fetchAll() as $r) {
+                    $byd[(int)$r['site_id']] = ['n' => (int)$r['n'], 'online' => (int)$r['online']];
+                }
+
+                echo json_encode([
+                    'ok'             => true,
+                    'kind'           => 'link',
+                    'link'           => [
+                        'id' => (int)$row['id'], 'type' => $row['type'], 'label' => $row['label'],
+                        'capacity_mbps' => $row['capacity_mbps'] !== null ? (float)$row['capacity_mbps'] : null,
+                        'frequency'     => $row['frequency'],
+                    ],
+                    'from'           => [
+                        'id' => (int)$row['from_site_id'], 'name' => $row['from_name'],
+                        'type' => $row['from_type'], 'lat' => (float)$row['from_lat'], 'lng' => (float)$row['from_lng'],
+                        'devices' => $byd[(int)$row['from_site_id']] ?? ['n' => 0, 'online' => 0],
+                    ],
+                    'to'             => [
+                        'id' => (int)$row['to_site_id'], 'name' => $row['to_name'],
+                        'type' => $row['to_type'], 'lat' => (float)$row['to_lat'], 'lng' => (float)$row['to_lng'],
+                        'devices' => $byd[(int)$row['to_site_id']] ?? ['n' => 0, 'online' => 0],
+                    ],
+                    'distance_km'    => round($dist_km, 3),
+                    'wireless_link'  => $wl,
+                ]);
+                exit;
+            }
+
+            // Sector — radio config + customer rollup + active outage
+            // + last-hour throughput aggregate. Anchored on the existing
+            // sectors row so reads are cheap.
+            case 'sector': {
+                $sec = pdo()->prepare("SELECT * FROM sectors WHERE id = ? LIMIT 1");
+                $sec->execute([$id]);
+                $s = $sec->fetch();
+                if (!$s) { echo json_encode(['ok' => false, 'error' => 'Sector not found']); exit; }
+                $tower = site_find((int)$s['tower_id']);
+                $ap    = !empty($s['ap_device_id']) ? device_find((int)$s['ap_device_id']) : null;
+
+                $cnt = pdo()->prepare("SELECT COUNT(*) FROM users WHERE role='client' AND sector_id = ?");
+                $cnt->execute([$id]);
+                $customer_count = (int)$cnt->fetchColumn();
+
+                // wireless_links rollup against this sector
+                $stats = pdo()->prepare(
+                    "SELECT COUNT(*)            AS link_count,
+                            AVG(signal_dbm)     AS avg_signal,
+                            AVG(snr_db)         AS avg_snr,
+                            AVG(ccq_pct)        AS avg_ccq,
+                            AVG(health_score)   AS avg_health,
+                            MIN(health_score)   AS worst_health,
+                            SUM(throughput_local_mbps + COALESCE(throughput_remote_mbps,0)) AS total_thr,
+                            MAX(last_evaluated_at) AS last_seen_at
+                       FROM wireless_links WHERE sector_id = ?"
+                );
+                $stats->execute([$id]);
+                $st = $stats->fetch() ?: [];
+
+                // Active outage on this sector (if any)
+                $oa = pdo()->prepare(
+                    "SELECT id, started_at, cause, affected_count
+                       FROM outages WHERE scope='sector' AND scope_id=? AND status='active'
+                       ORDER BY started_at DESC LIMIT 1"
+                );
+                $oa->execute([$id]);
+                $outage = $oa->fetch() ?: null;
+
+                // Last 1h throughput peak via link_health_samples
+                $lh = pdo()->prepare(
+                    "SELECT MAX(COALESCE(lhs.throughput_local_mbps,0) + COALESCE(lhs.throughput_remote_mbps,0)) AS peak,
+                            AVG(COALESCE(lhs.throughput_local_mbps,0) + COALESCE(lhs.throughput_remote_mbps,0)) AS avg_thr
+                       FROM link_health_samples lhs
+                       JOIN wireless_links wl ON wl.id = lhs.link_id
+                      WHERE wl.sector_id = ?
+                        AND lhs.polled_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)"
+                );
+                $lh->execute([$id]);
+                $thr_row = $lh->fetch() ?: ['peak' => null, 'avg_thr' => null];
+
+                echo json_encode([
+                    'ok'      => true,
+                    'kind'    => 'sector',
+                    'sector'  => [
+                        'id' => (int)$s['id'], 'name' => $s['name'],
+                        'tower_id' => (int)$s['tower_id'],
+                        'azimuth_deg' => $s['azimuth_deg'] !== null ? (int)$s['azimuth_deg'] : null,
+                        'beamwidth_deg' => $s['beamwidth_deg'] !== null ? (int)$s['beamwidth_deg'] : null,
+                        'band' => $s['band'],
+                        'frequency_mhz' => $s['frequency_mhz'] !== null ? (int)$s['frequency_mhz'] : null,
+                        'channel_width_mhz' => $s['channel_width_mhz'] !== null ? (int)$s['channel_width_mhz'] : null,
+                        'tx_power_dbm' => $s['tx_power_dbm'] !== null ? (int)$s['tx_power_dbm'] : null,
+                        'max_clients' => $s['max_clients'] !== null ? (int)$s['max_clients'] : null,
+                        'ssid' => $s['ssid'] ?? null,
+                        'security' => $s['security'] ?? null,
+                        'wireless_mode' => $s['wireless_mode'] ?? null,
+                        'ap_device_id' => !empty($s['ap_device_id']) ? (int)$s['ap_device_id'] : null,
+                        'notes' => $s['notes'] ?? null,
+                    ],
+                    'tower'   => $tower ? [
+                        'id' => (int)$tower['id'], 'name' => $tower['name'], 'type' => $tower['type'],
+                        'lat' => (float)$tower['lat'], 'lng' => (float)$tower['lng'],
+                    ] : null,
+                    'ap_device' => $ap ? [
+                        'id' => (int)$ap['id'], 'name' => $ap['name'], 'role' => $ap['role'],
+                        'vendor' => $ap['vendor'], 'model' => $ap['model'],
+                        'status' => $ap['status'], 'last_seen_at' => $ap['last_seen_at'],
+                        'mgmt_ip' => $ap['mgmt_ip'] ?? null,
+                    ] : null,
+                    'customer_count' => $customer_count,
+                    'stats'   => [
+                        'link_count'   => (int)($st['link_count'] ?? 0),
+                        'avg_signal'   => $st['avg_signal'] !== null ? round((float)$st['avg_signal'], 1) : null,
+                        'avg_snr'      => $st['avg_snr']    !== null ? round((float)$st['avg_snr'], 1)   : null,
+                        'avg_ccq'      => $st['avg_ccq']    !== null ? round((float)$st['avg_ccq'], 1)   : null,
+                        'avg_health'   => $st['avg_health'] !== null ? (int)round((float)$st['avg_health'])   : null,
+                        'worst_health' => $st['worst_health'] !== null ? (int)$st['worst_health'] : null,
+                        'total_throughput' => $st['total_thr'] !== null ? round((float)$st['total_thr'], 1) : null,
+                        'last_seen_at' => $st['last_seen_at'] ?? null,
+                        'peak_throughput'=> $thr_row['peak']   !== null ? round((float)$thr_row['peak'], 1) : null,
+                        'avg_throughput' => $thr_row['avg_thr']!== null ? round((float)$thr_row['avg_thr'], 1) : null,
+                    ],
+                    'outage'  => $outage ? [
+                        'id' => (int)$outage['id'], 'started_at' => $outage['started_at'],
+                        'cause' => $outage['cause'], 'affected_count' => (int)$outage['affected_count'],
+                    ] : null,
+                ]);
+                exit;
+            }
+
+            // Customer / client — billing + radio side. We pull the
+            // user's wireless_link (if any) for live signal/SNR/CCQ
+            // and join through to the AP and sector for context.
+            case 'client': {
+                $u = find_user_by_id($id);
+                if (!$u || ($u['role'] ?? '') !== 'client') {
+                    echo json_encode(['ok' => false, 'error' => 'Client not found']); exit;
+                }
+                $sector = !empty($u['sector_id']) ? sector_find((int)$u['sector_id']) : null;
+                $tower  = $sector ? site_find((int)$sector['tower_id']) : null;
+                $ap     = ($sector && !empty($sector['ap_device_id']))
+                          ? device_find((int)$sector['ap_device_id']) : null;
+
+                $wlstmt = pdo()->prepare(
+                    "SELECT wl.id, wl.signal_dbm, wl.signal_dbm_remote,
+                            wl.noise_dbm, wl.noise_dbm_remote,
+                            wl.snr_db, wl.snr_db_remote, wl.ccq_pct,
+                            wl.tx_rate_mbps, wl.rx_rate_mbps,
+                            wl.throughput_local_mbps, wl.throughput_remote_mbps,
+                            wl.capacity_local_mbps, wl.capacity_remote_mbps,
+                            wl.tx_power_dbm_local, wl.tx_power_dbm_remote,
+                            wl.frequency_mhz, wl.channel_width_mhz,
+                            wl.distance_km, wl.health_score, wl.last_evaluated_at,
+                            wl.modulation, wl.wireless_mode, wl.ssid, wl.uptime_seconds,
+                            ap.name AS ap_name, cpe.name AS cpe_name
+                       FROM wireless_links wl
+                       JOIN devices ap       ON ap.id = wl.ap_device_id
+                       LEFT JOIN devices cpe ON cpe.id = wl.cpe_device_id
+                      WHERE wl.customer_id = ?
+                      ORDER BY wl.last_evaluated_at IS NULL, wl.last_evaluated_at DESC
+                      LIMIT 1"
+                );
+                $wlstmt->execute([$id]);
+                $wl = $wlstmt->fetch() ?: null;
+
+                // Distance from tower → client (if both lat/lng set)
+                $distKm = null;
+                if ($tower && !empty($tower['lat']) && !empty($tower['lng'])
+                    && $u['lat'] !== null && $u['lng'] !== null) {
+                    $distKm = round(haversine_km(
+                        (float)$tower['lat'], (float)$tower['lng'],
+                        (float)$u['lat'],     (float)$u['lng']
+                    ), 3);
+                }
+
+                echo json_encode([
+                    'ok'     => true,
+                    'kind'   => 'client',
+                    'client' => [
+                        'id' => (int)$u['id'], 'username' => $u['username'],
+                        'account_no' => $u['account_no'] ?? null,
+                        'name' => trim((string)($u['name'] ?? '') . ' ' . (string)($u['surname'] ?? '')),
+                        'status' => $u['status'] ?? 'active',
+                        'address' => $u['address'] ?? '',
+                        'phone' => $u['phone'] ?? null,
+                        'email' => $u['email'] ?? null,
+                        'lat'    => $u['lat'] !== null ? (float)$u['lat'] : null,
+                        'lng'    => $u['lng'] !== null ? (float)$u['lng'] : null,
+                        'plan_id'=> $u['plan_id'] ?? null,
+                    ],
+                    'sector' => $sector ? [
+                        'id' => (int)$sector['id'], 'name' => $sector['name'],
+                        'azimuth_deg' => $sector['azimuth_deg'] !== null ? (int)$sector['azimuth_deg'] : null,
+                        'beamwidth_deg' => $sector['beamwidth_deg'] !== null ? (int)$sector['beamwidth_deg'] : null,
+                        'band' => $sector['band'],
+                        'frequency_mhz' => $sector['frequency_mhz'] !== null ? (int)$sector['frequency_mhz'] : null,
+                        'channel_width_mhz' => $sector['channel_width_mhz'] !== null ? (int)$sector['channel_width_mhz'] : null,
+                    ] : null,
+                    'tower'  => $tower ? [
+                        'id' => (int)$tower['id'], 'name' => $tower['name'], 'type' => $tower['type'],
+                        'lat' => (float)$tower['lat'], 'lng' => (float)$tower['lng'],
+                    ] : null,
+                    'ap_device' => $ap ? [
+                        'id' => (int)$ap['id'], 'name' => $ap['name'],
+                        'status' => $ap['status'], 'last_seen_at' => $ap['last_seen_at'],
+                        'vendor' => $ap['vendor'], 'model' => $ap['model'],
+                    ] : null,
+                    'wireless_link' => $wl,
+                    'distance_km'   => $distKm,
+                ]);
+                exit;
+            }
+
+            // Site (tower / ap / etc) — devices + sectors + connected
+            // backbone links + wireless_links rollup. Used by the panel
+            // when the operator clicks a site marker.
+            case 'site': {
+                $site = site_find($id);
+                if (!$site) { echo json_encode(['ok' => false, 'error' => 'Site not found']); exit; }
+                $devs = pdo()->prepare(
+                    "SELECT id, name, role, vendor, model, status, last_seen_at
+                       FROM devices WHERE site_id = ? ORDER BY name ASC"
+                );
+                $devs->execute([$id]);
+                $devices = $devs->fetchAll() ?: [];
+
+                $secStmt = pdo()->prepare("SELECT * FROM sectors WHERE tower_id = ? ORDER BY azimuth_deg ASC, name ASC");
+                $secStmt->execute([$id]);
+                $sectors = $secStmt->fetchAll() ?: [];
+                foreach ($sectors as &$ss) {
+                    $cs = pdo()->prepare("SELECT COUNT(*) FROM users WHERE role='client' AND sector_id = ?");
+                    $cs->execute([(int)$ss['id']]);
+                    $ss['customer_count'] = (int)$cs->fetchColumn();
+                }
+                unset($ss);
+
+                $linkStmt = pdo()->prepare(
+                    "SELECT sl.id, sl.type, sl.label, sl.capacity_mbps, sl.frequency,
+                            sl.from_site_id, sl.to_site_id,
+                            o.name AS other_name, o.lat AS other_lat, o.lng AS other_lng
+                       FROM site_links sl
+                       JOIN sites o ON o.id = CASE WHEN sl.from_site_id = ? THEN sl.to_site_id ELSE sl.from_site_id END
+                      WHERE sl.from_site_id = ? OR sl.to_site_id = ?"
+                );
+                $linkStmt->execute([$id, $id, $id]);
+                $blinks = $linkStmt->fetchAll() ?: [];
+                foreach ($blinks as &$bl) {
+                    $bl['distance_km'] = round(haversine_km(
+                        (float)$site['lat'], (float)$site['lng'],
+                        (float)$bl['other_lat'], (float)$bl['other_lng']
+                    ), 3);
+                }
+                unset($bl);
+
+                $wstats = pdo()->prepare(
+                    "SELECT COUNT(*) AS n,
+                            AVG(wl.health_score) AS avg_h,
+                            MIN(wl.health_score) AS worst_h,
+                            SUM(wl.health_score IS NOT NULL AND wl.health_score < 50) AS degraded
+                       FROM wireless_links wl
+                       JOIN devices d ON d.id = wl.ap_device_id
+                      WHERE d.site_id = ?"
+                );
+                $wstats->execute([$id]);
+                $ws = $wstats->fetch() ?: ['n' => 0, 'avg_h' => null, 'worst_h' => null, 'degraded' => 0];
+
+                echo json_encode([
+                    'ok'    => true,
+                    'kind'  => 'site',
+                    'site'  => [
+                        'id' => (int)$site['id'], 'name' => $site['name'], 'type' => $site['type'],
+                        'lat' => (float)$site['lat'], 'lng' => (float)$site['lng'],
+                        'coverage_radius_m' => $site['coverage_radius_m'] !== null ? (int)$site['coverage_radius_m'] : null,
+                        'notes' => $site['notes'] ?? null,
+                    ],
+                    'devices' => array_map(fn($d) => [
+                        'id' => (int)$d['id'], 'name' => $d['name'],
+                        'role' => $d['role'], 'vendor' => $d['vendor'], 'model' => $d['model'],
+                        'status' => $d['status'], 'last_seen_at' => $d['last_seen_at'],
+                    ], $devices),
+                    'sectors' => array_map(fn($s) => [
+                        'id' => (int)$s['id'], 'name' => $s['name'],
+                        'band' => $s['band'],
+                        'azimuth_deg' => $s['azimuth_deg'] !== null ? (int)$s['azimuth_deg'] : null,
+                        'beamwidth_deg' => $s['beamwidth_deg'] !== null ? (int)$s['beamwidth_deg'] : null,
+                        'customer_count' => (int)($s['customer_count'] ?? 0),
+                        'max_clients' => $s['max_clients'] !== null ? (int)$s['max_clients'] : null,
+                    ], $sectors),
+                    'links' => array_map(fn($b) => [
+                        'id' => (int)$b['id'], 'type' => $b['type'], 'label' => $b['label'],
+                        'capacity_mbps' => $b['capacity_mbps'] !== null ? (float)$b['capacity_mbps'] : null,
+                        'frequency' => $b['frequency'],
+                        'other_name' => $b['other_name'],
+                        'distance_km' => $b['distance_km'],
+                    ], $blinks),
+                    'wireless_summary' => [
+                        'count'       => (int)$ws['n'],
+                        'avg_health'  => $ws['avg_h']    !== null ? (int)round((float)$ws['avg_h'])    : null,
+                        'worst_health'=> $ws['worst_h']  !== null ? (int)$ws['worst_h']  : null,
+                        'degraded'    => (int)$ws['degraded'],
+                    ],
+                ]);
+                exit;
+            }
+
+            default:
+                echo json_encode(['ok' => false, 'error' => 'Unknown detail kind']); exit;
+        }
+    } catch (Throwable $e) {
+        echo json_encode(['ok' => false, 'error' => $e->getMessage()]); exit;
+    }
+}
+
 // Lightweight poll endpoint — JS calls this every ~30s to refresh
 // device statuses and outage state without reloading the whole map.
 if (($_GET['poll'] ?? '') === '1') {
@@ -581,6 +967,51 @@ $map_data['wireless_link_summary'] = $wl_by_site;
      fixed sidebar. */
   body:has(.map-fs) .portal-main  { padding: 0 !important; overflow: hidden; }
   body:has(.map-fs) .portal-inner { max-width: none !important; width: 100%; }
+
+  /* Auto-collapsing admin sidebar — only on the map page so the map
+     gets the full viewport. We pull .portal-side out of flow with
+     position:fixed so the map flexes to fill, then collapse it to a
+     6px gradient strip at the edge. Hover (or focus-within for
+     keyboard users) re-expands it to its normal width with a slide
+     animation; an 8px shadow makes it overlay the map cleanly. */
+  body:has(.map-fs) .portal-side {
+    position: fixed;
+    left: 0; top: 0; bottom: 0;
+    height: 100vh;
+    width: 6px;
+    padding: 0;
+    z-index: 1500;
+    overflow: hidden;
+    border-right: 1px solid transparent;
+    background: linear-gradient(90deg, rgba(5,218,253,.35) 0%, rgba(5,218,253,.08) 60%, transparent 100%);
+    transition: width .2s cubic-bezier(.2,.7,.2,1),
+                padding .2s,
+                background .15s,
+                box-shadow .2s,
+                border-color .15s;
+  }
+  body:has(.map-fs) .portal-side:hover,
+  body:has(.map-fs) .portal-side:focus-within {
+    width: 252px;
+    padding: 24px 16px;
+    background: var(--bg-elev);
+    border-right-color: var(--border);
+    box-shadow: 8px 0 24px rgba(0,0,0,.5);
+    overflow-y: auto;
+  }
+  /* Fade child content along with the width — looks smoother than
+     a hard cutoff and keeps assistive tech happy via aria-hidden
+     while collapsed. */
+  body:has(.map-fs) .portal-side > * {
+    opacity: 0;
+    transition: opacity .15s;
+    pointer-events: none;
+  }
+  body:has(.map-fs) .portal-side:hover > *,
+  body:has(.map-fs) .portal-side:focus-within > * {
+    opacity: 1;
+    pointer-events: auto;
+  }
 
   .map-fs {
     display: flex;
@@ -998,11 +1429,754 @@ $map_data['wireless_link_summary'] = $wl_by_site;
   }
   .leaflet-bar a:hover { background: var(--accent-soft) !important; color: var(--accent) !important; }
 
+  /* ---------- Map shell wrapper (so floating panes can absolute-position) ---------- */
+  .map-shell { position: relative; flex: 1; min-height: 300px; display: flex; }
+  .map-shell #map { flex: 1; min-height: 300px; background: #0a0d12; }
+
+  /* ---------- Inline search ---------- */
+  .map-search {
+    position: relative;
+    display: flex;
+    align-items: center;
+    min-width: 220px;
+    flex: 0 1 320px;
+  }
+  .map-search input {
+    width: 100%;
+    padding: 7px 12px 7px 32px;
+    background: rgba(255,255,255,.04);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    color: var(--text);
+    font-size: 12px;
+    transition: border-color .15s, box-shadow .15s, background .15s;
+  }
+  .map-search input::placeholder { color: var(--text-muted); }
+  .map-search input:focus {
+    outline: none;
+    border-color: var(--accent);
+    background: rgba(5,218,253,.06);
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .map-search::before {
+    content: '';
+    position: absolute;
+    left: 11px; top: 50%;
+    width: 13px; height: 13px;
+    transform: translateY(-50%);
+    background: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='%236b7480' stroke-width='1.6'><circle cx='7' cy='7' r='5'/><path d='M11 11l3 3'/></svg>") no-repeat center / contain;
+    pointer-events: none;
+  }
+  .map-search-results {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0; right: 0;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 12px 28px rgba(0,0,0,.6);
+    z-index: 1100;
+    max-height: 280px;
+    overflow-y: auto;
+    display: none;
+  }
+  .map-search-results.is-open { display: block; }
+  .map-search-results .msr-row {
+    padding: 8px 12px;
+    font-size: 12px;
+    color: var(--text-dim);
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    border-bottom: 1px solid var(--border);
+    transition: background .15s, color .15s;
+  }
+  .map-search-results .msr-row:last-child { border-bottom: none; }
+  .map-search-results .msr-row:hover,
+  .map-search-results .msr-row.is-cursor {
+    background: var(--accent-soft);
+    color: var(--text);
+  }
+  .map-search-results .msr-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    flex-shrink: 0;
+  }
+  .map-search-results .msr-meta {
+    margin-left: auto;
+    color: var(--text-muted);
+    font-size: 10.5px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+  }
+  .map-search-results .msr-empty {
+    padding: 12px;
+    color: var(--text-muted);
+    font-size: 12px;
+    text-align: center;
+    font-style: italic;
+  }
+
+  /* ---------- Floating quick-tools (UISP-style top-left card) ---------- */
+  .map-quicktools {
+    position: absolute;
+    top: 12px;
+    left: 60px;     /* clear of Leaflet's zoom bar */
+    z-index: 800;
+    display: flex;
+    gap: 6px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 4px;
+    box-shadow: 0 6px 18px rgba(0,0,0,.45);
+  }
+  .map-quicktools button {
+    width: 30px;
+    height: 30px;
+    border: none;
+    background: transparent;
+    color: var(--text-dim);
+    border-radius: 6px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: background .15s, color .15s, transform .15s;
+    padding: 0;
+  }
+  .map-quicktools button:hover { background: var(--accent-soft); color: var(--accent); }
+  .map-quicktools button.is-active {
+    background: var(--accent);
+    color: #001218;
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+  .map-quicktools button svg {
+    width: 16px;
+    height: 16px;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .map-quicktools .qt-sep {
+    width: 1px;
+    background: var(--border);
+    margin: 4px 2px;
+  }
+
+  /* ---------- Signal-strength legend (UISP-style top-right) ----------
+     Sits below Leaflet's layers control which already lives at top-right
+     (admin-map.js mounts it un-collapsed). The 100px top offset clears
+     the layers control + the inline "Coverage" sector picker that the
+     coverage-heatmap inline script appends right under it. */
+  .map-signal-legend {
+    position: absolute;
+    top: 100px;
+    right: 12px;
+    z-index: 800;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 8px 12px;
+    box-shadow: 0 6px 18px rgba(0,0,0,.45);
+    font-size: 10.5px;
+    color: var(--text-muted);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 168px;
+  }
+  .map-signal-legend .msl-row {
+    display: flex;
+    justify-content: space-between;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+  .map-signal-legend .msl-bar {
+    height: 6px;
+    border-radius: 999px;
+    background: linear-gradient(90deg,
+      #dc2626 0%, #f97316 25%, #eab308 50%, #84cc16 75%, #22c55e 100%);
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.05);
+  }
+
+  /* ---------- Live coord readout (bottom-right) ---------- */
+  .map-coords {
+    position: absolute;
+    bottom: 12px;
+    left: 12px;
+    z-index: 750;
+    background: rgba(16,20,27,.85);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 5px 10px;
+    font-family: 'JetBrains Mono', 'Roboto Mono', monospace;
+    font-size: 10.5px;
+    color: var(--text-dim);
+    backdrop-filter: blur(6px);
+    -webkit-backdrop-filter: blur(6px);
+    pointer-events: none;
+    user-select: none;
+    letter-spacing: .02em;
+  }
+  .map-coords strong { color: var(--accent); font-weight: 600; }
+
+  /* ---------- Distance-measure tooltip (follows cursor) ---------- */
+  .leaflet-measure-tip {
+    background: var(--accent);
+    color: #001218;
+    padding: 3px 9px;
+    border-radius: 999px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: .03em;
+    box-shadow: 0 4px 10px rgba(5,218,253,.3);
+    white-space: nowrap;
+  }
+  .leaflet-tooltip.leaflet-measure-tip::before { display: none; }
+
+  /* ---------- Bottom detail panel (UISP-style flat strip) ----------
+     Anchored to the bottom edge of the map, full width. Slides up
+     when a feature is selected.  Internally a 3-column flex layout
+     (left card | centre metrics | right card) so it stays compact
+     even when packed with sector / link telemetry. */
+  .map-detail-panel {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    z-index: 900;
+    background: linear-gradient(180deg, rgba(16,20,27,.97) 0%, rgba(10,13,18,1) 100%);
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -8px 24px rgba(0,0,0,.5), inset 0 1px 0 rgba(5,218,253,.06);
+    padding: 8px 18px 10px;
+    transform: translateY(100%);
+    opacity: 1;
+    pointer-events: none;
+    transition: transform .25s cubic-bezier(.2,.7,.2,1);
+    /* Let the strip size to its content — no artificial scrollbar.
+       The 40vh cap only kicks in on really short viewports, and even
+       then overflow-y: auto shows the scrollbar only when needed. */
+    max-height: 40vh;
+    overflow-y: auto;
+  }
+  .map-detail-panel.is-open {
+    transform: translateY(0);
+    pointer-events: auto;
+  }
+  .map-detail-panel #mdp-grid {
+    transition: opacity .15s;
+  }
+  .map-detail-panel .mdp-close {
+    position: absolute;
+    top: 8px;
+    right: 10px;
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 18px;
+    cursor: pointer;
+    line-height: 1;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: background .15s, color .15s;
+  }
+  .map-detail-panel .mdp-close:hover { background: rgba(255,255,255,.06); color: var(--text); }
+
+  .map-detail-panel .mdp-grid {
+    display: grid;
+    grid-template-columns: 1.05fr 1.6fr 1.05fr;
+    gap: 12px;
+    align-items: start;          /* cards size to content, no empty stretch */
+  }
+  .map-detail-panel .mdp-card {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    padding: 8px 11px 9px;
+    background: rgba(255,255,255,.02);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    min-width: 0;
+  }
+  .map-detail-panel .mdp-card .mdp-name {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .map-detail-panel .mdp-card .mdp-name input {
+    flex: 1;
+    min-width: 0;
+    background: transparent;
+    border: none;
+    border-bottom: 1px dashed transparent;
+    padding: 2px 2px;
+    color: var(--text);
+    font-family: 'Space Grotesk', 'Inter', sans-serif;
+    font-size: 14px;
+    font-weight: 600;
+    letter-spacing: -.005em;
+    cursor: default;
+    outline: none;
+  }
+  .map-detail-panel .mdp-card .mdp-name input:read-only:focus { border-bottom-color: transparent; }
+  .map-detail-panel .mdp-card .mdp-type-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 2px 8px;
+    border-radius: 999px;
+    background: var(--accent-soft);
+    color: var(--accent);
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: .06em;
+    text-transform: uppercase;
+    flex-shrink: 0;
+  }
+  .map-detail-panel .mdp-card .mdp-type-pill::before {
+    content: '';
+    width: 6px; height: 6px;
+    border-radius: 50%;
+    background: currentColor;
+  }
+  .map-detail-panel .mdp-kv {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px 10px;
+    margin-top: 2px;
+  }
+  .map-detail-panel .mdp-kv .mdp-cell {
+    display: flex;
+    flex-direction: column;
+    min-width: 0;
+  }
+  .map-detail-panel .mdp-kv .mdp-cell-wide { grid-column: 1 / -1; }
+  .map-detail-panel .mdp-kv .mdp-label {
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: .1em;
+    color: var(--text-muted);
+    font-weight: 600;
+    line-height: 1.3;
+  }
+  .map-detail-panel .mdp-kv .mdp-val {
+    font-size: 11.5px;
+    color: var(--text);
+    margin-top: 1px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    line-height: 1.3;
+  }
+
+  /* Centre column — link metrics (capacity bar, distance, signal gradient) */
+  .map-detail-panel .mdp-center {
+    padding: 9px 12px 10px;
+    background: linear-gradient(180deg, rgba(5,218,253,0.04) 0%, transparent 100%);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    display: flex;
+    flex-direction: column;
+    gap: 7px;
+  }
+  .map-detail-panel .mdp-cap-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    font-size: 11px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    font-weight: 600;
+  }
+  .map-detail-panel .mdp-cap-row .mdp-cap-val {
+    font-family: 'Space Grotesk', 'Inter', sans-serif;
+    font-size: 16px;
+    color: var(--accent);
+    letter-spacing: 0;
+    text-transform: none;
+    font-weight: 700;
+  }
+  .map-detail-panel .mdp-cap-bar {
+    height: 6px;
+    border-radius: 999px;
+    background: rgba(255,255,255,.05);
+    overflow: hidden;
+    position: relative;
+  }
+  .map-detail-panel .mdp-cap-fill {
+    position: absolute; inset: 0;
+    background: linear-gradient(90deg, #05DAFD 0%, #0c8 100%);
+    transform-origin: left;
+    border-radius: 999px;
+  }
+
+  .map-detail-panel .mdp-distance {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 0;
+    font-size: 12px;
+    color: var(--text-dim);
+    border-top: 1px dashed var(--border);
+    border-bottom: 1px dashed var(--border);
+  }
+  .map-detail-panel .mdp-distance .mdp-arrow {
+    flex: 1;
+    height: 1px;
+    background: linear-gradient(90deg, var(--accent) 0%, var(--accent) 30%, transparent 30%, transparent 70%, var(--accent) 70%);
+    background-size: 8px 1px;
+    background-repeat: repeat-x;
+    margin: 0 10px;
+    position: relative;
+  }
+  .map-detail-panel .mdp-distance .mdp-arrow::before,
+  .map-detail-panel .mdp-distance .mdp-arrow::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    width: 6px; height: 6px;
+    border: 1.5px solid var(--accent);
+    border-radius: 50%;
+    background: var(--bg-card);
+    transform: translateY(-50%);
+  }
+  .map-detail-panel .mdp-distance .mdp-arrow::before { left: 0; }
+  .map-detail-panel .mdp-distance .mdp-arrow::after  { right: 0; }
+  .map-detail-panel .mdp-distance .mdp-dist-val {
+    font-family: 'Space Grotesk', 'Inter', sans-serif;
+    color: var(--accent);
+    font-weight: 700;
+    font-size: 13px;
+    white-space: nowrap;
+  }
+
+  .map-detail-panel .mdp-signal-bar {
+    height: 7px;
+    border-radius: 999px;
+    background: linear-gradient(90deg,
+      #dc2626 0%, #f97316 25%, #eab308 50%, #84cc16 75%, #22c55e 100%);
+    position: relative;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.05);
+  }
+  .map-detail-panel .mdp-signal-bar .mdp-signal-marker {
+    position: absolute;
+    top: -3px; bottom: -3px;
+    width: 3px;
+    background: var(--text);
+    border-radius: 999px;
+    box-shadow: 0 0 0 1px rgba(0,0,0,.6);
+    transition: left .25s cubic-bezier(.2,.7,.2,1);
+  }
+  .map-detail-panel .mdp-signal-meta {
+    display: flex;
+    justify-content: space-between;
+    font-size: 10px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .08em;
+  }
+
+  .map-detail-panel .mdp-actions {
+    display: flex;
+    gap: 6px;
+    margin-top: 6px;
+  }
+  .map-detail-panel .mdp-actions .btn {
+    font-size: 11px;
+    padding: 5px 10px;
+    border-radius: 999px;
+  }
+
+  /* Site selection: card on the left, centre column on the right. */
+  .map-detail-panel.is-site .mdp-grid {
+    grid-template-columns: 1fr 1.4fr;
+  }
+
+  /* ---------- Right sidebar — related entities for selection ----------
+     Slides in from the right when a feature is clicked.  Holds the
+     "list of things connected to what you clicked" (sectors + links
+     for a tower; clients for a sector; sectors for each endpoint of a
+     link).  Sits ABOVE the bottom detail panel so the two never
+     collide.  Closed by an × in its header or by Esc. */
+  .map-side-panel {
+    position: absolute;
+    top: 12px;
+    right: 0;
+    bottom: 12px;        /* full height when bottom strip is closed */
+    width: 340px;
+    z-index: 850;
+    background: var(--bg-card);
+    border-left: 1px solid var(--border);
+    border-top-left-radius: var(--radius);
+    border-bottom-left-radius: var(--radius);
+    box-shadow: -8px 0 24px rgba(0,0,0,.45);
+    transform: translateX(100%);
+    pointer-events: none;
+    transition: transform .25s cubic-bezier(.2,.7,.2,1), bottom .2s;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .map-side-panel.is-open {
+    transform: translateX(0);
+    pointer-events: auto;
+  }
+  /* When the bottom strip is open, lift the sidebar to clear it.  The
+     --mdp-h CSS var is set in JS via a ResizeObserver on the strip
+     so the side panel always sits 12px above the strip's actual
+     rendered height. */
+  .map-shell.is-bottom-open .map-side-panel {
+    bottom: calc(var(--mdp-h, 200px) + 12px);
+  }
+
+  .map-side-panel .msp-head {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px 10px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(5,218,253,.05) 0%, transparent 100%);
+  }
+  .map-side-panel .msp-title {
+    flex: 1;
+    min-width: 0;
+    font-family: 'Space Grotesk', 'Inter', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -.005em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .map-side-panel .msp-subtitle {
+    font-size: 10.5px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    margin-top: 2px;
+  }
+  .map-side-panel .msp-close {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: background .15s, color .15s;
+  }
+  .map-side-panel .msp-close:hover { background: rgba(255,255,255,.06); color: var(--text); }
+
+  .map-side-panel .msp-tabs {
+    flex-shrink: 0;
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    background: rgba(255,255,255,.02);
+  }
+  .map-side-panel .msp-tab {
+    flex: 1;
+    padding: 9px 8px;
+    text-align: center;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: color .15s, border-color .15s, background .15s;
+    font-family: inherit;
+  }
+  .map-side-panel .msp-tab:hover { color: var(--text); }
+  .map-side-panel .msp-tab.is-active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+    background: rgba(5,218,253,.04);
+  }
+  .map-side-panel .msp-tab .msp-tab-count {
+    margin-left: 4px;
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+  .map-side-panel .msp-tab.is-active .msp-tab-count { color: var(--accent); opacity: .75; }
+
+  .map-side-panel .msp-body {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  .map-side-panel .msp-empty {
+    padding: 24px 14px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-style: italic;
+  }
+  .map-side-panel .msp-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .map-side-panel .msp-item {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    transition: background .15s;
+    color: var(--text);
+  }
+  .map-side-panel .msp-item:hover { background: var(--accent-soft); }
+  .map-side-panel .msp-item-dot {
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    border: 1.5px solid var(--bg-card);
+    box-shadow: 0 0 0 1px rgba(255,255,255,.06);
+  }
+  .map-side-panel .msp-item-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .map-side-panel .msp-item-name {
+    font-family: 'Space Grotesk', 'Inter', sans-serif;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .map-side-panel .msp-item-meta {
+    font-size: 10.5px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .map-side-panel .msp-item-pill {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 9.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    background: var(--accent-soft);
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+  .map-side-panel .msp-item-pill.is-warn   { background: rgba(234,179,8,.18);  color: #facc15; }
+  .map-side-panel .msp-item-pill.is-danger { background: rgba(220,68,68,.20);  color: #ff6e85; }
+  .map-side-panel .msp-item-pill.is-muted  { background: rgba(120,140,160,.16); color: var(--text-dim); }
+
+  /* Push the floating signal legend down when the sidebar is open
+     so it doesn't collide with it on narrow viewports. */
+  .map-shell.is-side-open .map-signal-legend { display: none; }
+  /* Coords chip (bottom-left) overlaps the bottom strip; fade it out
+     when the strip is open to keep things tidy. */
+  .map-coords { transition: opacity .2s; }
+  .map-shell.is-bottom-open .map-coords { opacity: 0; pointer-events: none; }
+
+  /* ---------- Highlight selected feature ---------- */
+  .leaflet-interactive.is-mdp-selected {
+    filter: drop-shadow(0 0 6px rgba(5,218,253,.85));
+  }
+  /* Pulse ring animation for selected site marker */
+  @keyframes mdp-pulse {
+    0%   { transform: scale(.8);  opacity: .9; }
+    100% { transform: scale(2.4); opacity: 0;  }
+  }
+  .mdp-pulse-marker {
+    width: 22px; height: 22px;
+    border-radius: 50%;
+    border: 2px solid var(--accent);
+    background: rgba(5,218,253,.18);
+    animation: mdp-pulse 1.4s ease-out infinite;
+  }
+
+  /* ---------- Link hover tooltip (UISP-style chip) ---------- */
+  .leaflet-link-tip {
+    background: var(--bg-card) !important;
+    color: var(--text) !important;
+    border: 1px solid var(--border) !important;
+    border-radius: var(--radius-sm) !important;
+    padding: 7px 10px !important;
+    font-family: 'Inter', system-ui, sans-serif !important;
+    font-size: 11.5px !important;
+    line-height: 1.45 !important;
+    box-shadow: 0 6px 18px rgba(0,0,0,.5) !important;
+  }
+  .leaflet-link-tip::before { display: none !important; }
+  .leaflet-link-tip .ltip-title {
+    font-family: 'Space Grotesk', 'Inter', sans-serif;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text);
+    margin-bottom: 3px;
+  }
+  .leaflet-link-tip .ltip-row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+    color: var(--text-dim);
+    font-size: 11px;
+  }
+  .leaflet-link-tip .ltip-row strong {
+    color: var(--accent);
+    font-weight: 600;
+    font-family: 'Space Grotesk', 'Inter', sans-serif;
+  }
+  .leaflet-link-tip .ltip-route {
+    color: var(--text-muted);
+    font-size: 10.5px;
+    margin-top: 4px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+  }
+
+  /* Make link hover thicken the line subtly. */
+  path.leaflet-interactive.wf-link:hover {
+    filter: brightness(1.3) drop-shadow(0 0 6px rgba(5,218,253,.55));
+  }
+
   /* ---------- Mobile / narrow toolbar ---------- */
   @media (max-width: 900px) {
     .map-bar { padding: 8px 12px; gap: 10px; }
     .map-legend { display: none; }
     .map-counts { font-size: 10px; }
+    .map-search { display: none; }
+    .map-quicktools { left: 56px; top: 10px; }
+    .map-signal-legend { display: none; }
+    .map-detail-panel { max-height: 60vh; padding: 10px 12px; }
+    .map-detail-panel .mdp-grid,
+    .map-detail-panel.is-site .mdp-grid {
+      grid-template-columns: 1fr;
+      gap: 8px;
+    }
+    .map-coords { display: none; }
+    .map-side-panel {
+      width: 100%;
+      bottom: 0;        /* on mobile take full screen when open */
+      top: 0;
+      border-radius: 0;
+    }
   }
 </style>
 
@@ -1062,6 +2236,13 @@ $map_data['wireless_link_summary'] = $wl_by_site;
       <span id="geocode-status"></span>
     </div>
 
+    <div class="sep"></div>
+
+    <div class="map-search">
+      <input id="map-search-input" type="search" placeholder="Search sites, links, clients…" autocomplete="off">
+      <div id="map-search-results" class="map-search-results" role="listbox"></div>
+    </div>
+
     <div class="map-legend" style="margin-left:auto;">
       <span><i style="background:#08e;"></i>tower</span>
       <span><i style="background:#0c8;"></i>AP</span>
@@ -1078,7 +2259,69 @@ $map_data['wireless_link_summary'] = $wl_by_site;
   </div>
 
   <div id="map-hint" class="map-hint"></div>
-  <div id="map"></div>
+
+  <div class="map-shell">
+    <div id="map"></div>
+
+    <!-- Floating UISP-style quick tools (top-left, next to zoom bar) -->
+    <div id="map-quicktools" class="map-quicktools" role="toolbar" aria-label="Map quick tools">
+      <button id="qt-fit-all" type="button" title="Fit all sites in view" aria-label="Fit all sites">
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2 5V2h3M14 5V2h-3M2 11v3h3M14 11v3h-3"/>
+        </svg>
+      </button>
+      <button id="qt-locate" type="button" title="Recenter to default" aria-label="Recenter">
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <circle cx="8" cy="8" r="3"/>
+          <path d="M8 1v2M8 13v2M1 8h2M13 8h2"/>
+        </svg>
+      </button>
+      <span class="qt-sep"></span>
+      <button id="qt-measure" type="button" title="Distance measure (click two points)" aria-label="Distance measure">
+        <svg viewBox="0 0 16 16" aria-hidden="true">
+          <path d="M2 12L12 2l2 2L4 14z"/>
+          <path d="M5 9l1 1M7 7l1 1M9 5l1 1"/>
+        </svg>
+      </button>
+    </div>
+
+    <!-- Signal-strength gradient legend (top-right) -->
+    <div id="map-signal-legend" class="map-signal-legend" aria-hidden="true">
+      <div class="msl-row"><span>Weak</span><span>Strong</span></div>
+      <div class="msl-bar"></div>
+      <div class="msl-row" style="text-transform:none;letter-spacing:0;font-weight:400;color:var(--text-muted);">
+        <span>−95 dBm</span><span>−45 dBm</span>
+      </div>
+    </div>
+
+    <!-- Live cursor coords + zoom (bottom-left) -->
+    <div id="map-coords" class="map-coords">
+      <span><strong id="coord-lat">–</strong>, <strong id="coord-lng">–</strong></span>
+      <span style="margin-left:10px;">z<strong id="coord-zoom">–</strong></span>
+    </div>
+
+    <!-- Right sidebar — related entities for the current selection
+         (sectors+links for a tower, clients for a sector, etc) -->
+    <aside id="map-side-panel" class="map-side-panel" role="complementary" aria-label="Related entities" aria-hidden="true">
+      <header class="msp-head">
+        <div class="msp-title-wrap" style="flex:1;min-width:0;">
+          <div class="msp-title" id="msp-title">—</div>
+          <div class="msp-subtitle" id="msp-subtitle"></div>
+        </div>
+        <button class="msp-close" id="msp-close" type="button" aria-label="Close sidebar">×</button>
+      </header>
+      <div class="msp-tabs" id="msp-tabs" role="tablist"></div>
+      <div class="msp-body" id="msp-body"></div>
+    </aside>
+
+    <!-- Bottom detail panel (slides up when a link or site is selected) -->
+    <div id="map-detail-panel" class="map-detail-panel" role="dialog" aria-label="Selection detail" aria-hidden="true">
+      <button class="mdp-close" id="mdp-close" type="button" aria-label="Close">×</button>
+      <div class="mdp-grid" id="mdp-grid">
+        <!-- contents injected by JS -->
+      </div>
+    </div>
+  </div>
 </div>
 
 <script type="application/json" id="map-data"><?= json_encode($map_data, JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE) ?></script>
