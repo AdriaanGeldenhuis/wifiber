@@ -217,6 +217,392 @@ if (!empty($_GET['overlay'])) {
     }
 }
 
+// Rich detail endpoint — the bottom panel calls this on click for
+// sectors, clients, links and sites. We return everything the panel
+// needs to render: live wireless_link signal/SNR/CCQ/health, sector
+// throughput rollups, AP device status, customer counts, distances,
+// active outages, etc.  Kept here (rather than on /admin/links.php
+// or per-entity pages) so the map UI doesn't fan out to 4 endpoints.
+if (!empty($_GET['detail'])) {
+    while (ob_get_level() > 0) ob_end_clean();
+    header('Content-Type: application/json');
+    $kind = (string)$_GET['detail'];
+    $id   = (int)($_GET['id'] ?? 0);
+    if ($id <= 0) { echo json_encode(['ok' => false, 'error' => 'No id']); exit; }
+
+    try {
+        switch ($kind) {
+
+            // Backbone link — the polyline drawn between two sites. We
+            // also surface any wireless_links we can find between
+            // devices on those two sites (because site_links is just
+            // an admin-tagged backbone label; the radio truth lives
+            // in wireless_links keyed by ap/cpe device pairs).
+            case 'link': {
+                $stmt = pdo()->prepare(
+                    "SELECT sl.*,
+                            fs.name AS from_name, fs.type AS from_type, fs.lat AS from_lat, fs.lng AS from_lng,
+                            ts.name AS to_name,   ts.type AS to_type,   ts.lat AS to_lat,   ts.lng AS to_lng
+                       FROM site_links sl
+                       JOIN sites fs ON fs.id = sl.from_site_id
+                       JOIN sites ts ON ts.id = sl.to_site_id
+                      WHERE sl.id = ? LIMIT 1"
+                );
+                $stmt->execute([$id]);
+                $row = $stmt->fetch();
+                if (!$row) { echo json_encode(['ok' => false, 'error' => 'Link not found']); exit; }
+
+                $dist_km = haversine_km(
+                    (float)$row['from_lat'], (float)$row['from_lng'],
+                    (float)$row['to_lat'],   (float)$row['to_lng']
+                );
+
+                // Best-effort match on wireless_links between these two sites.
+                $wstmt = pdo()->prepare(
+                    "SELECT wl.id, wl.signal_dbm, wl.signal_dbm_remote,
+                            wl.snr_db, wl.snr_db_remote, wl.ccq_pct,
+                            wl.tx_rate_mbps, wl.rx_rate_mbps,
+                            wl.throughput_local_mbps, wl.throughput_remote_mbps,
+                            wl.capacity_local_mbps, wl.capacity_remote_mbps,
+                            wl.frequency_mhz, wl.channel_width_mhz,
+                            wl.tx_power_dbm_local, wl.tx_power_dbm_remote,
+                            wl.distance_km, wl.health_score, wl.last_evaluated_at,
+                            wl.modulation, wl.wireless_mode, wl.ssid,
+                            ap.name AS ap_name, cpe.name AS cpe_name,
+                            ap.site_id AS ap_site, cpe.site_id AS cpe_site
+                       FROM wireless_links wl
+                       JOIN devices ap       ON ap.id = wl.ap_device_id
+                       LEFT JOIN devices cpe ON cpe.id = wl.cpe_device_id
+                      WHERE (ap.site_id = ? AND cpe.site_id = ?)
+                         OR (ap.site_id = ? AND cpe.site_id = ?)
+                      ORDER BY wl.health_score IS NULL, wl.health_score DESC
+                      LIMIT 1"
+                );
+                $wstmt->execute([
+                    (int)$row['from_site_id'], (int)$row['to_site_id'],
+                    (int)$row['to_site_id'],   (int)$row['from_site_id'],
+                ]);
+                $wl = $wstmt->fetch() ?: null;
+
+                $devCounts = pdo()->prepare(
+                    "SELECT site_id, COUNT(*) AS n,
+                            SUM(status='online') AS online
+                       FROM devices WHERE site_id IN (?, ?) GROUP BY site_id"
+                );
+                $devCounts->execute([(int)$row['from_site_id'], (int)$row['to_site_id']]);
+                $byd = [];
+                foreach ($devCounts->fetchAll() as $r) {
+                    $byd[(int)$r['site_id']] = ['n' => (int)$r['n'], 'online' => (int)$r['online']];
+                }
+
+                echo json_encode([
+                    'ok'             => true,
+                    'kind'           => 'link',
+                    'link'           => [
+                        'id' => (int)$row['id'], 'type' => $row['type'], 'label' => $row['label'],
+                        'capacity_mbps' => $row['capacity_mbps'] !== null ? (float)$row['capacity_mbps'] : null,
+                        'frequency'     => $row['frequency'],
+                    ],
+                    'from'           => [
+                        'id' => (int)$row['from_site_id'], 'name' => $row['from_name'],
+                        'type' => $row['from_type'], 'lat' => (float)$row['from_lat'], 'lng' => (float)$row['from_lng'],
+                        'devices' => $byd[(int)$row['from_site_id']] ?? ['n' => 0, 'online' => 0],
+                    ],
+                    'to'             => [
+                        'id' => (int)$row['to_site_id'], 'name' => $row['to_name'],
+                        'type' => $row['to_type'], 'lat' => (float)$row['to_lat'], 'lng' => (float)$row['to_lng'],
+                        'devices' => $byd[(int)$row['to_site_id']] ?? ['n' => 0, 'online' => 0],
+                    ],
+                    'distance_km'    => round($dist_km, 3),
+                    'wireless_link'  => $wl,
+                ]);
+                exit;
+            }
+
+            // Sector — radio config + customer rollup + active outage
+            // + last-hour throughput aggregate. Anchored on the existing
+            // sectors row so reads are cheap.
+            case 'sector': {
+                $sec = pdo()->prepare("SELECT * FROM sectors WHERE id = ? LIMIT 1");
+                $sec->execute([$id]);
+                $s = $sec->fetch();
+                if (!$s) { echo json_encode(['ok' => false, 'error' => 'Sector not found']); exit; }
+                $tower = site_find((int)$s['tower_id']);
+                $ap    = !empty($s['ap_device_id']) ? device_find((int)$s['ap_device_id']) : null;
+
+                $cnt = pdo()->prepare("SELECT COUNT(*) FROM users WHERE role='client' AND sector_id = ?");
+                $cnt->execute([$id]);
+                $customer_count = (int)$cnt->fetchColumn();
+
+                // wireless_links rollup against this sector
+                $stats = pdo()->prepare(
+                    "SELECT COUNT(*)            AS link_count,
+                            AVG(signal_dbm)     AS avg_signal,
+                            AVG(snr_db)         AS avg_snr,
+                            AVG(ccq_pct)        AS avg_ccq,
+                            AVG(health_score)   AS avg_health,
+                            MIN(health_score)   AS worst_health,
+                            SUM(throughput_local_mbps + COALESCE(throughput_remote_mbps,0)) AS total_thr,
+                            MAX(last_evaluated_at) AS last_seen_at
+                       FROM wireless_links WHERE sector_id = ?"
+                );
+                $stats->execute([$id]);
+                $st = $stats->fetch() ?: [];
+
+                // Active outage on this sector (if any)
+                $oa = pdo()->prepare(
+                    "SELECT id, started_at, cause, affected_count
+                       FROM outages WHERE scope='sector' AND scope_id=? AND status='active'
+                       ORDER BY started_at DESC LIMIT 1"
+                );
+                $oa->execute([$id]);
+                $outage = $oa->fetch() ?: null;
+
+                // Last 1h throughput peak via link_health_samples
+                $lh = pdo()->prepare(
+                    "SELECT MAX(COALESCE(lhs.throughput_local_mbps,0) + COALESCE(lhs.throughput_remote_mbps,0)) AS peak,
+                            AVG(COALESCE(lhs.throughput_local_mbps,0) + COALESCE(lhs.throughput_remote_mbps,0)) AS avg_thr
+                       FROM link_health_samples lhs
+                       JOIN wireless_links wl ON wl.id = lhs.link_id
+                      WHERE wl.sector_id = ?
+                        AND lhs.polled_at >= DATE_SUB(NOW(), INTERVAL 1 HOUR)"
+                );
+                $lh->execute([$id]);
+                $thr_row = $lh->fetch() ?: ['peak' => null, 'avg_thr' => null];
+
+                echo json_encode([
+                    'ok'      => true,
+                    'kind'    => 'sector',
+                    'sector'  => [
+                        'id' => (int)$s['id'], 'name' => $s['name'],
+                        'tower_id' => (int)$s['tower_id'],
+                        'azimuth_deg' => $s['azimuth_deg'] !== null ? (int)$s['azimuth_deg'] : null,
+                        'beamwidth_deg' => $s['beamwidth_deg'] !== null ? (int)$s['beamwidth_deg'] : null,
+                        'band' => $s['band'],
+                        'frequency_mhz' => $s['frequency_mhz'] !== null ? (int)$s['frequency_mhz'] : null,
+                        'channel_width_mhz' => $s['channel_width_mhz'] !== null ? (int)$s['channel_width_mhz'] : null,
+                        'tx_power_dbm' => $s['tx_power_dbm'] !== null ? (int)$s['tx_power_dbm'] : null,
+                        'max_clients' => $s['max_clients'] !== null ? (int)$s['max_clients'] : null,
+                        'ssid' => $s['ssid'] ?? null,
+                        'security' => $s['security'] ?? null,
+                        'wireless_mode' => $s['wireless_mode'] ?? null,
+                        'ap_device_id' => !empty($s['ap_device_id']) ? (int)$s['ap_device_id'] : null,
+                        'notes' => $s['notes'] ?? null,
+                    ],
+                    'tower'   => $tower ? [
+                        'id' => (int)$tower['id'], 'name' => $tower['name'], 'type' => $tower['type'],
+                        'lat' => (float)$tower['lat'], 'lng' => (float)$tower['lng'],
+                    ] : null,
+                    'ap_device' => $ap ? [
+                        'id' => (int)$ap['id'], 'name' => $ap['name'], 'role' => $ap['role'],
+                        'vendor' => $ap['vendor'], 'model' => $ap['model'],
+                        'status' => $ap['status'], 'last_seen_at' => $ap['last_seen_at'],
+                        'mgmt_ip' => $ap['mgmt_ip'] ?? null,
+                    ] : null,
+                    'customer_count' => $customer_count,
+                    'stats'   => [
+                        'link_count'   => (int)($st['link_count'] ?? 0),
+                        'avg_signal'   => $st['avg_signal'] !== null ? round((float)$st['avg_signal'], 1) : null,
+                        'avg_snr'      => $st['avg_snr']    !== null ? round((float)$st['avg_snr'], 1)   : null,
+                        'avg_ccq'      => $st['avg_ccq']    !== null ? round((float)$st['avg_ccq'], 1)   : null,
+                        'avg_health'   => $st['avg_health'] !== null ? (int)round((float)$st['avg_health'])   : null,
+                        'worst_health' => $st['worst_health'] !== null ? (int)$st['worst_health'] : null,
+                        'total_throughput' => $st['total_thr'] !== null ? round((float)$st['total_thr'], 1) : null,
+                        'last_seen_at' => $st['last_seen_at'] ?? null,
+                        'peak_throughput'=> $thr_row['peak']   !== null ? round((float)$thr_row['peak'], 1) : null,
+                        'avg_throughput' => $thr_row['avg_thr']!== null ? round((float)$thr_row['avg_thr'], 1) : null,
+                    ],
+                    'outage'  => $outage ? [
+                        'id' => (int)$outage['id'], 'started_at' => $outage['started_at'],
+                        'cause' => $outage['cause'], 'affected_count' => (int)$outage['affected_count'],
+                    ] : null,
+                ]);
+                exit;
+            }
+
+            // Customer / client — billing + radio side. We pull the
+            // user's wireless_link (if any) for live signal/SNR/CCQ
+            // and join through to the AP and sector for context.
+            case 'client': {
+                $u = find_user_by_id($id);
+                if (!$u || ($u['role'] ?? '') !== 'client') {
+                    echo json_encode(['ok' => false, 'error' => 'Client not found']); exit;
+                }
+                $sector = !empty($u['sector_id']) ? sector_find((int)$u['sector_id']) : null;
+                $tower  = $sector ? site_find((int)$sector['tower_id']) : null;
+                $ap     = ($sector && !empty($sector['ap_device_id']))
+                          ? device_find((int)$sector['ap_device_id']) : null;
+
+                $wlstmt = pdo()->prepare(
+                    "SELECT wl.id, wl.signal_dbm, wl.signal_dbm_remote,
+                            wl.noise_dbm, wl.noise_dbm_remote,
+                            wl.snr_db, wl.snr_db_remote, wl.ccq_pct,
+                            wl.tx_rate_mbps, wl.rx_rate_mbps,
+                            wl.throughput_local_mbps, wl.throughput_remote_mbps,
+                            wl.capacity_local_mbps, wl.capacity_remote_mbps,
+                            wl.tx_power_dbm_local, wl.tx_power_dbm_remote,
+                            wl.frequency_mhz, wl.channel_width_mhz,
+                            wl.distance_km, wl.health_score, wl.last_evaluated_at,
+                            wl.modulation, wl.wireless_mode, wl.ssid, wl.uptime_seconds,
+                            ap.name AS ap_name, cpe.name AS cpe_name
+                       FROM wireless_links wl
+                       JOIN devices ap       ON ap.id = wl.ap_device_id
+                       LEFT JOIN devices cpe ON cpe.id = wl.cpe_device_id
+                      WHERE wl.customer_id = ?
+                      ORDER BY wl.last_evaluated_at IS NULL, wl.last_evaluated_at DESC
+                      LIMIT 1"
+                );
+                $wlstmt->execute([$id]);
+                $wl = $wlstmt->fetch() ?: null;
+
+                // Distance from tower → client (if both lat/lng set)
+                $distKm = null;
+                if ($tower && !empty($tower['lat']) && !empty($tower['lng'])
+                    && $u['lat'] !== null && $u['lng'] !== null) {
+                    $distKm = round(haversine_km(
+                        (float)$tower['lat'], (float)$tower['lng'],
+                        (float)$u['lat'],     (float)$u['lng']
+                    ), 3);
+                }
+
+                echo json_encode([
+                    'ok'     => true,
+                    'kind'   => 'client',
+                    'client' => [
+                        'id' => (int)$u['id'], 'username' => $u['username'],
+                        'account_no' => $u['account_no'] ?? null,
+                        'name' => trim((string)($u['name'] ?? '') . ' ' . (string)($u['surname'] ?? '')),
+                        'status' => $u['status'] ?? 'active',
+                        'address' => $u['address'] ?? '',
+                        'phone' => $u['phone'] ?? null,
+                        'email' => $u['email'] ?? null,
+                        'lat'    => $u['lat'] !== null ? (float)$u['lat'] : null,
+                        'lng'    => $u['lng'] !== null ? (float)$u['lng'] : null,
+                        'plan_id'=> $u['plan_id'] ?? null,
+                    ],
+                    'sector' => $sector ? [
+                        'id' => (int)$sector['id'], 'name' => $sector['name'],
+                        'azimuth_deg' => $sector['azimuth_deg'] !== null ? (int)$sector['azimuth_deg'] : null,
+                        'beamwidth_deg' => $sector['beamwidth_deg'] !== null ? (int)$sector['beamwidth_deg'] : null,
+                        'band' => $sector['band'],
+                        'frequency_mhz' => $sector['frequency_mhz'] !== null ? (int)$sector['frequency_mhz'] : null,
+                        'channel_width_mhz' => $sector['channel_width_mhz'] !== null ? (int)$sector['channel_width_mhz'] : null,
+                    ] : null,
+                    'tower'  => $tower ? [
+                        'id' => (int)$tower['id'], 'name' => $tower['name'], 'type' => $tower['type'],
+                        'lat' => (float)$tower['lat'], 'lng' => (float)$tower['lng'],
+                    ] : null,
+                    'ap_device' => $ap ? [
+                        'id' => (int)$ap['id'], 'name' => $ap['name'],
+                        'status' => $ap['status'], 'last_seen_at' => $ap['last_seen_at'],
+                        'vendor' => $ap['vendor'], 'model' => $ap['model'],
+                    ] : null,
+                    'wireless_link' => $wl,
+                    'distance_km'   => $distKm,
+                ]);
+                exit;
+            }
+
+            // Site (tower / ap / etc) — devices + sectors + connected
+            // backbone links + wireless_links rollup. Used by the panel
+            // when the operator clicks a site marker.
+            case 'site': {
+                $site = site_find($id);
+                if (!$site) { echo json_encode(['ok' => false, 'error' => 'Site not found']); exit; }
+                $devs = pdo()->prepare(
+                    "SELECT id, name, role, vendor, model, status, last_seen_at
+                       FROM devices WHERE site_id = ? ORDER BY name ASC"
+                );
+                $devs->execute([$id]);
+                $devices = $devs->fetchAll() ?: [];
+
+                $secStmt = pdo()->prepare("SELECT * FROM sectors WHERE tower_id = ? ORDER BY azimuth_deg ASC, name ASC");
+                $secStmt->execute([$id]);
+                $sectors = $secStmt->fetchAll() ?: [];
+                foreach ($sectors as &$ss) {
+                    $cs = pdo()->prepare("SELECT COUNT(*) FROM users WHERE role='client' AND sector_id = ?");
+                    $cs->execute([(int)$ss['id']]);
+                    $ss['customer_count'] = (int)$cs->fetchColumn();
+                }
+                unset($ss);
+
+                $linkStmt = pdo()->prepare(
+                    "SELECT sl.id, sl.type, sl.label, sl.capacity_mbps, sl.frequency,
+                            sl.from_site_id, sl.to_site_id,
+                            o.name AS other_name, o.lat AS other_lat, o.lng AS other_lng
+                       FROM site_links sl
+                       JOIN sites o ON o.id = CASE WHEN sl.from_site_id = ? THEN sl.to_site_id ELSE sl.from_site_id END
+                      WHERE sl.from_site_id = ? OR sl.to_site_id = ?"
+                );
+                $linkStmt->execute([$id, $id, $id]);
+                $blinks = $linkStmt->fetchAll() ?: [];
+                foreach ($blinks as &$bl) {
+                    $bl['distance_km'] = round(haversine_km(
+                        (float)$site['lat'], (float)$site['lng'],
+                        (float)$bl['other_lat'], (float)$bl['other_lng']
+                    ), 3);
+                }
+                unset($bl);
+
+                $wstats = pdo()->prepare(
+                    "SELECT COUNT(*) AS n,
+                            AVG(wl.health_score) AS avg_h,
+                            MIN(wl.health_score) AS worst_h,
+                            SUM(wl.health_score IS NOT NULL AND wl.health_score < 50) AS degraded
+                       FROM wireless_links wl
+                       JOIN devices d ON d.id = wl.ap_device_id
+                      WHERE d.site_id = ?"
+                );
+                $wstats->execute([$id]);
+                $ws = $wstats->fetch() ?: ['n' => 0, 'avg_h' => null, 'worst_h' => null, 'degraded' => 0];
+
+                echo json_encode([
+                    'ok'    => true,
+                    'kind'  => 'site',
+                    'site'  => [
+                        'id' => (int)$site['id'], 'name' => $site['name'], 'type' => $site['type'],
+                        'lat' => (float)$site['lat'], 'lng' => (float)$site['lng'],
+                        'coverage_radius_m' => $site['coverage_radius_m'] !== null ? (int)$site['coverage_radius_m'] : null,
+                        'notes' => $site['notes'] ?? null,
+                    ],
+                    'devices' => array_map(fn($d) => [
+                        'id' => (int)$d['id'], 'name' => $d['name'],
+                        'role' => $d['role'], 'vendor' => $d['vendor'], 'model' => $d['model'],
+                        'status' => $d['status'], 'last_seen_at' => $d['last_seen_at'],
+                    ], $devices),
+                    'sectors' => array_map(fn($s) => [
+                        'id' => (int)$s['id'], 'name' => $s['name'],
+                        'band' => $s['band'],
+                        'azimuth_deg' => $s['azimuth_deg'] !== null ? (int)$s['azimuth_deg'] : null,
+                        'beamwidth_deg' => $s['beamwidth_deg'] !== null ? (int)$s['beamwidth_deg'] : null,
+                        'customer_count' => (int)($s['customer_count'] ?? 0),
+                        'max_clients' => $s['max_clients'] !== null ? (int)$s['max_clients'] : null,
+                    ], $sectors),
+                    'links' => array_map(fn($b) => [
+                        'id' => (int)$b['id'], 'type' => $b['type'], 'label' => $b['label'],
+                        'capacity_mbps' => $b['capacity_mbps'] !== null ? (float)$b['capacity_mbps'] : null,
+                        'frequency' => $b['frequency'],
+                        'other_name' => $b['other_name'],
+                        'distance_km' => $b['distance_km'],
+                    ], $blinks),
+                    'wireless_summary' => [
+                        'count'       => (int)$ws['n'],
+                        'avg_health'  => $ws['avg_h']    !== null ? (int)round((float)$ws['avg_h'])    : null,
+                        'worst_health'=> $ws['worst_h']  !== null ? (int)$ws['worst_h']  : null,
+                        'degraded'    => (int)$ws['degraded'],
+                    ],
+                ]);
+                exit;
+            }
+
+            default:
+                echo json_encode(['ok' => false, 'error' => 'Unknown detail kind']); exit;
+        }
+    } catch (Throwable $e) {
+        echo json_encode(['ok' => false, 'error' => $e->getMessage()]); exit;
+    }
+}
+
 // Lightweight poll endpoint — JS calls this every ~30s to refresh
 // device statuses and outage state without reloading the whole map.
 if (($_GET['poll'] ?? '') === '1') {
@@ -1216,7 +1602,9 @@ $map_data['wireless_link_summary'] = $wl_by_site;
     left: 50%;
     transform: translateX(-50%) translateY(20px);
     z-index: 900;
-    width: min(960px, calc(100% - 32px));
+    width: min(1040px, calc(100% - 32px));
+    max-height: calc(100% - 36px);
+    overflow-y: auto;
     background: var(--bg-card);
     border: 1px solid var(--border);
     border-radius: var(--radius);
@@ -1225,6 +1613,9 @@ $map_data['wireless_link_summary'] = $wl_by_site;
     opacity: 0;
     pointer-events: none;
     transition: transform .25s cubic-bezier(.2,.7,.2,1), opacity .2s;
+  }
+  .map-detail-panel #mdp-grid {
+    transition: opacity .15s;
   }
   .map-detail-panel.is-open {
     opacity: 1;

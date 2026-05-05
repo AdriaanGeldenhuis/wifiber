@@ -302,6 +302,9 @@
     // Pass a function so the popup re-renders its sector/device lists
     // each time it opens — counts and rows stay fresh after AJAX adds.
     marker.bindPopup(() => sitePopupHTML(s));
+    // Stash the site id on the marker so the popupopen dispatcher (used
+    // by the bottom detail panel) can resolve it without a Map scan.
+    marker.wfSiteId = s.id;
     marker.on('dragend', async (e) => {
       const ll = e.target.getLatLng();
       const r = await postAction('move_site', { id: s.id, lat: ll.lat, lng: ll.lng });
@@ -459,6 +462,7 @@
       icon: dotIcon(STATUS_COLOR[c.status] || '#888', 11, badge),
     });
     marker.bindPopup(clientPopupHTML(c));
+    marker.wfClientId = c.id;
     marker.on('dragend', async (e) => {
       const ll = e.target.getLatLng();
       const r = await postAction('move_client', { id: c.id, lat: ll.lat, lng: ll.lng });
@@ -720,6 +724,7 @@
       }
     );
     poly.bindPopup(sectorPopupHTML(sector, tower.data.name));
+    poly.wfSectorId = sector.id;
     poly.addTo(sectorsLayer);
     sectorIndex.set(sector.id, { data: sector, layer: poly });
     addSectorToTowerIndex(sector);
@@ -1403,55 +1408,25 @@
     return Math.max(0, Math.min(100, p));
   }
 
-  function openLinkDetail(link) {
+  async function openLinkDetail(link) {
     if (!panel || !panelGrid) return;
     const a = siteIndex.get(link.from_site_id);
     const b = siteIndex.get(link.to_site_id);
     if (!a || !b) return;
     const fromSite = a.data, toSite = b.data;
-    const dist = distanceMetres(fromSite.lat, fromSite.lng, toSite.lat, toSite.lng);
-    const cap  = link.capacity_mbps;
-    const sig  = expectedSignalDbm(dist, cap, link.frequency);
-    const sigPct = dbmToPct(sig);
-    // Ratio against a notional 1 Gbps backbone for the bar fill.
-    const capPct = cap ? Math.max(8, Math.min(100, (cap / 1000) * 100)) : 35;
-    const linkTypeLabel = (link.type || '').toUpperCase();
-    const linkLabel     = link.label || (linkTypeLabel + ' link');
 
-    const centerHTML = ''
-      + '<div class="mdp-center">'
-      +   '<div class="mdp-cap-row">'
-      +     '<span>' + escapeHtml(linkLabel) + '</span>'
-      +     '<span class="mdp-cap-val">' + (cap != null ? cap + ' Mbps' : 'Capacity —') + '</span>'
-      +   '</div>'
-      +   '<div class="mdp-cap-bar"><div class="mdp-cap-fill" style="width:' + capPct.toFixed(0) + '%;"></div></div>'
-      +   '<div class="mdp-distance">'
-      +     '<span>' + escapeHtml(fromSite.name) + '</span>'
-      +     '<span class="mdp-arrow"></span>'
-      +     '<span class="mdp-dist-val">' + fmtDistance(dist) + '</span>'
-      +     '<span class="mdp-arrow"></span>'
-      +     '<span>' + escapeHtml(toSite.name) + '</span>'
-      +   '</div>'
-      +   '<div class="mdp-signal-bar">'
-      +     '<div class="mdp-signal-marker" style="left:calc(' + sigPct.toFixed(0) + '% - 1.5px);" title="' + (sig != null ? sig + ' dBm' : 'unknown') + '"></div>'
-      +   '</div>'
-      +   '<div class="mdp-signal-meta">'
-      +     '<span>Expected signal</span>'
-      +     '<span>' + (sig != null ? sig + ' dBm' : 'no data') + '</span>'
-      +   '</div>'
-      +   '<div class="mdp-kv" style="grid-template-columns:1fr 1fr 1fr;">'
-      +     '<div class="mdp-cell"><span class="mdp-label">Type</span><span class="mdp-val">' + escapeHtml(linkTypeLabel) + '</span></div>'
-      +     '<div class="mdp-cell"><span class="mdp-label">Frequency</span><span class="mdp-val">' + escapeHtml(link.frequency || '—') + '</span></div>'
-      +     '<div class="mdp-cell"><span class="mdp-label">Capacity</span><span class="mdp-val">' + (cap != null ? cap + ' Mbps' : '—') + '</span></div>'
-      +   '</div>'
-      +   '<div class="mdp-actions">'
-      +     '<button type="button" class="btn btn-ghost btn-sm" data-mdp-zoom-link="' + link.id + '">Zoom to</button>'
-      +     '<button type="button" class="btn btn-danger btn-sm" data-delete-link="' + link.id + '">Delete</button>'
-      +   '</div>'
-      + '</div>';
-
+    // Render an immediate skeleton from in-memory data so the panel is
+    // visible right away; the fetch fills in real signal/SNR/throughput
+    // when it arrives.
     panel.classList.remove('is-site');
-    panelGrid.innerHTML = siteCardHTML(fromSite, 'a') + centerHTML + siteCardHTML(toSite, 'b');
+    renderLinkPanel({
+      from: { name: fromSite.name, type: fromSite.type, lat: fromSite.lat, lng: fromSite.lng },
+      to:   { name: toSite.name,   type: toSite.type,   lat: toSite.lat,   lng: toSite.lng },
+      link: { id: link.id, type: link.type, label: link.label,
+              capacity_mbps: link.capacity_mbps, frequency: link.frequency },
+      distance_km: distanceMetres(fromSite.lat, fromSite.lng, toSite.lat, toSite.lng) / 1000,
+      wireless_link: null,
+    });
     panel.classList.add('is-open');
     panel.setAttribute('aria-hidden', 'false');
 
@@ -1461,6 +1436,98 @@
       selectedFeature = { kind: 'link', id: link.id, layer: entry.line };
       if (entry.line._path) entry.line._path.classList.add('is-mdp-selected');
     }
+
+    const j = await fetchDetail('link', link.id);
+    if (!j) return;
+    if (!selectedFeature || selectedFeature.kind !== 'link' || selectedFeature.id !== link.id) return;
+    renderLinkPanel(j);
+  }
+
+  // Renders the link panel from a {from, to, link, distance_km, wireless_link}
+  // payload. Used both for the in-memory skeleton render and the API
+  // response render — same template, just more data populated when the
+  // API replies.
+  function renderLinkPanel(j) {
+    const link = j.link;
+    const cap  = link.capacity_mbps;
+    const distM = (j.distance_km || 0) * 1000;
+    const wl   = j.wireless_link;
+
+    // Prefer real measured signal from the matched wireless_link;
+    // fall back to a free-space-loss heuristic so the bar isn't empty.
+    let sig = null, snr = null, ccq = null, hp = null;
+    let tputL = null, tputR = null, capL = null, capR = null;
+    let modu = null, mode = null, lastAge = null;
+    if (wl) {
+      sig = wl.signal_dbm != null ? wl.signal_dbm : null;
+      snr = wl.snr_db     != null ? wl.snr_db     : null;
+      ccq = wl.ccq_pct    != null ? wl.ccq_pct    : null;
+      hp  = wl.health_score != null ? wl.health_score : null;
+      tputL = wl.throughput_local_mbps  != null ? wl.throughput_local_mbps  : null;
+      tputR = wl.throughput_remote_mbps != null ? wl.throughput_remote_mbps : null;
+      capL  = wl.capacity_local_mbps    != null ? wl.capacity_local_mbps    : null;
+      capR  = wl.capacity_remote_mbps   != null ? wl.capacity_remote_mbps   : null;
+      modu  = wl.modulation || null;
+      mode  = wl.wireless_mode || null;
+      lastAge = wl.last_evaluated_at ? fmtAge(wl.last_evaluated_at) : null;
+    }
+    const sigShown = sig != null ? sig : expectedSignalDbm(distM, cap, link.frequency);
+    const sigPct   = dbmToPct(sigShown);
+    const capPct   = cap ? Math.max(8, Math.min(100, (cap / 1000) * 100)) : 35;
+    const linkTypeLabel = (link.type || '').toUpperCase();
+    const linkLabel     = link.label || (linkTypeLabel + ' link');
+    const totalT = (tputL != null || tputR != null) ? ((tputL || 0) + (tputR || 0)) : null;
+    const health = healthBucket(hp);
+    const signalLabel = wl ? 'Measured signal' + (lastAge ? ' · ' + lastAge : '') : 'Expected signal';
+
+    const wlBlock = wl ? ''
+      + '<div class="mdp-kv" style="grid-template-columns:repeat(4,1fr);margin-top:6px;">'
+      +   kvCell('Signal',     fmtDbm(sig))
+      +   kvCell('SNR',        snr != null ? snr + ' dB' : '—')
+      +   kvCell('CCQ',        ccq != null ? Math.round(ccq) + '%' : '—')
+      +   kvCell('Health',     hp != null ? hp + ' / 100' : '—', { color: health.c })
+      +   kvCell('Throughput', totalT != null ? fmtMbps(totalT) : '—')
+      +   kvCell('Capacity',   capL || capR ? fmtMbps((capL || 0) + (capR || 0)) : (cap != null ? cap + ' Mbps' : '—'))
+      +   kvCell('Mode',       mode || '—')
+      +   kvCell('Modulation', modu || '—')
+      + '</div>'
+      : '';
+
+    const centerHTML = ''
+      + '<div class="mdp-center">'
+      +   '<div class="mdp-cap-row">'
+      +     '<span>' + escapeHtml(linkLabel) + '</span>'
+      +     '<span class="mdp-cap-val">' + (cap != null ? cap + ' Mbps' : 'Capacity —') + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-cap-bar"><div class="mdp-cap-fill" style="width:' + capPct.toFixed(0) + '%;"></div></div>'
+      +   '<div class="mdp-distance">'
+      +     '<span>' + escapeHtml(j.from.name) + '</span>'
+      +     '<span class="mdp-arrow"></span>'
+      +     '<span class="mdp-dist-val">' + fmtDistance(distM) + '</span>'
+      +     '<span class="mdp-arrow"></span>'
+      +     '<span>' + escapeHtml(j.to.name) + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-signal-bar">'
+      +     '<div class="mdp-signal-marker" style="left:calc(' + sigPct.toFixed(0) + '% - 1.5px);" title="' + (sigShown != null ? sigShown + ' dBm' : 'unknown') + '"></div>'
+      +   '</div>'
+      +   '<div class="mdp-signal-meta">'
+      +     '<span>' + signalLabel + '</span>'
+      +     '<span>' + (sigShown != null ? sigShown + ' dBm' : 'no data') + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-kv" style="grid-template-columns:1fr 1fr 1fr;">'
+      +     kvCell('Type',      linkTypeLabel)
+      +     kvCell('Frequency', link.frequency || '—')
+      +     kvCell('Capacity',  cap != null ? cap + ' Mbps' : '—')
+      +   '</div>'
+      +   wlBlock
+      +   '<div class="mdp-actions">'
+      +     '<button type="button" class="btn btn-ghost btn-sm" data-mdp-zoom-link="' + link.id + '">Zoom to</button>'
+      +     (wl && wl.id ? '<a class="btn btn-ghost btn-sm" href="/admin/link-view.php?id=' + wl.id + '">Live link</a>' : '')
+      +     '<button type="button" class="btn btn-danger btn-sm" data-delete-link="' + link.id + '">Delete</button>'
+      +   '</div>'
+      + '</div>';
+
+    panelGrid.innerHTML = siteCardFromDetail(j.from, 'a') + centerHTML + siteCardFromDetail(j.to, 'b');
   }
 
   function openSiteDetail(site) {
@@ -1562,10 +1629,367 @@
     }
   });
 
-  // Wire link clicks → open the detail panel. We hook on popupopen so we
-  // don't fight the existing popup binding (which carries the Delete
-  // button) — both surface together and the panel closes when the popup
-  // closes via its own × button or panel close.
+  // Index clients by id once so the detail panel doesn't have to scan
+  // the boot list every time something is selected.
+  const clientById = new Map();
+  (boot.clients || []).forEach((c) => clientById.set(c.id, c));
+
+  // ----- detail-fetch helper (?detail=kind&id=...) ----------------
+  async function fetchDetail(kind, id) {
+    try {
+      const r = await fetch('/admin/map.php?detail=' + encodeURIComponent(kind)
+                          + '&id=' + encodeURIComponent(id),
+                          { credentials: 'same-origin' });
+      const j = await r.json();
+      return (j && j.ok) ? j : null;
+    } catch (e) { return null; }
+  }
+
+  // ----- formatting helpers used by every panel ------------------
+  function fmtDbm(v)  { return v != null ? v + ' dBm' : '—'; }
+  function fmtMbps(v) { return v != null ? (Math.abs(v) >= 100 ? Math.round(v) : v.toFixed(1)) + ' Mbps' : '—'; }
+  function fmtPct(v)  { return v != null ? Math.round(v) + '%' : '—'; }
+  function fmtAge(iso) {
+    if (!iso) return '—';
+    const t = Date.parse(iso);
+    if (isNaN(t)) return iso;
+    const sec = Math.max(0, Math.floor((Date.now() - t) / 1000));
+    if (sec < 60)   return sec + 's ago';
+    if (sec < 3600) return Math.floor(sec / 60)  + 'm ago';
+    if (sec < 86400)return Math.floor(sec / 3600)+ 'h ago';
+    return Math.floor(sec / 86400) + 'd ago';
+  }
+  function healthBucket(score) {
+    if (score == null) return { c: '#888',     l: 'unknown' };
+    if (score >= 75)   return { c: '#22c55e',  l: 'healthy' };
+    if (score >= 50)   return { c: '#eab308',  l: 'fair'    };
+    if (score >= 25)   return { c: '#f97316',  l: 'degraded'};
+    return { c: '#dc2626', l: 'critical' };
+  }
+  function snrPct(snr) {
+    if (snr == null) return null;
+    return Math.max(0, Math.min(100, ((snr - 5) / 35) * 100));   // 5..40 dB → 0..100 %
+  }
+  function dbmToPctStrict(dbm) {
+    if (dbm == null) return null;
+    return Math.max(0, Math.min(100, ((dbm + 95) / 50) * 100));  // -95..-45 dBm
+  }
+
+  // Generic key/value cell row — used by every panel for compact stats
+  function kvCell(label, value, opts) {
+    opts = opts || {};
+    const wide = opts.wide ? ' mdp-cell-wide' : '';
+    const cls  = opts.color ? ' style="color:' + opts.color + ';"' : '';
+    return '<div class="mdp-cell' + wide + '">'
+         +   '<span class="mdp-label">' + escapeHtml(label) + '</span>'
+         +   '<span class="mdp-val"' + cls + ' title="' + escapeHtml(String(value)) + '">'
+         +     escapeHtml(String(value)) + '</span>'
+         + '</div>';
+  }
+
+  // Shared “endpoint card” for any site (used by link + site panels)
+  function siteCardFromDetail(s, role) {
+    if (!s) return '<div class="mdp-card" data-role="' + role + '"><div class="mdp-name"><input value="—" readonly></div></div>';
+    const typeLbl = siteTypeLabel(s.type);
+    const typeCol = SITE_COLOR[s.type] || '#888';
+    const cells = [];
+    cells.push(kvCell('Location', (s.lat != null ? s.lat.toFixed(5) : '—') + ', ' + (s.lng != null ? s.lng.toFixed(5) : '—'), { wide: true }));
+    if (s.devices) {
+      cells.push(kvCell('Devices', s.devices.n + (s.devices.online != null ? ' · ' + s.devices.online + ' online' : '')));
+    }
+    if (s.coverage_radius_m) cells.push(kvCell('Coverage', s.coverage_radius_m + ' m'));
+    return ''
+      + '<div class="mdp-card" data-role="' + role + '">'
+      +   '<div class="mdp-name">'
+      +     '<input type="text" value="' + escapeHtml(s.name) + '" readonly>'
+      +     '<span class="mdp-type-pill" style="color:' + typeCol + ';background:' + typeCol + '20;">' + escapeHtml(typeLbl) + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-kv">' + cells.join('') + '</div>'
+      + '</div>';
+  }
+
+  /* ---------- Sector detail ---------- */
+  async function openSectorDetail(sector) {
+    if (!panel || !panelGrid) return;
+    // Skeleton with what's in memory (sectorIndex) — fill in from API
+    // when the fetch returns. Lets the panel feel snappy on slow links.
+    const towerEntry = siteIndex.get(sector.tower_id);
+    showSectorSkeleton(sector, towerEntry ? towerEntry.data : null);
+    selectedFeature = { kind: 'sector', id: sector.id, layer: (sectorIndex.get(sector.id) || {}).layer };
+    if (selectedFeature.layer && selectedFeature.layer._path) selectedFeature.layer._path.classList.add('is-mdp-selected');
+    if (pulseRing) { map.removeLayer(pulseRing); pulseRing = null; }
+
+    const j = await fetchDetail('sector', sector.id);
+    if (!j) return;
+    if (!selectedFeature || selectedFeature.kind !== 'sector' || selectedFeature.id !== sector.id) return; // user moved on
+    renderSectorDetail(j);
+  }
+
+  function showSectorSkeleton(s, tower) {
+    const sec = s;
+    const towerCard = tower ? siteCardFromDetail({
+      name: tower.name, type: tower.type, lat: tower.lat, lng: tower.lng,
+    }, 'tower') : '<div class="mdp-card"></div>';
+    panel.classList.remove('is-site');
+    panelGrid.innerHTML = ''
+      + sectorCardHTML(sec, null, null, null)
+      + sectorCenterHTML(sec, null, null, null)
+      + towerCard;
+    panel.classList.add('is-open');
+    panel.setAttribute('aria-hidden', 'false');
+  }
+
+  function renderSectorDetail(j) {
+    const s = j.sector, t = j.tower, ap = j.ap_device, st = j.stats || {}, oa = j.outage;
+    const towerCard = t ? siteCardFromDetail({
+      name: t.name, type: t.type, lat: t.lat, lng: t.lng,
+    }, 'tower') : '<div class="mdp-card"></div>';
+    panel.classList.remove('is-site');
+    panelGrid.innerHTML = ''
+      + sectorCardHTML(s, ap, j.customer_count, oa)
+      + sectorCenterHTML(s, ap, st, oa)
+      + towerCard;
+  }
+
+  function sectorCardHTML(s, ap, customerCount, outage) {
+    const az = s.azimuth_deg != null ? s.azimuth_deg + '°' : '—';
+    const bw = s.beamwidth_deg != null ? s.beamwidth_deg + '°' : '—';
+    const fq = s.frequency_mhz != null
+             ? s.frequency_mhz + ' MHz' + (s.channel_width_mhz ? ' / ' + s.channel_width_mhz + ' MHz' : '')
+             : '—';
+    const tx = s.tx_power_dbm != null ? s.tx_power_dbm + ' dBm' : '—';
+    const bandCol = BAND_COLOR[s.band] || BAND_COLOR.other;
+    const cells = [
+      kvCell('Azimuth', az), kvCell('Beamwidth', bw),
+      kvCell('Frequency', fq, { wide: true }),
+      kvCell('TX power', tx),
+      kvCell('Mode', s.wireless_mode || '—'),
+    ];
+    if (s.ssid)        cells.push(kvCell('SSID', s.ssid, { wide: true }));
+    if (s.security)    cells.push(kvCell('Security', s.security));
+    if (ap)            cells.push(kvCell('AP', ap.name + ' · ' + ap.status));
+    if (s.max_clients) {
+      const cnt = customerCount != null ? customerCount : '—';
+      cells.push(kvCell('Customers', cnt + ' / ' + s.max_clients));
+    } else if (customerCount != null) {
+      cells.push(kvCell('Customers', String(customerCount)));
+    }
+    return ''
+      + '<div class="mdp-card" data-role="sector">'
+      +   '<div class="mdp-name">'
+      +     '<input type="text" value="' + escapeHtml(s.name) + '" readonly>'
+      +     '<span class="mdp-type-pill" style="color:' + bandCol + ';background:' + bandCol + '20;">' + escapeHtml(s.band) + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-kv">' + cells.join('') + '</div>'
+      + '</div>';
+  }
+
+  function sectorCenterHTML(s, ap, st, outage) {
+    const cap = (s.max_clients && s.max_clients > 0 && st && st.link_count != null)
+              ? Math.min(100, Math.round((st.link_count / s.max_clients) * 100))
+              : null;
+    const capPct = cap != null ? cap : 35;
+    const health = st && st.avg_health != null ? st.avg_health : null;
+    const sigPct = health != null ? health : 50;
+    const tput   = st && st.total_throughput != null ? st.total_throughput : null;
+    const peak   = st && st.peak_throughput  != null ? st.peak_throughput  : null;
+    const apOff  = ap && ap.status === 'offline';
+    const outageBlock = outage
+      ? '<div class="pp-outage" style="margin:0 0 8px;">'
+        + '<strong>Active outage</strong> · started ' + escapeHtml(outage.started_at)
+        + (outage.cause ? ' · ' + escapeHtml(outage.cause) : '')
+        + (outage.affected_count ? ' · ' + outage.affected_count + ' affected' : '')
+        + '</div>'
+      : '';
+    return ''
+      + '<div class="mdp-center">'
+      +   outageBlock
+      +   '<div class="mdp-cap-row">'
+      +     '<span>Capacity</span>'
+      +     '<span class="mdp-cap-val">' + (cap != null ? cap + '%' : '—') + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-cap-bar"><div class="mdp-cap-fill" style="width:' + capPct + '%;background:' + (cap != null && cap >= 90 ? 'linear-gradient(90deg,#f97316,#dc2626)' : (cap != null && cap >= 70 ? 'linear-gradient(90deg,#eab308,#f97316)' : 'linear-gradient(90deg,#05DAFD,#0c8)')) + ';"></div></div>'
+      +   '<div class="mdp-distance">'
+      +     '<span>Throughput</span>'
+      +     '<span class="mdp-arrow"></span>'
+      +     '<span class="mdp-dist-val">' + (tput != null ? fmtMbps(tput) : 'no data') + '</span>'
+      +     '<span class="mdp-arrow"></span>'
+      +     '<span>peak ' + (peak != null ? fmtMbps(peak) : '—') + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-signal-bar">'
+      +     '<div class="mdp-signal-marker" style="left:calc(' + sigPct + '% - 1.5px);"></div>'
+      +   '</div>'
+      +   '<div class="mdp-signal-meta">'
+      +     '<span>Avg link health</span>'
+      +     '<span>' + (health != null ? health + ' / 100' : 'no data') + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-kv" style="grid-template-columns:repeat(4,1fr);">'
+      +     kvCell('Links',      st && st.link_count != null ? st.link_count : 0)
+      +     kvCell('Avg signal', st && st.avg_signal != null ? st.avg_signal + ' dBm' : '—')
+      +     kvCell('Avg SNR',    st && st.avg_snr    != null ? st.avg_snr    + ' dB'  : '—')
+      +     kvCell('Avg CCQ',    st && st.avg_ccq    != null ? Math.round(st.avg_ccq) + '%' : '—')
+      +   '</div>'
+      +   '<div class="mdp-actions">'
+      +     '<button type="button" class="btn btn-ghost btn-sm" data-edit-sector="' + s.id + '">Edit</button>'
+      +     '<button type="button" class="btn btn-danger btn-sm" data-delete-sector="' + s.id + '">Delete</button>'
+      +     (s.id ? '<a class="btn btn-ghost btn-sm" href="/admin/sector-edit.php?id=' + s.id + '">Open</a>' : '')
+      +     (ap && ap.id ? '<a class="btn btn-ghost btn-sm" href="/admin/device-view.php?id=' + ap.id + '">AP</a>' : '')
+      +   '</div>'
+      + '</div>';
+  }
+
+  /* ---------- Client detail ---------- */
+  async function openClientDetail(client) {
+    if (!panel || !panelGrid) return;
+    showClientSkeleton(client);
+    selectedFeature = { kind: 'client', id: client.id };
+    if (pulseRing) { map.removeLayer(pulseRing); pulseRing = null; }
+    if (client.lat != null && client.lng != null) {
+      pulseRing = L.marker([client.lat, client.lng], {
+        interactive: false,
+        icon: L.divIcon({ className: '', html: '<div class="mdp-pulse-marker"></div>',
+                          iconSize: [22, 22], iconAnchor: [11, 11] }),
+      }).addTo(map);
+    }
+    const j = await fetchDetail('client', client.id);
+    if (!j) return;
+    if (!selectedFeature || selectedFeature.kind !== 'client' || selectedFeature.id !== client.id) return;
+    renderClientDetail(j);
+  }
+
+  function showClientSkeleton(c) {
+    panel.classList.remove('is-site');
+    panelGrid.innerHTML = ''
+      + clientCardHTML(c)
+      + clientCenterHTML(c, null, null, null)
+      + '<div class="mdp-card"><div class="mdp-name"><input value="…" readonly></div></div>';
+    panel.classList.add('is-open');
+    panel.setAttribute('aria-hidden', 'false');
+  }
+
+  function renderClientDetail(j) {
+    const c   = j.client;
+    const sec = j.sector;
+    const t   = j.tower;
+    const ap  = j.ap_device;
+    const wl  = j.wireless_link;
+    const sectorCardHTML = sec ? ''
+      + '<div class="mdp-card" data-role="sector">'
+      +   '<div class="mdp-name">'
+      +     '<input type="text" value="' + escapeHtml(sec.name) + '" readonly>'
+      +     '<span class="mdp-type-pill" style="color:' + (BAND_COLOR[sec.band] || '#888') + ';background:' + (BAND_COLOR[sec.band] || '#888') + '20;">' + escapeHtml(sec.band || '') + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-kv">'
+      +     kvCell('Tower', t ? t.name : '—', { wide: true })
+      +     kvCell('Azimuth',   sec.azimuth_deg != null ? sec.azimuth_deg + '°' : '—')
+      +     kvCell('Beamwidth', sec.beamwidth_deg != null ? sec.beamwidth_deg + '°' : '—')
+      +     kvCell('Frequency', sec.frequency_mhz != null ? sec.frequency_mhz + ' MHz' : '—')
+      +     kvCell('Channel',   sec.channel_width_mhz != null ? sec.channel_width_mhz + ' MHz' : '—')
+      +     (ap ? kvCell('AP', ap.name + ' · ' + ap.status, { wide: true, color: ap.status === 'offline' ? '#dc2626' : null }) : '')
+      +   '</div>'
+      + '</div>'
+      : '<div class="mdp-card"><div class="mdp-name"><input value="No sector assigned" readonly></div></div>';
+
+    panel.classList.remove('is-site');
+    panelGrid.innerHTML = clientCardHTML(c) + clientCenterHTML(c, wl, j.distance_km, ap) + sectorCardHTML;
+  }
+
+  function clientCardHTML(c) {
+    const statusCol = STATUS_COLOR[c.status] || '#888';
+    const cells = [];
+    cells.push(kvCell('Username',  c.username || '—', { wide: true }));
+    if (c.name)     cells.push(kvCell('Name',    c.name,    { wide: true }));
+    if (c.address)  cells.push(kvCell('Address', c.address, { wide: true }));
+    if (c.phone)    cells.push(kvCell('Phone',   c.phone));
+    if (c.email)    cells.push(kvCell('Email',   c.email));
+    if (c.lat != null && c.lng != null) {
+      cells.push(kvCell('Coords', c.lat.toFixed(5) + ', ' + c.lng.toFixed(5), { wide: true }));
+    }
+    return ''
+      + '<div class="mdp-card" data-role="client">'
+      +   '<div class="mdp-name">'
+      +     '<input type="text" value="' + escapeHtml(c.account_no || c.username || ('client ' + c.id)) + '" readonly>'
+      +     '<span class="mdp-type-pill" style="color:' + statusCol + ';background:' + statusCol + '20;">' + escapeHtml(c.status || '') + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-kv">' + cells.join('') + '</div>'
+      + '</div>';
+  }
+
+  function clientCenterHTML(c, wl, distKm, ap) {
+    const sig = wl && wl.signal_dbm != null ? wl.signal_dbm : null;
+    const snr = wl && wl.snr_db     != null ? wl.snr_db     : null;
+    const ccq = wl && wl.ccq_pct    != null ? wl.ccq_pct    : null;
+    const hp  = wl && wl.health_score != null ? wl.health_score : null;
+    const tx  = wl && wl.tx_rate_mbps != null ? wl.tx_rate_mbps : null;
+    const rx  = wl && wl.rx_rate_mbps != null ? wl.rx_rate_mbps : null;
+    const tputL = wl && wl.throughput_local_mbps != null ? wl.throughput_local_mbps : null;
+    const tputR = wl && wl.throughput_remote_mbps != null ? wl.throughput_remote_mbps : null;
+    const totalT = (tputL != null || tputR != null)
+                   ? ((tputL || 0) + (tputR || 0)) : null;
+    const cap   = wl && (wl.capacity_local_mbps || wl.capacity_remote_mbps);
+    const sigPct = (() => {
+      const p = dbmToPctStrict(sig);
+      if (p != null) return p;
+      const sp = snrPct(snr);
+      return sp != null ? sp : 50;
+    })();
+    const health = healthBucket(hp);
+    const lastAge = wl && wl.last_evaluated_at ? fmtAge(wl.last_evaluated_at) : null;
+    const apOff = ap && ap.status === 'offline';
+
+    const apBanner = apOff
+      ? '<div class="pp-outage" style="margin:0 0 8px;background:rgba(220,68,68,.18);border-left-color:#d44;">'
+        + '<strong>AP offline</strong> · ' + escapeHtml(ap.name)
+        + (ap.last_seen_at ? ' · last seen ' + fmtAge(ap.last_seen_at) : '')
+        + '</div>'
+      : '';
+    const noWlBanner = !wl
+      ? '<div class="pp-outage" style="margin:0 0 8px;background:rgba(120,140,160,.16);border-left-color:#888;">'
+        + 'No live wireless-link sample for this client yet.'
+        + '</div>'
+      : '';
+
+    return ''
+      + '<div class="mdp-center">'
+      +   apBanner
+      +   noWlBanner
+      +   '<div class="mdp-cap-row">'
+      +     '<span>Throughput' + (lastAge ? ' · ' + lastAge : '') + '</span>'
+      +     '<span class="mdp-cap-val">' + (totalT != null ? fmtMbps(totalT) : '—') + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-cap-bar"><div class="mdp-cap-fill" style="width:' + (totalT != null && cap ? Math.min(100, (totalT / cap) * 100) : 35).toFixed(0) + '%;"></div></div>'
+      +   '<div class="mdp-distance">'
+      +     '<span>Tower</span>'
+      +     '<span class="mdp-arrow"></span>'
+      +     '<span class="mdp-dist-val">' + (distKm != null ? distKm + ' km' : '—') + '</span>'
+      +     '<span class="mdp-arrow"></span>'
+      +     '<span>CPE</span>'
+      +   '</div>'
+      +   '<div class="mdp-signal-bar">'
+      +     '<div class="mdp-signal-marker" style="left:calc(' + sigPct.toFixed(0) + '% - 1.5px);" title="' + (sig != null ? sig + ' dBm' : (snr != null ? snr + ' dB SNR' : 'unknown')) + '"></div>'
+      +   '</div>'
+      +   '<div class="mdp-signal-meta">'
+      +     '<span>' + (sig != null ? 'Signal ' + sig + ' dBm' : (snr != null ? 'SNR ' + snr + ' dB' : 'No signal data')) + '</span>'
+      +     '<span style="color:' + health.c + ';font-weight:600;">' + (hp != null ? 'Health ' + hp : health.l) + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-kv" style="grid-template-columns:repeat(4,1fr);">'
+      +     kvCell('Signal', fmtDbm(sig))
+      +     kvCell('SNR',    snr != null ? snr + ' dB' : '—')
+      +     kvCell('CCQ',    ccq != null ? Math.round(ccq) + '%' : '—')
+      +     kvCell('Mode',   wl && wl.wireless_mode ? wl.wireless_mode : '—')
+      +     kvCell('TX rate', tx != null ? fmtMbps(tx) : '—')
+      +     kvCell('RX rate', rx != null ? fmtMbps(rx) : '—')
+      +     kvCell('TX power', wl && wl.tx_power_dbm_local != null ? wl.tx_power_dbm_local + ' dBm' : '—')
+      +     kvCell('Modulation', wl && wl.modulation ? wl.modulation : '—')
+      +   '</div>'
+      +   '<div class="mdp-actions">'
+      +     '<a class="btn btn-ghost btn-sm" href="/admin/client-edit.php?id=' + c.id + '">Open record</a>'
+      +     (wl && wl.id ? '<a class="btn btn-ghost btn-sm" href="/admin/link-view.php?id=' + wl.id + '">Live link</a>' : '')
+      +   '</div>'
+      + '</div>';
+  }
+
+  /* ---------- Wire popupopen → open the right detail panel ---------- */
   map.on('popupopen', (e) => {
     const src = e.popup && e.popup._source;
     if (!src) return;
@@ -1574,27 +1998,29 @@
       if (entry) openLinkDetail(entry.data);
       return;
     }
-    // Site marker — match by lat/lng since markers don't carry an id.
-    if (src instanceof L.Marker) {
-      const ll = src.getLatLng();
-      let match = null;
-      siteIndex.forEach((entry) => {
-        if (!match && entry.marker === src) match = entry.data;
-      });
-      if (match) openSiteDetail(match);
+    if (src.wfSectorId != null) {
+      const entry = sectorIndex.get(src.wfSectorId);
+      if (entry) openSectorDetail(entry.data);
+      return;
+    }
+    if (src.wfSiteId != null) {
+      const entry = siteIndex.get(src.wfSiteId);
+      if (entry) openSiteDetail(entry.data);
+      return;
+    }
+    if (src.wfClientId != null) {
+      const c = clientById.get(src.wfClientId);
+      if (c) openClientDetail(c);
+      return;
     }
   });
   map.on('popupclose', (e) => {
-    // Only auto-close the panel if its current selection matches the
-    // popup that just closed — keeps the panel sticky when the operator
-    // dismisses an unrelated popup.
     const src = e.popup && e.popup._source;
     if (!selectedFeature || !src) return;
-    if (selectedFeature.kind === 'link' && src.wfLinkId === selectedFeature.id) closePanel();
-    else if (selectedFeature.kind === 'site' && src instanceof L.Marker) {
-      const entry = siteIndex.get(selectedFeature.id);
-      if (entry && entry.marker === src) closePanel();
-    }
+    if      (selectedFeature.kind === 'link'   && src.wfLinkId   === selectedFeature.id) closePanel();
+    else if (selectedFeature.kind === 'sector' && src.wfSectorId === selectedFeature.id) closePanel();
+    else if (selectedFeature.kind === 'site'   && src.wfSiteId   === selectedFeature.id) closePanel();
+    else if (selectedFeature.kind === 'client' && src.wfClientId === selectedFeature.id) closePanel();
   });
 
   /* ---------- live refresh (device status + active outages) ----------
