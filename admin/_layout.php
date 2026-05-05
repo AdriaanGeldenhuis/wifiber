@@ -50,10 +50,11 @@ $nav = [
         ['key' => 'radius',           'label' => 'RADIUS / NAS',       'href' => '/admin/radius.php'],
     ]],
     ['group' => 'Website Content', 'items' => [
-        ['key' => 'slides',  'label' => 'Hero slider',      'href' => '/admin/slides.php'],
-        ['key' => 'pricing', 'label' => 'Pricing (public)', 'href' => '/admin/pricing.php'],
-        ['key' => 'legal',   'label' => 'Legal pages',      'href' => '/admin/legal.php'],
-        ['key' => 'images',  'label' => 'Image library',    'href' => '/admin/images.php'],
+        ['key' => 'slides',   'label' => 'Hero slider',      'href' => '/admin/slides.php'],
+        ['key' => 'pricing',  'label' => 'Pricing (public)', 'href' => '/admin/pricing.php'],
+        ['key' => 'legal',    'label' => 'Legal pages',      'href' => '/admin/legal.php'],
+        ['key' => 'partners', 'label' => 'Partner logos',    'href' => '/admin/partners.php'],
+        ['key' => 'images',   'label' => 'Image library',    'href' => '/admin/images.php'],
     ]],
     ['group' => 'System Settings', 'items' => [
         ['key' => 'settings',     'label' => 'Site settings', 'href' => '/admin/settings.php'],

@@ -3,6 +3,12 @@ $page_title = 'WiFIBER';
 $page_desc  = 'Wireless internet for the Vaal Triangle. Fast, secure and seamless connectivity for home and business.';
 $page_slug  = '/';
 $slides     = require __DIR__ . '/includes/slides.php';
+
+$partners_file = __DIR__ . '/data/partners.json';
+$partners_data = is_file($partners_file) ? (json_decode((string)@file_get_contents($partners_file), true) ?: []) : [];
+$partners_label = $partners_data['label'] ?? 'Powered by industry-leading partners';
+$partner_logos  = $partners_data['logos'] ?? [];
+
 require __DIR__ . '/includes/header.php';
 ?>
 
@@ -125,6 +131,9 @@ require __DIR__ . '/includes/header.php';
     </div>
     <div class="feature-grid">
       <div class="feature">
+        <span class="feature-corner tr"></span>
+        <span class="feature-corner bl"></span>
+        <span class="feature-num"></span>
         <div class="feature-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 18 0"/><path d="M7 12a5 5 0 0 1 10 0"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>
         </div>
@@ -132,6 +141,9 @@ require __DIR__ . '/includes/header.php';
         <p>Real humans answering the phone. Most issues resolved on the first call.</p>
       </div>
       <div class="feature">
+        <span class="feature-corner tr"></span>
+        <span class="feature-corner bl"></span>
+        <span class="feature-num"></span>
         <div class="feature-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 13l4 4L19 7"/></svg>
         </div>
@@ -139,6 +151,9 @@ require __DIR__ . '/includes/header.php';
         <p>Hassle-free setup, usually within days &mdash; not weeks.</p>
       </div>
       <div class="feature">
+        <span class="feature-corner tr"></span>
+        <span class="feature-corner bl"></span>
+        <span class="feature-num"></span>
         <div class="feature-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
         </div>
@@ -146,6 +161,9 @@ require __DIR__ . '/includes/header.php';
         <p>Unshared bandwidth on premium tiers. The speed you pay for is the speed you get.</p>
       </div>
       <div class="feature">
+        <span class="feature-corner tr"></span>
+        <span class="feature-corner bl"></span>
+        <span class="feature-num"></span>
         <div class="feature-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v6M12 22v-6M4.93 4.93l4.24 4.24M19.07 19.07l-4.24-4.24M2 12h6M22 12h-6M4.93 19.07l4.24-4.24M19.07 4.93l-4.24 4.24"/></svg>
         </div>
@@ -153,6 +171,9 @@ require __DIR__ . '/includes/header.php';
         <p>Redundant power, links and gear so your connection stays up when others go down.</p>
       </div>
       <div class="feature">
+        <span class="feature-corner tr"></span>
+        <span class="feature-corner bl"></span>
+        <span class="feature-num"></span>
         <div class="feature-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01"/></svg>
         </div>
@@ -160,6 +181,9 @@ require __DIR__ . '/includes/header.php';
         <p>Ubiquiti, MikroTik and enterprise-grade hardware end to end.</p>
       </div>
       <div class="feature">
+        <span class="feature-corner tr"></span>
+        <span class="feature-corner bl"></span>
+        <span class="feature-num"></span>
         <div class="feature-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1l3 6 6 1-4.5 4.5L18 19l-6-3-6 3 1.5-6.5L3 8l6-1z"/></svg>
         </div>
@@ -170,17 +194,22 @@ require __DIR__ . '/includes/header.php';
   </div>
 </section>
 
+<?php if (!empty($partner_logos)): ?>
 <section class="partners">
   <div class="container">
-    <p class="partners-label">Powered by industry-leading partners</p>
+    <p class="partners-label"><?= htmlspecialchars($partners_label) ?></p>
     <div class="partner-logos">
-      <img src="<?= asset('images/partner-ubiquiti.webp') ?>" alt="Ubiquiti" loading="lazy">
-      <img src="<?= asset('images/partner-mikrotik.webp') ?>" alt="MikroTik" loading="lazy">
-      <img src="<?= asset('images/partner-scoop.webp') ?>" alt="Scoop" loading="lazy">
-      <img src="<?= asset('images/partner-teraco.webp') ?>" alt="Teraco" loading="lazy">
+      <?php foreach ($partner_logos as $p):
+        $img = (string)($p['image'] ?? '');
+        $alt = (string)($p['alt']   ?? '');
+        if ($img === '') continue;
+      ?>
+        <img src="<?= asset('images/' . $img) ?>" alt="<?= htmlspecialchars($alt) ?>" loading="lazy">
+      <?php endforeach; ?>
     </div>
   </div>
 </section>
+<?php endif; ?>
 
 <section class="section" id="contact">
   <div class="container">
