@@ -201,7 +201,7 @@ p { margin: 0 0 1em; color: var(--text-dim); }
 }
 .logo:hover { color: var(--text); transform: translateY(-1px); }
 .logo img {
-  height: 64px;
+  height: 128px;
   width: auto;
   filter: drop-shadow(0 0 14px rgba(5,218,253,.4));
   transition: filter .25s ease;
@@ -354,7 +354,7 @@ p { margin: 0 0 1em; color: var(--text-dim); }
   .nav-toggle { display: flex; }
   .main-nav {
     position: fixed;
-    inset: 92px 0 auto 0;
+    inset: 156px 0 auto 0;
     background:
       linear-gradient(180deg, rgba(8,12,18,.98), rgba(4,8,13,.98));
     backdrop-filter: blur(16px);
@@ -1199,7 +1199,7 @@ p { margin: 0 0 1em; color: var(--text-dim); }
   transform: translateY(-50%);
 }
 
-.footer-logo { height: 56px; width: auto; margin-bottom: 18px; filter: drop-shadow(0 0 12px rgba(5,218,253,.2)); }
+.footer-logo { height: 112px; width: auto; margin-bottom: 18px; filter: drop-shadow(0 0 12px rgba(5,218,253,.2)); }
 .footer-mission { font-size: .92rem; max-width: 340px; line-height: 1.65; }
 
 .footer-status {
