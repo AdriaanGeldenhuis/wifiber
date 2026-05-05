@@ -1013,6 +1013,80 @@ $map_data['wireless_link_summary'] = $wl_by_site;
     pointer-events: auto;
   }
 
+  /* When the sidebar is pinned open via the toggle button, behave the
+     same as :hover. Lets touch / keyboard users open it without a
+     hover state. The body.map-side-pinned class is toggled in JS. */
+  body:has(.map-fs).map-side-pinned .portal-side {
+    width: 252px;
+    padding: 24px 16px;
+    background: var(--bg-elev);
+    border-right-color: var(--border);
+    box-shadow: 8px 0 24px rgba(0,0,0,.5);
+    overflow-y: auto;
+  }
+  body:has(.map-fs).map-side-pinned .portal-side > * {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  /* Floating chevron — mounts at the very left edge so it always sits
+     on top of the 6px collapsed strip; slides to the right edge of
+     the expanded sidebar (and flips its arrow) when the sidebar is
+     open via hover or pin. Visible on every device — primary trigger
+     on touch (where there's no hover) and a one-click alternative on
+     desktop when you don't want to chase the edge. */
+  body:has(.map-fs) .map-sidebar-toggle {
+    position: fixed;
+    top: 14px;
+    left: 14px;
+    z-index: 1600;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border-radius: 6px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 10px rgba(0,0,0,.45);
+    transition: left .22s cubic-bezier(.2,.7,.2,1),
+                color .15s, background .15s, border-color .15s;
+  }
+  body:has(.map-fs) .map-sidebar-toggle:hover {
+    background: var(--accent-soft);
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+  body:has(.map-fs) .map-sidebar-toggle svg {
+    width: 16px;
+    height: 16px;
+    stroke: currentColor;
+    stroke-width: 2;
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform .22s cubic-bezier(.2,.7,.2,1);
+  }
+  /* Slide the button to the open-sidebar edge whenever the nav is
+     showing — both pinned-open AND hover-open. */
+  body:has(.map-fs) .portal-side:hover ~ .map-sidebar-toggle,
+  body:has(.map-fs).map-side-pinned .map-sidebar-toggle {
+    left: 260px;
+  }
+  body:has(.map-fs) .portal-side:hover ~ .map-sidebar-toggle svg,
+  body:has(.map-fs).map-side-pinned .map-sidebar-toggle svg {
+    transform: rotate(180deg);
+  }
+  /* On narrow viewports the sidebar takes the whole screen when open,
+     so the button slides all the way to the right edge. */
+  @media (max-width: 600px) {
+    body:has(.map-fs).map-side-pinned .portal-side { width: 100vw; }
+    body:has(.map-fs).map-side-pinned .map-sidebar-toggle { left: calc(100vw - 46px); }
+  }
+
   .map-fs {
     display: flex;
     flex-direction: column;
@@ -2180,6 +2254,16 @@ $map_data['wireless_link_summary'] = $wl_by_site;
   }
 </style>
 
+<!-- Sidebar pin toggle — primary trigger for touch devices (no hover),
+     also a one-click alternative on desktop. Click toggles body class
+     map-side-pinned which the .portal-side rules above pick up. -->
+<button id="map-sidebar-toggle" class="map-sidebar-toggle" type="button"
+        aria-label="Toggle navigation" aria-expanded="false">
+  <svg viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M5 2l6 6-6 6"/>
+  </svg>
+</button>
+
 <div class="map-fs">
   <div class="map-bar">
     <h1>Network map</h1>
@@ -2329,6 +2413,36 @@ $map_data['wireless_link_summary'] = $wl_by_site;
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
         crossorigin="anonymous"></script>
 <script src="/assets/js/admin-map.js" defer></script>
+
+<script>
+/* Sidebar pin toggle — taps the floating chevron on/off so phones,
+   tablets and keyboard users can open the admin nav without hover.
+   Also closes when you tap outside the sidebar. */
+(function () {
+  const btn  = document.getElementById('map-sidebar-toggle');
+  const side = document.querySelector('.portal-side');
+  if (!btn) return;
+  function setOpen(open) {
+    document.body.classList.toggle('map-side-pinned', open);
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  }
+  btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    setOpen(!document.body.classList.contains('map-side-pinned'));
+  });
+  // Tap outside the sidebar closes it (only when it's pinned — hover
+  // mode handles its own dismissal naturally).
+  document.addEventListener('click', (e) => {
+    if (!document.body.classList.contains('map-side-pinned')) return;
+    if (e.target.closest('.portal-side') || e.target.closest('.map-sidebar-toggle')) return;
+    setOpen(false);
+  });
+  // Esc closes it too.
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && document.body.classList.contains('map-side-pinned')) setOpen(false);
+  });
+})();
+</script>
 
 <script>
 /* Coverage heatmap — operator picks a sector, fetches a GeoJSON grid
