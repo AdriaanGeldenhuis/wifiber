@@ -38,7 +38,32 @@
   }
 
   /* ---------- map + layers ---------- */
-  const map = L.map('map', { zoomControl: true }).setView(boot.center, boot.zoom);
+
+  // Persisted view state — operator returns to the same zoom, pan,
+  // tile (Streets / Satellite) and toggle layout they left.
+  // Versioned so we can change the schema without colliding with
+  // somebody's stale entry.
+  const MAP_STATE_KEY = 'wifiber.admin-map.v1';
+  function loadMapState() {
+    try { return JSON.parse(localStorage.getItem(MAP_STATE_KEY) || 'null'); }
+    catch (e) { return null; }
+  }
+  function saveMapState(patch) {
+    try {
+      const cur = loadMapState() || {};
+      const merged = Object.assign(cur, patch);
+      if (patch && patch.toggles) {
+        merged.toggles = Object.assign(cur.toggles || {}, patch.toggles);
+      }
+      localStorage.setItem(MAP_STATE_KEY, JSON.stringify(merged));
+    } catch (e) { /* localStorage unavailable / quota — ignore */ }
+  }
+  const savedState = loadMapState();
+  const initialCenter = (savedState && Array.isArray(savedState.center) && savedState.center.length === 2)
+                        ? savedState.center : boot.center;
+  const initialZoom   = (savedState && typeof savedState.zoom === 'number') ? savedState.zoom : boot.zoom;
+
+  const map = L.map('map', { zoomControl: true }).setView(initialCenter, initialZoom);
   // Expose the map for inline overlays (wireless link health rings, etc.)
   // that live in PHP files rather than this bundle.
   window.WIFIBER_MAP = map;
@@ -53,8 +78,22 @@
       { attribution: 'Tiles &copy; Esri', maxZoom: 19 }
     ),
   };
-  tileLayers.Streets.addTo(map);
+  const initialTile = (savedState && tileLayers[savedState.tile]) ? savedState.tile : 'Streets';
+  tileLayers[initialTile].addTo(map);
   L.control.layers(tileLayers, {}, { position: 'topright', collapsed: false }).addTo(map);
+
+  // Persist viewport + tile choice on every change.  Round to 6 dp so
+  // the localStorage payload doesn't churn on sub-meter pan jitter.
+  map.on('moveend zoomend', () => {
+    const c = map.getCenter();
+    saveMapState({
+      center: [+c.lat.toFixed(6), +c.lng.toFixed(6)],
+      zoom:   map.getZoom(),
+    });
+  });
+  map.on('baselayerchange', (e) => {
+    if (e && e.name) saveMapState({ tile: e.name });
+  });
 
   const sitesLayer    = L.layerGroup().addTo(map);
   const linksLayer    = L.layerGroup().addTo(map);
@@ -179,6 +218,64 @@
   document.getElementById('toggle-sectors').addEventListener('change', (e) => {
     e.target.checked ? sectorsLayer.addTo(map) : map.removeLayer(sectorsLayer);
   });
+
+  // Persist + restore per-toggle state across page loads. Covers the
+  // base layer toggles above and the overlay toggles defined in the
+  // inline scripts at the bottom of map.php (which install their own
+  // change handlers — our listener piggybacks rather than fighting
+  // them, and the restore step dispatches a synthetic change so the
+  // existing handlers wire/unwire their layers).
+  const PERSISTED_TOGGLES = [
+    'toggle-sites', 'toggle-links', 'toggle-clients',
+    'toggle-coverage', 'toggle-sectors',
+    'toggle-signal', 'toggle-rfdensity', 'toggle-throughput',
+  ];
+  PERSISTED_TOGGLES.forEach((id) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('change', () => {
+      saveMapState({ toggles: { [id]: el.checked } });
+    });
+  });
+  // Outage history is a <select>, not a checkbox.
+  const outagePicker = document.getElementById('toggle-outage-history');
+  if (outagePicker) {
+    outagePicker.addEventListener('change', () => {
+      saveMapState({ outage_history: outagePicker.value || '' });
+    });
+  }
+  // Restore on load — set the checkbox to its saved state and
+  // dispatch a synthetic change so the existing handler add/removes
+  // the layer to match.  Two passes: an immediate one for the toggles
+  // wired here in admin-map.js (sites/links/clients/coverage/sectors),
+  // and a deferred one ~350ms later for the signal / RF / throughput
+  // toggles whose handlers are bound by the inline scripts at the
+  // bottom of map.php (those poll for window.WIFIBER_MAP every 250ms).
+  function restoreToggles(ids) {
+    if (!savedState || !savedState.toggles) return;
+    ids.forEach((id) => {
+      const want = savedState.toggles[id];
+      if (want === undefined) return;
+      const el = document.getElementById(id);
+      if (!el) return;
+      el.checked = !!want;
+      el.dispatchEvent(new Event('change'));
+    });
+  }
+  setTimeout(() => restoreToggles([
+    'toggle-sites', 'toggle-links', 'toggle-clients',
+    'toggle-coverage', 'toggle-sectors',
+  ]), 0);
+  setTimeout(() => restoreToggles([
+    'toggle-signal', 'toggle-rfdensity', 'toggle-throughput',
+  ]), 350);
+  if (savedState && savedState.outage_history && outagePicker) {
+    setTimeout(() => {
+      if (outagePicker.value === savedState.outage_history) return;
+      outagePicker.value = savedState.outage_history;
+      outagePicker.dispatchEvent(new Event('change'));
+    }, 350);
+  }
 
   /* ---------- geometry: cone polygon from azimuth + beamwidth + range ---------- */
   // Walks an arc on the WGS84 sphere from (azimuth - beamwidth/2) to
