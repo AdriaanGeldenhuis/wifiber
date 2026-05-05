@@ -4,12 +4,25 @@
         {
             "name": "Vanderbijlpark",
             "aliases": ["VDB", "vanderbijl"],
-            "suburbs": ["Vaaloewer"]
+            "suburbs": [
+                "CE1", "CE2", "CE3", "CE4", "CE5", "CE6", "CE7", "CE8", "CE9",
+                "CW1", "CW2", "CW3", "CW4", "CW5", "CW6", "CW7",
+                "SE1", "SE2", "SE3", "SE4", "SE5", "SE6", "SE7", "SE8", "SE9",
+                "SW1", "SW2", "SW3", "SW4", "SW5", "SW6", "SW7", "SW8",
+                "NE1", "NW1",
+                "Vaaloewer", "Frikkie Meyer", "Garden Village", "Lakeside"
+            ]
         },
         {
             "name": "Vereeniging",
             "aliases": [],
-            "suburbs": ["Three Rivers", "Duncanville", "Peacehaven", "Arcon Park", "Falcon Ridge"]
+            "suburbs": [
+                "Three Rivers", "Three Rivers East", "Three Rivers West",
+                "Duncanville", "Peacehaven", "Arcon Park", "Falcon Ridge",
+                "Bedworth Park", "Verwoerdpark", "Unitas Park",
+                "Maccauvlei", "Stretford", "Palm Springs",
+                "Houtkop", "Tshepiso", "Ext 14", "Ext 15"
+            ]
         },
         {
             "name": "Sasolburg",
