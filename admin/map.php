@@ -2408,34 +2408,79 @@ $map_data['wireless_link_summary'] = $wl_by_site;
 <script>
 /* Sidebar toggle — clicking the floating chevron is the ONLY way to
    open the admin nav on the map page.  Hover-to-open was dropped so
-   the same UX works on touch and desktop (no accidental opens while
-   moving the cursor along the left edge). */
+   the same UX works on touch and desktop.
+
+   We push the open-state styles in directly via element.style instead
+   of relying on a CSS class — inline styles beat any CSS specificity
+   trap and guarantee the sidebar visibly expands the moment the
+   class is toggled.  Closing clears the inline styles so the existing
+   collapsed CSS (width: 6px, opacity: 0 children) takes over again. */
 (function () {
-  const btn  = document.getElementById('map-sidebar-toggle');
-  const side = document.querySelector('.portal-side');
-  if (!btn || !side) return;
-  let open = false;
-  function setOpen(v) {
-    open = !!v;
-    side.classList.toggle('is-open', open);
-    btn.classList.toggle('is-open', open);
-    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  function init() {
+    const btn  = document.getElementById('map-sidebar-toggle');
+    const side = document.querySelector('.portal-side');
+    if (!btn || !side) {
+      // The portal-header may render after this script runs in some
+      // edge cases — retry a couple of times then give up.
+      if (init._tries == null) init._tries = 0;
+      if (++init._tries > 10) return;
+      return setTimeout(init, 100);
+    }
+    let open = false;
+    function applyOpenStyles(v) {
+      if (v) {
+        side.style.width            = '252px';
+        side.style.padding          = '24px 16px';
+        side.style.background       = 'var(--bg-elev)';
+        side.style.boxShadow        = '8px 0 24px rgba(0,0,0,.5)';
+        side.style.borderRightColor = 'var(--border)';
+        side.style.overflowY        = 'auto';
+        Array.from(side.children).forEach((c) => {
+          c.style.opacity       = '1';
+          c.style.pointerEvents = 'auto';
+        });
+        btn.style.left = '260px';
+      } else {
+        // Clear inline styles so the collapsed CSS rules apply again.
+        side.style.width            = '';
+        side.style.padding          = '';
+        side.style.background       = '';
+        side.style.boxShadow        = '';
+        side.style.borderRightColor = '';
+        side.style.overflowY        = '';
+        Array.from(side.children).forEach((c) => {
+          c.style.opacity       = '';
+          c.style.pointerEvents = '';
+        });
+        btn.style.left = '';
+      }
+    }
+    function setOpen(v) {
+      open = !!v;
+      applyOpenStyles(open);
+      side.classList.toggle('is-open', open);
+      btn.classList.toggle('is-open', open);
+      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+    }
+    btn.addEventListener('click', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setOpen(!open);
+    });
+    document.addEventListener('click', (e) => {
+      if (!open) return;
+      if (e.target.closest('.portal-side') || e.target.closest('.map-sidebar-toggle')) return;
+      setOpen(false);
+    });
+    document.addEventListener('keydown', (e) => {
+      if (e.key === 'Escape' && open) setOpen(false);
+    });
   }
-  btn.addEventListener('click', (e) => {
-    e.preventDefault();
-    e.stopPropagation();
-    setOpen(!open);
-  });
-  // Tap outside the sidebar closes it.
-  document.addEventListener('click', (e) => {
-    if (!open) return;
-    if (e.target.closest('.portal-side') || e.target.closest('.map-sidebar-toggle')) return;
-    setOpen(false);
-  });
-  // Esc closes it too.
-  document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && open) setOpen(false);
-  });
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', init);
+  } else {
+    init();
+  }
 })();
 </script>
 
