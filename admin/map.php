@@ -990,34 +990,20 @@ $map_data['wireless_link_summary'] = $wl_by_site;
                 box-shadow .2s,
                 border-color .15s;
   }
-  body:has(.map-fs) .portal-side:hover,
-  body:has(.map-fs) .portal-side:focus-within {
-    width: 252px;
-    padding: 24px 16px;
-    background: var(--bg-elev);
-    border-right-color: var(--border);
-    box-shadow: 8px 0 24px rgba(0,0,0,.5);
-    overflow-y: auto;
-  }
   /* Fade child content along with the width — looks smoother than
-     a hard cutoff and keeps assistive tech happy via aria-hidden
-     while collapsed. */
+     a hard cutoff and keeps assistive tech happy while collapsed.
+     Hover-to-open is intentionally NOT wired: the floating chevron
+     button is the only opener, so the experience is the same on
+     touch and desktop and the operator never expands it by accident
+     while moving the cursor along the left edge. */
   body:has(.map-fs) .portal-side > * {
     opacity: 0;
     transition: opacity .15s;
     pointer-events: none;
   }
-  body:has(.map-fs) .portal-side:hover > *,
-  body:has(.map-fs) .portal-side:focus-within > * {
-    opacity: 1;
-    pointer-events: auto;
-  }
 
-  /* When the sidebar is pinned open via the toggle button, behave the
-     same as :hover. Lets touch / keyboard users open it without a
-     hover state. The .is-open class is toggled in JS directly on
-     .portal-side so the rule doesn't depend on :has() reaching back
-     up to the body. */
+  /* Sidebar opens when the .is-open class is added by JS (the chevron
+     button click handler). */
   body:has(.map-fs) .portal-side.is-open {
     width: 252px;
     padding: 24px 16px;
@@ -1103,7 +1089,9 @@ $map_data['wireless_link_summary'] = $wl_by_site;
     align-items: center;
     gap: 16px;
     flex-wrap: wrap;
-    padding: 10px 18px;
+    /* 60px left padding clears the floating sidebar-toggle chevron
+       (32px wide + 14px from edge + a bit of breathing room). */
+    padding: 10px 18px 10px 60px;
     background: linear-gradient(180deg, rgba(5,218,253,0.04) 0%, var(--bg-elev) 100%);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
@@ -2235,7 +2223,7 @@ $map_data['wireless_link_summary'] = $wl_by_site;
 
   /* ---------- Mobile / narrow toolbar ---------- */
   @media (max-width: 900px) {
-    .map-bar { padding: 8px 12px; gap: 10px; }
+    .map-bar { padding: 8px 12px 8px 56px; gap: 10px; }
     .map-legend { display: none; }
     .map-counts { font-size: 10px; }
     .map-search { display: none; }
@@ -2418,46 +2406,35 @@ $map_data['wireless_link_summary'] = $wl_by_site;
 <script src="/assets/js/admin-map.js" defer></script>
 
 <script>
-/* Sidebar pin toggle — taps the floating chevron on/off so phones,
-   tablets and keyboard users can open the admin nav without hover.
-   Toggles .is-open directly on .portal-side (so the rule fires
-   regardless of where the button lives in the DOM tree) and on the
-   button (for the chevron flip + slide).  Also mirrors :hover into
-   the button so the chevron behaves the same when the user simply
-   hovers the strip on desktop. */
+/* Sidebar toggle — clicking the floating chevron is the ONLY way to
+   open the admin nav on the map page.  Hover-to-open was dropped so
+   the same UX works on touch and desktop (no accidental opens while
+   moving the cursor along the left edge). */
 (function () {
   const btn  = document.getElementById('map-sidebar-toggle');
   const side = document.querySelector('.portal-side');
   if (!btn || !side) return;
-  let pinned = false;
-  function syncBtn() {
-    const open = pinned || side.matches(':hover');
+  let open = false;
+  function setOpen(v) {
+    open = !!v;
+    side.classList.toggle('is-open', open);
     btn.classList.toggle('is-open', open);
-    btn.setAttribute('aria-expanded', pinned ? 'true' : 'false');
-  }
-  function setPinned(v) {
-    pinned = !!v;
-    side.classList.toggle('is-open', pinned);
-    syncBtn();
+    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
   }
   btn.addEventListener('click', (e) => {
     e.preventDefault();
     e.stopPropagation();
-    setPinned(!pinned);
+    setOpen(!open);
   });
-  // Mirror the sidebar's hover into the button so the chevron slides
-  // and flips during a desktop hover too.
-  side.addEventListener('mouseenter', syncBtn);
-  side.addEventListener('mouseleave', syncBtn);
-  // Tap outside the sidebar closes it when pinned.
+  // Tap outside the sidebar closes it.
   document.addEventListener('click', (e) => {
-    if (!pinned) return;
+    if (!open) return;
     if (e.target.closest('.portal-side') || e.target.closest('.map-sidebar-toggle')) return;
-    setPinned(false);
+    setOpen(false);
   });
   // Esc closes it too.
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && pinned) setPinned(false);
+    if (e.key === 'Escape' && open) setOpen(false);
   });
 })();
 </script>
