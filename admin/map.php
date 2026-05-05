@@ -968,6 +968,51 @@ $map_data['wireless_link_summary'] = $wl_by_site;
   body:has(.map-fs) .portal-main  { padding: 0 !important; overflow: hidden; }
   body:has(.map-fs) .portal-inner { max-width: none !important; width: 100%; }
 
+  /* Auto-collapsing admin sidebar — only on the map page so the map
+     gets the full viewport. We pull .portal-side out of flow with
+     position:fixed so the map flexes to fill, then collapse it to a
+     6px gradient strip at the edge. Hover (or focus-within for
+     keyboard users) re-expands it to its normal width with a slide
+     animation; an 8px shadow makes it overlay the map cleanly. */
+  body:has(.map-fs) .portal-side {
+    position: fixed;
+    left: 0; top: 0; bottom: 0;
+    height: 100vh;
+    width: 6px;
+    padding: 0;
+    z-index: 1500;
+    overflow: hidden;
+    border-right: 1px solid transparent;
+    background: linear-gradient(90deg, rgba(5,218,253,.35) 0%, rgba(5,218,253,.08) 60%, transparent 100%);
+    transition: width .2s cubic-bezier(.2,.7,.2,1),
+                padding .2s,
+                background .15s,
+                box-shadow .2s,
+                border-color .15s;
+  }
+  body:has(.map-fs) .portal-side:hover,
+  body:has(.map-fs) .portal-side:focus-within {
+    width: 252px;
+    padding: 24px 16px;
+    background: var(--bg-elev);
+    border-right-color: var(--border);
+    box-shadow: 8px 0 24px rgba(0,0,0,.5);
+    overflow-y: auto;
+  }
+  /* Fade child content along with the width — looks smoother than
+     a hard cutoff and keeps assistive tech happy via aria-hidden
+     while collapsed. */
+  body:has(.map-fs) .portal-side > * {
+    opacity: 0;
+    transition: opacity .15s;
+    pointer-events: none;
+  }
+  body:has(.map-fs) .portal-side:hover > *,
+  body:has(.map-fs) .portal-side:focus-within > * {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
   .map-fs {
     display: flex;
     flex-direction: column;
