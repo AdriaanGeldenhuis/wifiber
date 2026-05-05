@@ -1,0 +1,38 @@
+{
+    "logo": {
+        "url": "",
+        "height": 96,
+        "padding_y": 22,
+        "wordmark_show": true,
+        "wordmark_text": ""
+    },
+    "top_bar": {
+        "enabled": true,
+        "status_enabled": true,
+        "status_label": "All systems operational",
+        "status_link": "/status",
+        "status_color": "green",
+        "items": [
+            {"icon": "clock", "text": "24/7 Local Support", "link": ""},
+            {"icon": "pin", "text": "Vaal Triangle, ZA", "link": ""},
+            {"icon": "mail", "text": "support@wifiber.co.za", "link": "mailto:support@wifiber.co.za"}
+        ]
+    },
+    "nav_links": [
+        {"label": "Home", "href": "/"},
+        {"label": "Pricing", "href": "/pricing"},
+        {"label": "Coverage Map", "href": "/coverage"},
+        {"label": "Legal", "href": "/legal"}
+    ],
+    "account": {
+        "enabled": true,
+        "label": "My Account",
+        "href": "/account/"
+    },
+    "cta": {
+        "enabled": true,
+        "label": "",
+        "href": "",
+        "show_pulse": true
+    }
+}

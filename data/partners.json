@@ -1,0 +1,25 @@
+{
+    "label": "Powered by industry-leading partners",
+    "logos": [
+        {
+            "image": "partner-ubiquiti.webp",
+            "alt": "Ubiquiti",
+            "external": true
+        },
+        {
+            "image": "partner-mikrotik.webp",
+            "alt": "MikroTik",
+            "external": true
+        },
+        {
+            "image": "partner-scoop.webp",
+            "alt": "Scoop",
+            "external": true
+        },
+        {
+            "image": "partner-teraco.webp",
+            "alt": "Teraco",
+            "external": true
+        }
+    ]
+}

@@ -3,6 +3,12 @@ $page_title = 'WiFIBER';
 $page_desc  = 'Wireless internet for the Vaal Triangle. Fast, secure and seamless connectivity for home and business.';
 $page_slug  = '/';
 $slides     = require __DIR__ . '/includes/slides.php';
+
+$partners_file = __DIR__ . '/data/partners.json';
+$partners_data = is_file($partners_file) ? (json_decode((string)@file_get_contents($partners_file), true) ?: []) : [];
+$partners_label = $partners_data['label'] ?? 'Powered by industry-leading partners';
+$partner_logos  = $partners_data['logos'] ?? [];
+
 require __DIR__ . '/includes/header.php';
 ?>
 
@@ -88,17 +94,29 @@ require __DIR__ . '/includes/header.php';
 <section class="section-tight coverage-quick" id="coverage-check">
   <div class="container">
     <div class="coverage-check-card">
+      <span class="coverage-check-corner tl" aria-hidden="true"></span>
+      <span class="coverage-check-corner br" aria-hidden="true"></span>
       <div class="coverage-quick-head">
-        <h2>Quick coverage check</h2>
+        <span class="eyebrow">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+          Coverage check
+        </span>
+        <h2>Find out if we cover your area</h2>
         <p>Type your address or town &mdash; we'll tell you in a second whether we can hook you up.</p>
       </div>
       <form method="post" class="coverage-check-form" action="/coverage">
         <?= csrf_field() ?>
         <input type="hidden" name="action" value="check">
         <div class="coverage-check-row">
-          <input type="text" name="address" required maxlength="200"
-                 placeholder="e.g. 12 Main Street, Vanderbijlpark">
-          <button type="submit" class="btn btn-primary">Check coverage</button>
+          <div class="coverage-check-input">
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            <input type="text" name="address" required maxlength="200"
+                   placeholder="e.g. 12 Main Street, Vanderbijlpark">
+          </div>
+          <button type="submit" class="btn btn-primary">
+            Check coverage
+            <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+          </button>
         </div>
       </form>
     </div>
@@ -125,6 +143,9 @@ require __DIR__ . '/includes/header.php';
     </div>
     <div class="feature-grid">
       <div class="feature">
+        <span class="feature-corner tr"></span>
+        <span class="feature-corner bl"></span>
+        <span class="feature-num"></span>
         <div class="feature-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 12a9 9 0 0 1 18 0"/><path d="M7 12a5 5 0 0 1 10 0"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/></svg>
         </div>
@@ -132,6 +153,9 @@ require __DIR__ . '/includes/header.php';
         <p>Real humans answering the phone. Most issues resolved on the first call.</p>
       </div>
       <div class="feature">
+        <span class="feature-corner tr"></span>
+        <span class="feature-corner bl"></span>
+        <span class="feature-num"></span>
         <div class="feature-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 13l4 4L19 7"/></svg>
         </div>
@@ -139,6 +163,9 @@ require __DIR__ . '/includes/header.php';
         <p>Hassle-free setup, usually within days &mdash; not weeks.</p>
       </div>
       <div class="feature">
+        <span class="feature-corner tr"></span>
+        <span class="feature-corner bl"></span>
+        <span class="feature-num"></span>
         <div class="feature-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
         </div>
@@ -146,6 +173,9 @@ require __DIR__ . '/includes/header.php';
         <p>Unshared bandwidth on premium tiers. The speed you pay for is the speed you get.</p>
       </div>
       <div class="feature">
+        <span class="feature-corner tr"></span>
+        <span class="feature-corner bl"></span>
+        <span class="feature-num"></span>
         <div class="feature-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v6M12 22v-6M4.93 4.93l4.24 4.24M19.07 19.07l-4.24-4.24M2 12h6M22 12h-6M4.93 19.07l4.24-4.24M19.07 4.93l-4.24 4.24"/></svg>
         </div>
@@ -153,6 +183,9 @@ require __DIR__ . '/includes/header.php';
         <p>Redundant power, links and gear so your connection stays up when others go down.</p>
       </div>
       <div class="feature">
+        <span class="feature-corner tr"></span>
+        <span class="feature-corner bl"></span>
+        <span class="feature-num"></span>
         <div class="feature-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="6" width="18" height="12" rx="2"/><path d="M7 10h.01M11 10h.01M15 10h.01"/></svg>
         </div>
@@ -160,6 +193,9 @@ require __DIR__ . '/includes/header.php';
         <p>Ubiquiti, MikroTik and enterprise-grade hardware end to end.</p>
       </div>
       <div class="feature">
+        <span class="feature-corner tr"></span>
+        <span class="feature-corner bl"></span>
+        <span class="feature-num"></span>
         <div class="feature-icon">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 1l3 6 6 1-4.5 4.5L18 19l-6-3-6 3 1.5-6.5L3 8l6-1z"/></svg>
         </div>
@@ -170,17 +206,22 @@ require __DIR__ . '/includes/header.php';
   </div>
 </section>
 
+<?php if (!empty($partner_logos)): ?>
 <section class="partners">
   <div class="container">
-    <p class="partners-label">Powered by industry-leading partners</p>
+    <p class="partners-label"><?= htmlspecialchars($partners_label) ?></p>
     <div class="partner-logos">
-      <img src="<?= asset('images/partner-ubiquiti.webp') ?>" alt="Ubiquiti" loading="lazy">
-      <img src="<?= asset('images/partner-mikrotik.webp') ?>" alt="MikroTik" loading="lazy">
-      <img src="<?= asset('images/partner-scoop.webp') ?>" alt="Scoop" loading="lazy">
-      <img src="<?= asset('images/partner-teraco.webp') ?>" alt="Teraco" loading="lazy">
+      <?php foreach ($partner_logos as $p):
+        $img = (string)($p['image'] ?? '');
+        $alt = (string)($p['alt']   ?? '');
+        if ($img === '') continue;
+      ?>
+        <img src="<?= asset('images/' . $img) ?>" alt="<?= htmlspecialchars($alt) ?>" loading="lazy">
+      <?php endforeach; ?>
     </div>
   </div>
 </section>
+<?php endif; ?>
 
 <section class="section" id="contact">
   <div class="container">
@@ -191,16 +232,36 @@ require __DIR__ . '/includes/header.php';
     </div>
     <div class="contact-grid">
       <div class="contact-info">
-        <h3>Reach out directly</h3>
+        <span class="contact-corner tr" aria-hidden="true"></span>
+        <span class="contact-corner bl" aria-hidden="true"></span>
+        <h3>
+          <span class="contact-info-pulse" aria-hidden="true"></span>
+          Reach out directly
+        </h3>
         <ul>
-          <li><span>Phone</span><a href="tel:<?= $site['phone_link'] ?>"><?= htmlspecialchars($site['phone']) ?></a></li>
-          <li><span>Admin</span><a href="mailto:<?= htmlspecialchars($site['email_admin']) ?>"><?= htmlspecialchars($site['email_admin']) ?></a></li>
-          <li><span>Accounts</span><a href="mailto:<?= htmlspecialchars($site['email_accounts']) ?>"><?= htmlspecialchars($site['email_accounts']) ?></a></li>
-          <li><span>Support</span><a href="mailto:<?= htmlspecialchars($site['email_support']) ?>"><?= htmlspecialchars($site['email_support']) ?></a></li>
-          <li><span>Address</span><?= htmlspecialchars($site['address_line1']) ?>, <?= htmlspecialchars($site['address_line2']) ?></li>
+          <li>
+            <span class="contact-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></svg></span>
+            <span class="contact-line"><span class="contact-label">Phone</span><a href="tel:<?= $site['phone_link'] ?>"><?= htmlspecialchars($site['phone']) ?></a></span>
+          </li>
+          <li>
+            <span class="contact-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><path d="M22 6l-10 7L2 6"/></svg></span>
+            <span class="contact-line"><span class="contact-label">Admin</span><a href="mailto:<?= htmlspecialchars($site['email_admin']) ?>"><?= htmlspecialchars($site['email_admin']) ?></a></span>
+          </li>
+          <li>
+            <span class="contact-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><path d="M22 6l-10 7L2 6"/></svg></span>
+            <span class="contact-line"><span class="contact-label">Accounts</span><a href="mailto:<?= htmlspecialchars($site['email_accounts']) ?>"><?= htmlspecialchars($site['email_accounts']) ?></a></span>
+          </li>
+          <li>
+            <span class="contact-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.38 8.38 0 0 1-.9 3.8 8.5 8.5 0 0 1-7.6 4.7 8.38 8.38 0 0 1-3.8-.9L3 21l1.9-5.7a8.38 8.38 0 0 1-.9-3.8 8.5 8.5 0 0 1 4.7-7.6 8.38 8.38 0 0 1 3.8-.9h.5a8.48 8.48 0 0 1 8 8v.5z"/></svg></span>
+            <span class="contact-line"><span class="contact-label">Support</span><a href="mailto:<?= htmlspecialchars($site['email_support']) ?>"><?= htmlspecialchars($site['email_support']) ?></a></span>
+          </li>
+          <li>
+            <span class="contact-icon" aria-hidden="true"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg></span>
+            <span class="contact-line"><span class="contact-label">Address</span><span><?= htmlspecialchars($site['address_line1']) ?>, <?= htmlspecialchars($site['address_line2']) ?></span></span>
+          </li>
         </ul>
       </div>
-      <form class="form" action="/contact.php" method="post" id="contactForm">
+      <form class="form contact-form" action="/contact.php" method="post" id="contactForm">
         <div id="formAlert"></div>
         <div class="field">
           <label for="name">Your name</label>
