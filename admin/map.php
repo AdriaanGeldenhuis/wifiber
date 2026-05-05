@@ -964,97 +964,11 @@ $map_data['wireless_link_summary'] = $wl_by_site;
   /* The map page goes edge-to-edge inside portal-main. portal.css gives
      portal-main 40px of padding and caps portal-inner at 960px wide;
      blow both out so the map can use the whole viewport next to the
-     fixed sidebar. */
+     normal sticky sidebar that portal-header.php renders. The admin
+     nav stays exactly where it does on every other admin page — no
+     toggle, no slide-in. */
   body:has(.map-fs) .portal-main  { padding: 0 !important; overflow: hidden; }
   body:has(.map-fs) .portal-inner { max-width: none !important; width: 100%; }
-
-  /* ---------- Map-page sidebar ----------
-     Take the .portal-side aside out of flow with position:fixed and
-     park it OFF-SCREEN to the left. The map uses the full viewport.
-     Clicking the floating chevron toggles a `.map-side-open` class
-     on <body>; CSS slides the sidebar in. State lives in one place
-     (the body class) so DevTools, the script and the cascade can
-     never disagree.
-
-     !important is used on the layout rules so portal.css's base
-     .portal-side { width: 252px; position: sticky; ... } and its
-     @media (max-width:720px) override (which resets position:static)
-     can't reach in and undo us. */
-  body:has(.map-fs) .portal-side {
-    position: fixed !important;
-    left: 0 !important;
-    top: 0 !important;
-    bottom: 0 !important;
-    width: 252px !important;
-    height: 100vh !important;
-    padding: 24px 16px !important;
-    z-index: 1500 !important;
-    background: var(--bg-elev);
-    border-right: 1px solid var(--border);
-    box-shadow: 8px 0 24px rgba(0,0,0,.5);
-    overflow-y: auto;
-    transform: translateX(-100%) !important;
-    transition: transform .25s cubic-bezier(.2,.7,.2,1);
-  }
-  /* Open state — slide the sidebar back into view. !important keeps
-     us above the off-screen rule above (which also uses !important
-     for defensiveness) without depending on selector specificity. */
-  body.map-side-open:has(.map-fs) .portal-side {
-    transform: translateX(0) !important;
-  }
-
-  /* Floating chevron — the only opener for the sidebar on the map. */
-  body:has(.map-fs) .map-sidebar-toggle {
-    position: fixed;
-    top: 14px;
-    left: 14px;
-    z-index: 1600;
-    width: 36px;
-    height: 36px;
-    padding: 0;
-    border-radius: 8px;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    color: var(--text);
-    cursor: pointer;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 4px 12px rgba(0,0,0,.55);
-    transition: left .25s cubic-bezier(.2,.7,.2,1),
-                background .15s, border-color .15s, color .15s;
-  }
-  body:has(.map-fs) .map-sidebar-toggle:hover,
-  body:has(.map-fs) .map-sidebar-toggle:focus-visible {
-    background: var(--accent);
-    color: #001218;
-    border-color: var(--accent);
-    outline: none;
-  }
-  body:has(.map-fs) .map-sidebar-toggle svg {
-    width: 18px;
-    height: 18px;
-    stroke: currentColor;
-    stroke-width: 2;
-    fill: none;
-    stroke-linecap: round;
-    stroke-linejoin: round;
-    transition: transform .25s cubic-bezier(.2,.7,.2,1);
-    pointer-events: none;     /* let clicks always hit the button itself */
-  }
-  /* When the sidebar is open: slide the chevron over to the sidebar's
-     edge and flip it so it points back (close affordance). */
-  body.map-side-open:has(.map-fs) .map-sidebar-toggle {
-    left: 260px;
-  }
-  body.map-side-open:has(.map-fs) .map-sidebar-toggle svg {
-    transform: rotate(180deg);
-  }
-  /* On narrow viewports the sidebar takes the full screen when open. */
-  @media (max-width: 600px) {
-    body:has(.map-fs) .portal-side { width: 100vw !important; }
-    body.map-side-open:has(.map-fs) .map-sidebar-toggle { left: calc(100vw - 50px); }
-  }
 
   .map-fs {
     display: flex;
@@ -1069,9 +983,7 @@ $map_data['wireless_link_summary'] = $wl_by_site;
     align-items: center;
     gap: 16px;
     flex-wrap: wrap;
-    /* 60px left padding clears the floating sidebar-toggle chevron
-       (32px wide + 14px from edge + a bit of breathing room). */
-    padding: 10px 18px 10px 60px;
+    padding: 10px 18px;
     background: linear-gradient(180deg, rgba(5,218,253,0.04) 0%, var(--bg-elev) 100%);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
@@ -2225,17 +2137,6 @@ $map_data['wireless_link_summary'] = $wl_by_site;
   }
 </style>
 
-<!-- Sidebar opener — the only way to open the admin nav on the map page.
-     Clicking it toggles the body class .map-side-open, which the CSS
-     rules above pick up to slide the sidebar in/out. -->
-<button id="map-sidebar-toggle" class="map-sidebar-toggle" type="button"
-        aria-label="Toggle navigation" aria-expanded="false"
-        aria-controls="portal-side">
-  <svg viewBox="0 0 16 16" aria-hidden="true">
-    <path d="M5 2l6 6-6 6"/>
-  </svg>
-</button>
-
 <div class="map-fs">
   <div class="map-bar">
     <h1>Network map</h1>
@@ -2385,97 +2286,6 @@ $map_data['wireless_link_summary'] = $wl_by_site;
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
         crossorigin="anonymous"></script>
 <script src="/assets/js/admin-map.js" defer></script>
-
-<script>
-/* Map sidebar toggle — defensive build.
-   Belt and suspenders: drive the open state through TWO mechanisms
-   in parallel, so even if one is being interfered with by a stale
-   cached stylesheet, an extension, etc., the other still pulls the
-   sidebar in:
-
-     1) Toggle the .map-side-open class on <body> — picked up by
-        the CSS rules above.
-     2) Set inline style.transform on the .portal-side element — this
-        beats every CSS rule that doesn't itself use !important.
-
-   Click handling is delegated on `document` at CAPTURE PHASE so
-   nothing downstream (Leaflet, browser extensions, etc.) can call
-   stopPropagation before we react.  We also expose a debug API on
-   window.MAP_SIDEBAR for manual probing in DevTools:
-
-     MAP_SIDEBAR.open()    — force open
-     MAP_SIDEBAR.close()   — force close
-     MAP_SIDEBAR.toggle()  — flip
-     MAP_SIDEBAR.state()   — current open state + element refs */
-(function () {
-  function getSide() { return document.querySelector('.portal-side'); }
-  function getBtn()  { return document.getElementById('map-sidebar-toggle'); }
-  function isOpen()  { return document.body.classList.contains('map-side-open'); }
-  function setOpen(o) {
-    o = !!o;
-    document.body.classList.toggle('map-side-open', o);
-    var side = getSide();
-    if (side) side.style.transform = o ? 'translateX(0)' : 'translateX(-100%)';
-    var btn = getBtn();
-    if (btn) {
-      btn.setAttribute('aria-expanded', o ? 'true' : 'false');
-      btn.style.left = o ? '260px' : '14px';
-      var svg = btn.querySelector('svg');
-      if (svg) svg.style.transform = o ? 'rotate(180deg)' : 'rotate(0deg)';
-    }
-    console.log('[map-sidebar]', o ? 'OPEN' : 'CLOSE');
-  }
-
-  // Public debug surface. Stays on the page so the user can poke at
-  // it from the console if the chevron click somehow doesn't reach
-  // our delegated handler (extension, CSP, etc.).
-  window.MAP_SIDEBAR = {
-    open:   function () { setOpen(true);  },
-    close:  function () { setOpen(false); },
-    toggle: function () { setOpen(!isOpen()); },
-    state:  function () {
-      return {
-        open:   isOpen(),
-        button: getBtn(),
-        side:   getSide(),
-        bodyClasses: document.body.className,
-      };
-    },
-  };
-
-  function onActivate(e) {
-    var t = e.target;
-    var hit = t && t.closest && t.closest('#map-sidebar-toggle');
-    if (hit) {
-      e.preventDefault();
-      e.stopPropagation();
-      setOpen(!isOpen());
-      return;
-    }
-    if (!isOpen()) return;
-    if (t && t.closest && t.closest('.portal-side')) return;
-    setOpen(false);
-  }
-
-  function wire() {
-    if (!getBtn())  { console.warn('[map-sidebar] toggle button missing'); return; }
-    if (!getSide()) { console.warn('[map-sidebar] .portal-side missing — nav will not render'); return; }
-    console.log('[map-sidebar] wired — click chevron, or run MAP_SIDEBAR.toggle() in console');
-    // Capture phase on document so nothing downstream can swallow
-    // the event with stopPropagation before we react.
-    document.addEventListener('click', onActivate, true);
-    document.addEventListener('keydown', function (e) {
-      if (e.key === 'Escape' && isOpen()) setOpen(false);
-    });
-  }
-
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', wire);
-  } else {
-    wire();
-  }
-})();
-</script>
 
 <script>
 /* Coverage heatmap — operator picks a sector, fetches a GeoJSON grid
