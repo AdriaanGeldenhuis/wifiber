@@ -1058,7 +1058,7 @@ p { margin: 0 0 1em; color: var(--text-dim); }
 
 .price-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 250px), 1fr));
   gap: 22px;
 }
 .price-card {
@@ -1211,7 +1211,7 @@ p { margin: 0 0 1em; color: var(--text-dim); }
 .install-info {
   margin-top: 70px;
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 260px), 1fr));
   gap: 22px;
 }
 .install-card {
@@ -2432,7 +2432,7 @@ p { margin: 0 0 1em; color: var(--text-dim); }
 .coverage-waitlist-form { margin-top: 16px; padding-top: 18px; border-top: 1px dashed var(--border); }
 .coverage-waitlist-form .form-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 180px), 1fr));
   gap: 14px;
   margin-bottom: 16px;
 }
@@ -2495,6 +2495,12 @@ a, button, .btn, .tier-btn, .legal-nav button, .nav-toggle, [role="tab"] {
   /* Mobile drawer offset — match the actual (smaller) mobile header height
      instead of the desktop --header-h variable, which is set inline on body */
   .main-nav { inset: 104px 0 auto 0; }
+
+  /* Kill all horizontal overflow at the root */
+  html, body { overflow-x: hidden; max-width: 100%; }
+  body > * { max-width: 100vw; }
+  img, svg, video, iframe { max-width: 100%; height: auto; }
+  .logo img { height: clamp(54px, 14vw, 78px); width: auto; }
   /* Page rhythm */
   .container { padding: 0 18px; }
   .section { padding: 64px 0; }
@@ -2519,13 +2525,16 @@ a, button, .btn, .tier-btn, .legal-nav button, .nav-toggle, [role="tab"] {
   .header-inner { padding: 12px 18px; gap: 14px; }
   .logo-text { font-size: 1.1rem; }
 
-  /* Hero slider */
-  .hero-slider { min-height: 86vh; }
-  .slide-content { padding: 28px 0; }
-  .slide-content p.lead { font-size: 1rem; margin-bottom: 24px; }
+  /* Hero slider — make it shorter so content below shows */
+  .hero-slider { height: clamp(440px, 64vh, 580px); }
+  .slide-content { padding: 24px 0; max-width: 100%; }
+  .slide-content p.lead { font-size: 1rem; margin-bottom: 22px; }
   .hero-cta { flex-direction: column; align-items: stretch; gap: 10px; width: 100%; max-width: 360px; }
   .hero-cta .btn { width: 100%; }
   .ticker-track { gap: 22px; padding: 12px 0; font-size: .68rem; }
+  .slider-dots { bottom: 28px; }
+  .slider-arrow { display: none; } /* swipe via dots */
+  .status-pill { font-size: .65rem; padding: 4px 10px; }
 
   /* Stat strip */
   .stat-strip { padding: 18px 6px; gap: 10px; }
@@ -2583,12 +2592,22 @@ a, button, .btn, .tier-btn, .legal-nav button, .nav-toggle, [role="tab"] {
 
   /* Card hover lift removed on touch (no real hover on mobile) */
   .feature:hover, .price-card:hover, .install-card:hover { transform: none; }
+
+  /* Partners section — smaller logos, tighter spacing */
+  .partners { padding: 50px 0; }
+  .partner-logos { gap: 32px; }
+  .partner-logos img { height: 44px; max-width: 130px; }
+  .partners-label { font-size: .68rem; margin-bottom: 22px; }
 }
 
 /* Phone (≤600px) ----------------------------------------------------------- */
 @media (max-width: 600px) {
   .main-nav { inset: 84px 0 auto 0; }
   .container { padding: 0 16px; }
+  .section { padding: 44px 0; }
+  .hero-slider { height: clamp(420px, 78vh, 540px); }
+  .partner-logos { gap: 26px; }
+  .partner-logos img { height: 36px; max-width: 110px; }
   .section { padding: 50px 0; }
   .section-tight { padding: 32px 0; }
 
