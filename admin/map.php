@@ -2387,24 +2387,63 @@ $map_data['wireless_link_summary'] = $wl_by_site;
 <script src="/assets/js/admin-map.js" defer></script>
 
 <script>
-/* Map sidebar toggle.
-   • Sidebar is parked off-screen via CSS.
-   • Click anywhere on the chevron → toggle .map-side-open on <body>;
-     CSS slides the sidebar in.  Click outside the sidebar, click the
-     chevron again, or press Esc → close.
-   • The click is delegated on document at CAPTURE PHASE so nothing
-     downstream (a script that calls stopPropagation, an ancestor
-     that swaps the button's listeners, etc.) can swallow it before
-     we react. State lives on document.body so the cascade and the
-     script can never disagree. */
+/* Map sidebar toggle — defensive build.
+   Belt and suspenders: drive the open state through TWO mechanisms
+   in parallel, so even if one is being interfered with by a stale
+   cached stylesheet, an extension, etc., the other still pulls the
+   sidebar in:
+
+     1) Toggle the .map-side-open class on <body> — picked up by
+        the CSS rules above.
+     2) Set inline style.transform on the .portal-side element — this
+        beats every CSS rule that doesn't itself use !important.
+
+   Click handling is delegated on `document` at CAPTURE PHASE so
+   nothing downstream (Leaflet, browser extensions, etc.) can call
+   stopPropagation before we react.  We also expose a debug API on
+   window.MAP_SIDEBAR for manual probing in DevTools:
+
+     MAP_SIDEBAR.open()    — force open
+     MAP_SIDEBAR.close()   — force close
+     MAP_SIDEBAR.toggle()  — flip
+     MAP_SIDEBAR.state()   — current open state + element refs */
 (function () {
-  function isOpen()   { return document.body.classList.contains('map-side-open'); }
+  function getSide() { return document.querySelector('.portal-side'); }
+  function getBtn()  { return document.getElementById('map-sidebar-toggle'); }
+  function isOpen()  { return document.body.classList.contains('map-side-open'); }
   function setOpen(o) {
-    document.body.classList.toggle('map-side-open', !!o);
-    var btn = document.getElementById('map-sidebar-toggle');
-    if (btn) btn.setAttribute('aria-expanded', o ? 'true' : 'false');
+    o = !!o;
+    document.body.classList.toggle('map-side-open', o);
+    var side = getSide();
+    if (side) side.style.transform = o ? 'translateX(0)' : 'translateX(-100%)';
+    var btn = getBtn();
+    if (btn) {
+      btn.setAttribute('aria-expanded', o ? 'true' : 'false');
+      btn.style.left = o ? '260px' : '14px';
+      var svg = btn.querySelector('svg');
+      if (svg) svg.style.transform = o ? 'rotate(180deg)' : 'rotate(0deg)';
+    }
+    console.log('[map-sidebar]', o ? 'OPEN' : 'CLOSE');
   }
-  function onClickCapture(e) {
+
+  // Public debug surface. Stays on the page so the user can poke at
+  // it from the console if the chevron click somehow doesn't reach
+  // our delegated handler (extension, CSP, etc.).
+  window.MAP_SIDEBAR = {
+    open:   function () { setOpen(true);  },
+    close:  function () { setOpen(false); },
+    toggle: function () { setOpen(!isOpen()); },
+    state:  function () {
+      return {
+        open:   isOpen(),
+        button: getBtn(),
+        side:   getSide(),
+        bodyClasses: document.body.className,
+      };
+    },
+  };
+
+  function onActivate(e) {
     var t = e.target;
     var hit = t && t.closest && t.closest('#map-sidebar-toggle');
     if (hit) {
@@ -2419,18 +2458,12 @@ $map_data['wireless_link_summary'] = $wl_by_site;
   }
 
   function wire() {
-    if (!document.getElementById('map-sidebar-toggle')) {
-      console.warn('[map-sidebar] toggle button missing');
-      return;
-    }
-    if (!document.querySelector('.portal-side')) {
-      console.warn('[map-sidebar] .portal-side missing — nav will not render');
-      return;
-    }
-    console.log('[map-sidebar] wired — click the chevron to open the nav');
-    // Capture phase: our handler runs before any bubble-phase listener
-    // and before any descendant's capture-phase listener.
-    document.addEventListener('click', onClickCapture, true);
+    if (!getBtn())  { console.warn('[map-sidebar] toggle button missing'); return; }
+    if (!getSide()) { console.warn('[map-sidebar] .portal-side missing — nav will not render'); return; }
+    console.log('[map-sidebar] wired — click chevron, or run MAP_SIDEBAR.toggle() in console');
+    // Capture phase on document so nothing downstream can swallow
+    // the event with stopPropagation before we react.
+    document.addEventListener('click', onActivate, true);
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && isOpen()) setOpen(false);
     });
