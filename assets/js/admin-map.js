@@ -1316,6 +1316,21 @@
   let selectedFeature = null;   // {kind, id, layer}
   let pulseRing       = null;
 
+  // Mirror the bottom-strip's actual rendered height into a CSS
+  // custom property so the right-side panel can sit exactly 12px
+  // above it regardless of content.  Without this the sidebar
+  // either overlaps the strip on tall content or leaves a gap on
+  // short content.
+  if (panel && shellEl && typeof ResizeObserver !== 'undefined') {
+    const ro = new ResizeObserver((entries) => {
+      for (const entry of entries) {
+        const h = Math.round(entry.contentRect.height);
+        if (h > 0) shellEl.style.setProperty('--mdp-h', h + 'px');
+      }
+    });
+    ro.observe(panel);
+  }
+
   /* ---------- right-side panel (related entities) ----------
      Opened in addition to the bottom panel — gives the operator the
      "list of things connected to what you clicked": sectors+links

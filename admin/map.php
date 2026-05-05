@@ -1659,7 +1659,10 @@ $map_data['wireless_link_summary'] = $wl_by_site;
     opacity: 1;
     pointer-events: none;
     transition: transform .25s cubic-bezier(.2,.7,.2,1);
-    max-height: 200px;
+    /* Let the strip size to its content — no artificial scrollbar.
+       The 40vh cap only kicks in on really short viewports, and even
+       then overflow-y: auto shows the scrollbar only when needed. */
+    max-height: 40vh;
     overflow-y: auto;
   }
   .map-detail-panel.is-open {
@@ -1906,7 +1909,7 @@ $map_data['wireless_link_summary'] = $wl_by_site;
     position: absolute;
     top: 12px;
     right: 0;
-    bottom: 212px;       /* clear of bottom strip + a 12px gap */
+    bottom: 12px;        /* full height when bottom strip is closed */
     width: 340px;
     z-index: 850;
     background: var(--bg-card);
@@ -1925,8 +1928,13 @@ $map_data['wireless_link_summary'] = $wl_by_site;
     transform: translateX(0);
     pointer-events: auto;
   }
-  /* When the bottom panel is closed, the sidebar can extend further. */
-  .map-shell.is-bottom-closed .map-side-panel { bottom: 12px; }
+  /* When the bottom strip is open, lift the sidebar to clear it.  The
+     --mdp-h CSS var is set in JS via a ResizeObserver on the strip
+     so the side panel always sits 12px above the strip's actual
+     rendered height. */
+  .map-shell.is-bottom-open .map-side-panel {
+    bottom: calc(var(--mdp-h, 200px) + 12px);
+  }
 
   .map-side-panel .msp-head {
     flex-shrink: 0;
