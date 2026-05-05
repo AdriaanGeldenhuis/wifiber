@@ -968,49 +968,76 @@ $map_data['wireless_link_summary'] = $wl_by_site;
   body:has(.map-fs) .portal-main  { padding: 0 !important; overflow: hidden; }
   body:has(.map-fs) .portal-inner { max-width: none !important; width: 100%; }
 
-  /* Auto-collapsing admin sidebar — only on the map page so the map
-     gets the full viewport. We pull .portal-side out of flow with
-     position:fixed so the map flexes to fill, then collapse it to a
-     6px gradient strip at the edge. Hover (or focus-within for
-     keyboard users) re-expands it to its normal width with a slide
-     animation; an 8px shadow makes it overlay the map cleanly. */
+  /* ---------- Map-page sidebar (rewritten from scratch) ----------
+     Approach: take the .portal-side aside out of flow with
+     position:fixed and park it OFF-SCREEN to the left.  Clicking
+     the floating chevron button slides it in via JS (inline style
+     change on the element), no class-based CSS specificity tricks.
+     The map gets the full viewport.
+
+     We use !important on the off-screen rules to be defensive
+     against portal.css's base .portal-side { width: 252px; ... }
+     and the @media (max-width:720px) override that resets
+     position:static. */
   body:has(.map-fs) .portal-side {
-    position: fixed;
-    left: 0; top: 0; bottom: 0;
-    height: 100vh;
-    width: 6px;
-    padding: 0;
-    z-index: 1500;
-    overflow: hidden;
-    border-right: 1px solid transparent;
-    background: linear-gradient(90deg, rgba(5,218,253,.35) 0%, rgba(5,218,253,.08) 60%, transparent 100%);
-    transition: width .2s cubic-bezier(.2,.7,.2,1),
-                padding .2s,
-                background .15s,
-                box-shadow .2s,
-                border-color .15s;
-  }
-  body:has(.map-fs) .portal-side:hover,
-  body:has(.map-fs) .portal-side:focus-within {
-    width: 252px;
-    padding: 24px 16px;
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    width: 252px !important;
+    height: 100vh !important;
+    padding: 24px 16px !important;
+    z-index: 1500 !important;
     background: var(--bg-elev);
-    border-right-color: var(--border);
+    border-right: 1px solid var(--border);
     box-shadow: 8px 0 24px rgba(0,0,0,.5);
     overflow-y: auto;
+    transform: translateX(-100%);
+    transition: transform .25s cubic-bezier(.2,.7,.2,1);
   }
-  /* Fade child content along with the width — looks smoother than
-     a hard cutoff and keeps assistive tech happy via aria-hidden
-     while collapsed. */
-  body:has(.map-fs) .portal-side > * {
-    opacity: 0;
-    transition: opacity .15s;
-    pointer-events: none;
+
+  /* Floating chevron — the only opener for the sidebar on the map. */
+  body:has(.map-fs) .map-sidebar-toggle {
+    position: fixed;
+    top: 14px;
+    left: 14px;
+    z-index: 1600;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    border-radius: 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border);
+    color: var(--text);
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 4px 12px rgba(0,0,0,.55);
+    transition: left .25s cubic-bezier(.2,.7,.2,1),
+                background .15s, border-color .15s, color .15s;
   }
-  body:has(.map-fs) .portal-side:hover > *,
-  body:has(.map-fs) .portal-side:focus-within > * {
-    opacity: 1;
-    pointer-events: auto;
+  body:has(.map-fs) .map-sidebar-toggle:hover,
+  body:has(.map-fs) .map-sidebar-toggle:focus-visible {
+    background: var(--accent);
+    color: #001218;
+    border-color: var(--accent);
+    outline: none;
+  }
+  body:has(.map-fs) .map-sidebar-toggle svg {
+    width: 18px;
+    height: 18px;
+    stroke: currentColor;
+    stroke-width: 2;
+    fill: none;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform .25s cubic-bezier(.2,.7,.2,1);
+    pointer-events: none;     /* let clicks always hit the button itself */
+  }
+  /* On narrow viewports the sidebar takes the full screen when open. */
+  @media (max-width: 600px) {
+    body:has(.map-fs) .portal-side { width: 100vw !important; }
   }
 
   .map-fs {
@@ -1026,7 +1053,9 @@ $map_data['wireless_link_summary'] = $wl_by_site;
     align-items: center;
     gap: 16px;
     flex-wrap: wrap;
-    padding: 10px 18px;
+    /* 60px left padding clears the floating sidebar-toggle chevron
+       (32px wide + 14px from edge + a bit of breathing room). */
+    padding: 10px 18px 10px 60px;
     background: linear-gradient(180deg, rgba(5,218,253,0.04) 0%, var(--bg-elev) 100%);
     border-bottom: 1px solid var(--border);
     flex-shrink: 0;
@@ -2158,7 +2187,7 @@ $map_data['wireless_link_summary'] = $wl_by_site;
 
   /* ---------- Mobile / narrow toolbar ---------- */
   @media (max-width: 900px) {
-    .map-bar { padding: 8px 12px; gap: 10px; }
+    .map-bar { padding: 8px 12px 8px 56px; gap: 10px; }
     .map-legend { display: none; }
     .map-counts { font-size: 10px; }
     .map-search { display: none; }
@@ -2179,6 +2208,16 @@ $map_data['wireless_link_summary'] = $wl_by_site;
     }
   }
 </style>
+
+<!-- Sidebar pin toggle — primary trigger for touch devices (no hover),
+     also a one-click alternative on desktop. Click toggles body class
+     map-side-pinned which the .portal-side rules above pick up. -->
+<button id="map-sidebar-toggle" class="map-sidebar-toggle" type="button"
+        aria-label="Toggle navigation" aria-expanded="false">
+  <svg viewBox="0 0 16 16" aria-hidden="true">
+    <path d="M5 2l6 6-6 6"/>
+  </svg>
+</button>
 
 <div class="map-fs">
   <div class="map-bar">
@@ -2329,6 +2368,59 @@ $map_data['wireless_link_summary'] = $wl_by_site;
         integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
         crossorigin="anonymous"></script>
 <script src="/assets/js/admin-map.js" defer></script>
+
+<script>
+/* Map sidebar — fresh rewrite.
+   • Sidebar is parked off-screen via CSS (transform: translateX(-100%)).
+   • Click the chevron → set inline transform: translateX(0) to slide
+     it in.  Click again, click the map, or press Esc → slide out.
+   • Inline styles beat any cached or third-party CSS that might be
+     fighting us.
+   • Logs a one-line breadcrumb to the console on first wire-up so
+     you can confirm in DevTools that the script attached. */
+(function () {
+  function wire() {
+    const btn  = document.getElementById('map-sidebar-toggle');
+    const side = document.querySelector('.portal-side');
+    if (!btn) { console.warn('[map-sidebar] toggle button missing'); return; }
+    if (!side) { console.warn('[map-sidebar] .portal-side missing'); return; }
+    console.log('[map-sidebar] wired — click the chevron to open the nav');
+
+    let isOpen = false;
+    function open()  { isOpen = true;  side.style.transform = 'translateX(0)';    btn.setAttribute('aria-expanded', 'true');  rotateChevron(true); }
+    function close() { isOpen = false; side.style.transform = 'translateX(-100%)'; btn.setAttribute('aria-expanded', 'false'); rotateChevron(false); }
+    function rotateChevron(opened) {
+      const svg = btn.querySelector('svg');
+      if (svg) svg.style.transform = opened ? 'rotate(180deg)' : 'rotate(0deg)';
+      btn.style.left = opened ? '260px' : '14px';
+    }
+
+    btn.addEventListener('click', function (e) {
+      e.preventDefault();
+      e.stopPropagation();
+      isOpen ? close() : open();
+    });
+    // Tap the map closes it.
+    document.addEventListener('click', function (e) {
+      if (!isOpen) return;
+      if (e.target.closest('.portal-side')) return;
+      if (e.target.closest('.map-sidebar-toggle')) return;
+      close();
+    });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && isOpen) close();
+    });
+  }
+
+  // Run as soon as the DOM has both elements; defer / DOMContentLoaded
+  // safe because the inline script lives at the bottom of the page.
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', wire);
+  } else {
+    wire();
+  }
+})();
+</script>
 
 <script>
 /* Coverage heatmap — operator picks a sector, fetches a GeoJSON grid
