@@ -2389,41 +2389,48 @@ $map_data['wireless_link_summary'] = $wl_by_site;
 <script>
 /* Map sidebar toggle.
    • Sidebar is parked off-screen via CSS.
-   • Click the chevron → toggle .map-side-open on <body>; CSS slides
-     the sidebar in.  Click outside, click the chevron again, or
-     press Esc → close.
-   • State is owned by the body class so the cascade and the script
-     can never disagree.  Logs one wire-up breadcrumb to the console
-     so DevTools can confirm the script attached. */
+   • Click anywhere on the chevron → toggle .map-side-open on <body>;
+     CSS slides the sidebar in.  Click outside the sidebar, click the
+     chevron again, or press Esc → close.
+   • The click is delegated on document at CAPTURE PHASE so nothing
+     downstream (a script that calls stopPropagation, an ancestor
+     that swaps the button's listeners, etc.) can swallow it before
+     we react. State lives on document.body so the cascade and the
+     script can never disagree. */
 (function () {
-  function wire() {
+  function isOpen()   { return document.body.classList.contains('map-side-open'); }
+  function setOpen(o) {
+    document.body.classList.toggle('map-side-open', !!o);
     var btn = document.getElementById('map-sidebar-toggle');
-    if (!btn) { console.warn('[map-sidebar] toggle button missing'); return; }
+    if (btn) btn.setAttribute('aria-expanded', o ? 'true' : 'false');
+  }
+  function onClickCapture(e) {
+    var t = e.target;
+    var hit = t && t.closest && t.closest('#map-sidebar-toggle');
+    if (hit) {
+      e.preventDefault();
+      e.stopPropagation();
+      setOpen(!isOpen());
+      return;
+    }
+    if (!isOpen()) return;
+    if (t && t.closest && t.closest('.portal-side')) return;
+    setOpen(false);
+  }
+
+  function wire() {
+    if (!document.getElementById('map-sidebar-toggle')) {
+      console.warn('[map-sidebar] toggle button missing');
+      return;
+    }
     if (!document.querySelector('.portal-side')) {
       console.warn('[map-sidebar] .portal-side missing — nav will not render');
       return;
     }
     console.log('[map-sidebar] wired — click the chevron to open the nav');
-
-    var body = document.body;
-    function isOpen() { return body.classList.contains('map-side-open'); }
-    function setOpen(open) {
-      body.classList.toggle('map-side-open', open);
-      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-    }
-
-    btn.addEventListener('click', function (e) {
-      e.preventDefault();
-      e.stopPropagation();
-      setOpen(!isOpen());
-    });
-    // Click anywhere outside the sidebar (and not on the chevron) closes it.
-    document.addEventListener('click', function (e) {
-      if (!isOpen()) return;
-      if (e.target.closest('.portal-side')) return;
-      if (e.target.closest('#map-sidebar-toggle')) return;
-      setOpen(false);
-    });
+    // Capture phase: our handler runs before any bubble-phase listener
+    // and before any descendant's capture-phase listener.
+    document.addEventListener('click', onClickCapture, true);
     document.addEventListener('keydown', function (e) {
       if (e.key === 'Escape' && isOpen()) setOpen(false);
     });
