@@ -2479,3 +2479,202 @@ p { margin: 0 0 1em; color: var(--text-dim); }
   .coverage-result { flex-direction: column; gap: 12px; padding: 20px; }
   .coverage-result-icon { width: 40px; height: 40px; }
 }
+
+/* ==========================================================================
+   Mobile refinements — global tightening for tablet/phone widths
+   ========================================================================== */
+
+/* Eliminate iOS tap flash + 300ms delay across interactive elements */
+a, button, .btn, .tier-btn, .legal-nav button, .nav-toggle, [role="tab"] {
+  -webkit-tap-highlight-color: transparent;
+  touch-action: manipulation;
+}
+
+/* Tablet & smaller (≤880px) ------------------------------------------------ */
+@media (max-width: 880px) {
+  /* Mobile drawer offset — match the actual (smaller) mobile header height
+     instead of the desktop --header-h variable, which is set inline on body */
+  .main-nav { inset: 104px 0 auto 0; }
+  /* Page rhythm */
+  .container { padding: 0 18px; }
+  .section { padding: 64px 0; }
+  .section-tight { padding: 40px 0; }
+
+  /* Type scale */
+  h1 { font-size: clamp(1.9rem, 7vw, 2.6rem); }
+  h2 { font-size: clamp(1.45rem, 5.2vw, 2rem); }
+  h3 { font-size: 1.1rem; }
+
+  /* Page hero (inner pages) */
+  .page-hero { padding: 70px 0 50px; }
+  .page-hero p { font-size: 1rem; }
+
+  /* Section heading */
+  .section-head { margin-bottom: 44px; max-width: 560px; }
+  .section-head .eyebrow::before,
+  .section-head .eyebrow::after { display: none; }
+
+  /* Header logo + spacing */
+  .logo img { height: clamp(54px, 14vw, 78px); }
+  .header-inner { padding: 12px 18px; gap: 14px; }
+  .logo-text { font-size: 1.1rem; }
+
+  /* Hero slider */
+  .hero-slider { min-height: 86vh; }
+  .slide-content { padding: 28px 0; }
+  .slide-content p.lead { font-size: 1rem; margin-bottom: 24px; }
+  .hero-cta { flex-direction: column; align-items: stretch; gap: 10px; width: 100%; max-width: 360px; }
+  .hero-cta .btn { width: 100%; }
+  .ticker-track { gap: 22px; padding: 12px 0; font-size: .68rem; }
+
+  /* Stat strip */
+  .stat-strip { padding: 18px 6px; gap: 10px; }
+  .stat-strip .stat { padding: 12px 14px; }
+  .stat .num { font-size: clamp(1.55rem, 7.5vw, 2rem); margin-bottom: 4px; }
+  .stat .label { font-size: .62rem; letter-spacing: .12em; }
+
+  /* Coverage check (homepage + /coverage) */
+  .coverage-check-card { padding: 24px 20px; }
+  .coverage-quick-head h2 { font-size: 1.3rem; }
+  .coverage-check-corner.tl, .coverage-check-corner.br { display: none; }
+
+  /* Contact section */
+  .contact-grid { gap: 24px; }
+  .contact-info, .contact-form { padding: 26px 22px; }
+  .contact-info h3 { font-size: 1.1rem; }
+  .contact-corner.tr, .contact-corner.bl { display: none; }
+
+  /* Pricing */
+  .pricing-controls { width: 100%; gap: 2px; padding: 4px; flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; scrollbar-width: none; }
+  .pricing-controls::-webkit-scrollbar { display: none; }
+  .tier-btn { flex: 1; padding: 11px 16px; font-size: .88rem; min-width: 0; }
+  .tier-btn span { white-space: nowrap; }
+  .price-card { padding: 26px 22px; }
+  .install-info { gap: 14px; margin-top: 50px; }
+  .install-card { padding: 26px 22px; }
+
+  /* Coverage map */
+  .coverage-map-corner.tl, .coverage-map-corner.tr,
+  .coverage-map-corner.bl, .coverage-map-corner.br { width: 14px; height: 14px; }
+  .coverage-map-tag { font-size: .62rem; padding: 5px 12px; top: 12px; }
+
+  /* Legal page */
+  .legal-content { padding: 30px 22px; }
+  .legal-panel h2 { font-size: 1.4rem; }
+  .legal-panel-tag { font-size: .65rem; padding: 5px 12px; }
+
+  /* Footer */
+  .footer-cta { padding: 24px 22px; flex-direction: column; align-items: stretch; text-align: left; gap: 14px; margin: 44px 0 48px; }
+  .footer-cta-btn { width: 100%; }
+  .footer-grid { gap: 36px; }
+  .footer-rule { background: linear-gradient(90deg, transparent 10%, rgba(5,218,253,.55) 50%, transparent 90%); }
+
+  /* Forms — prevent iOS auto-zoom (16px minimum) */
+  .field input, .field textarea, .field select,
+  .coverage-check-input input,
+  .coverage-waitlist-form .field input,
+  .coverage-waitlist-form .field textarea {
+    font-size: 16px;
+  }
+
+  /* Buttons — comfortable tap targets */
+  .btn { padding: 14px 22px; min-height: 46px; }
+  .btn-block { min-height: 50px; }
+
+  /* Card hover lift removed on touch (no real hover on mobile) */
+  .feature:hover, .price-card:hover, .install-card:hover { transform: none; }
+}
+
+/* Phone (≤600px) ----------------------------------------------------------- */
+@media (max-width: 600px) {
+  .main-nav { inset: 84px 0 auto 0; }
+  .container { padding: 0 16px; }
+  .section { padding: 50px 0; }
+  .section-tight { padding: 32px 0; }
+
+  /* Header — even smaller logo, hide wordmark */
+  .logo img { height: 60px; }
+  .logo-text { display: none; }
+  .header-inner { padding: 10px 16px; gap: 10px; }
+  .nav-toggle { padding: 9px; }
+
+  /* Hero */
+  .slide-content p.lead { font-size: .94rem; }
+  .slider-dots { bottom: 36px; }
+  .slider-dot { width: 28px; }
+  .ticker-track { gap: 18px; font-size: .62rem; }
+  .hero-ticker { padding: 8px 0; }
+
+  /* Stat strip — clean dividers off so the 2x2 grid breathes */
+  .stat-strip { padding: 18px 4px; gap: 6px; }
+  .stat-strip .stat + .stat::before { display: none; }
+  .stat .num { font-size: 1.6rem; }
+  .stat .label { font-size: .58rem; }
+
+  /* Section + feature cards */
+  .section-head { margin-bottom: 36px; }
+  .feature { padding: 22px 20px; }
+  .feature > .feature-num { top: 14px; right: 16px; font-size: .62rem; }
+
+  /* Coverage check */
+  .coverage-quick-head .eyebrow { font-size: .7rem; }
+  .coverage-check-input input { padding: 13px 14px 13px 40px; font-size: 16px; }
+  .coverage-check-input > svg { left: 14px; }
+
+  /* Coverage results & towns */
+  .coverage-result-cta { flex-direction: column; }
+  .coverage-result-cta .btn { width: 100%; }
+  .coverage-towns { grid-template-columns: 1fr; }
+
+  /* Contact */
+  .contact-info, .contact-form { padding: 22px 18px; }
+  .contact-info li { gap: 10px; }
+  .contact-icon { width: 30px; height: 30px; }
+
+  /* Pricing */
+  .price-grid { gap: 16px; }
+  .price-card { padding: 24px 20px; }
+  .price-card.featured::before { font-size: .58rem; padding: 5px 12px; }
+  .price-speed { font-size: 2rem; }
+  .price-cost { font-size: 2rem; }
+  .price-features li { font-size: .88rem; }
+  .tier-blurb { flex-direction: column; gap: 10px; font-size: .9rem; }
+
+  /* Legal */
+  .legal-layout { gap: 22px; }
+  .legal-content { padding: 26px 18px; }
+  .legal-panel h2 { font-size: 1.3rem; }
+  .legal-panel-body h3 { font-size: 1rem; margin-top: 22px; }
+  .legal-nav { padding: 12px; gap: 2px; }
+  .legal-nav button { padding: 11px 12px; font-size: .88rem; }
+
+  /* Footer */
+  .footer-grid { gap: 30px; }
+  .site-footer { padding-bottom: 22px; }
+  .footer-bottom { flex-direction: column; gap: 14px; text-align: center; padding-top: 20px; margin-top: 44px; }
+  .footer-meta { justify-content: center; gap: 6px; }
+  .footer-meta li { font-size: .62rem; padding: 3px 9px; }
+  .socials { justify-content: flex-start; }
+
+  /* Buttons — tighter padding, but maintain tap target */
+  .btn { padding: 13px 20px; font-size: .9rem; min-height: 46px; }
+  .nav-cta { padding: 12px 16px; font-size: .85rem; }
+
+  /* Reduce decorative cost on small screens */
+  .feature-corner, .price-corner, .install-icon {
+    /* still visible — just simpler */
+  }
+}
+
+/* Very small phones (≤380px) ---------------------------------------------- */
+@media (max-width: 380px) {
+  .main-nav { inset: 76px 0 auto 0; }
+  .container { padding: 0 14px; }
+  h1 { font-size: 1.75rem; }
+  .logo img { height: 52px; }
+  .stat-strip { grid-template-columns: 1fr 1fr; }
+  .stat .num { font-size: 1.45rem; }
+  .pricing-controls { padding: 3px; }
+  .tier-btn { padding: 10px 10px; font-size: .8rem; }
+  .price-card { padding: 22px 18px; }
+}
