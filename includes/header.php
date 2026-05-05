@@ -100,7 +100,32 @@ $twitter_handle = trim((string)($seo['twitter_handle'] ?? ''));
     <span class="incident-banner-link">View status &rarr;</span>
   </a>
 <?php endif; ?>
+<div class="top-bar">
+  <div class="container top-bar-inner">
+    <a href="/status" class="top-bar-status">
+      <span class="top-bar-dot"></span>
+      <span>All systems operational</span>
+    </a>
+    <ul class="top-bar-meta">
+      <li>
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg>
+        <span>24/7 Local Support</span>
+      </li>
+      <li>
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+        <span>Vaal Triangle, ZA</span>
+      </li>
+      <li>
+        <a href="mailto:<?= htmlspecialchars($site['email_support']) ?>">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><path d="M22 6l-10 7L2 6"/></svg>
+          <span><?= htmlspecialchars($site['email_support']) ?></span>
+        </a>
+      </li>
+    </ul>
+  </div>
+</div>
 <header class="site-header">
+  <div class="header-rule" aria-hidden="true"></div>
   <div class="container header-inner">
     <a href="/" class="logo" aria-label="<?= htmlspecialchars($site['name']) ?> home">
       <?php $brand_logo_url = !empty($site['brand']['logo_url']) ? $site['brand']['logo_url'] : asset('images/header-logo-2x.webp'); ?>
@@ -115,8 +140,15 @@ $twitter_handle = trim((string)($seo['twitter_handle'] ?? ''));
       <?= nav_link('/pricing', 'Pricing', $page_slug) ?>
       <?= nav_link('/coverage', 'Coverage Map', $page_slug) ?>
       <?= nav_link('/legal', 'Legal', $page_slug) ?>
-      <a href="/account/" class="portal-link">My Account</a>
-      <a href="tel:<?= $site['phone_link'] ?>" class="btn btn-primary nav-cta"><?= htmlspecialchars($site['phone']) ?></a>
+      <a href="/account/" class="portal-link">
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M4 21a8 8 0 0 1 16 0"/></svg>
+        <span>My Account</span>
+      </a>
+      <a href="tel:<?= $site['phone_link'] ?>" class="btn btn-primary nav-cta">
+        <span class="nav-cta-pulse" aria-hidden="true"></span>
+        <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.5" aria-hidden="true"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.36 1.9.7 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.34 1.85.57 2.81.7A2 2 0 0 1 22 16.92z"/></svg>
+        <span><?= htmlspecialchars($site['phone']) ?></span>
+      </a>
     </nav>
   </div>
 </header>
