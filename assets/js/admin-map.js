@@ -1623,8 +1623,8 @@
     // when it arrives.
     panel.classList.remove('is-site');
     renderLinkPanel({
-      from: { name: fromSite.name, type: fromSite.type, lat: fromSite.lat, lng: fromSite.lng },
-      to:   { name: toSite.name,   type: toSite.type,   lat: toSite.lat,   lng: toSite.lng },
+      from: { id: fromSite.id, name: fromSite.name, type: fromSite.type, lat: fromSite.lat, lng: fromSite.lng },
+      to:   { id: toSite.id,   name: toSite.name,   type: toSite.type,   lat: toSite.lat,   lng: toSite.lng },
       link: { id: link.id, type: link.type, label: link.label,
               capacity_mbps: link.capacity_mbps, frequency: link.frequency },
       distance_km: distanceMetres(fromSite.lat, fromSite.lng, toSite.lat, toSite.lng) / 1000,
@@ -1908,21 +1908,55 @@
          + '</div>';
   }
 
-  // Shared “endpoint card” for any site (used by link + site panels)
+  // Decorate a thin {id,name,type,lat,lng} reference with counts the
+  // panel needs (devices / sectors / backbone links). Pulled straight
+  // from the in-memory indices so it's free even when the API detail
+  // payload doesn't carry them — keeps the right-side endpoint card
+  // from sitting half-empty in sector/link panels.
+  function enrichSiteForCard(s) {
+    if (!s || s.id == null) return s || {};
+    const id = Number(s.id);
+    const out = Object.assign({}, s);
+    const devs = devicesBySite.get(id) || [];
+    out.devices = {
+      n: (s.devices && s.devices.n != null) ? s.devices.n : devs.length,
+      online: (s.devices && s.devices.online != null)
+              ? s.devices.online
+              : devs.filter((d) => d.status === 'online').length,
+    };
+    out.sector_count = (sectorsByTower.get(id) || new Set()).size;
+    let lc = 0;
+    linkLines.forEach((e) => {
+      if (e.data.from_site_id === id || e.data.to_site_id === id) lc++;
+    });
+    out.backbone_count = lc;
+    const entry = siteIndex.get(id);
+    if (entry && out.coverage_radius_m == null) out.coverage_radius_m = entry.data.coverage_radius_m;
+    return out;
+  }
+
+  // Shared "endpoint card" for any site (used by link + sector panels)
   function siteCardFromDetail(s, role) {
     if (!s) return '<div class="mdp-card" data-role="' + role + '"><div class="mdp-name"><input value="—" readonly></div></div>';
-    const typeLbl = siteTypeLabel(s.type);
-    const typeCol = SITE_COLOR[s.type] || '#888';
+    const e = enrichSiteForCard(s);
+    const typeLbl = siteTypeLabel(e.type);
+    const typeCol = SITE_COLOR[e.type] || '#888';
     const cells = [];
-    cells.push(kvCell('Location', (s.lat != null ? s.lat.toFixed(5) : '—') + ', ' + (s.lng != null ? s.lng.toFixed(5) : '—'), { wide: true }));
-    if (s.devices) {
-      cells.push(kvCell('Devices', s.devices.n + (s.devices.online != null ? ' · ' + s.devices.online + ' online' : '')));
+    cells.push(kvCell('Location', (e.lat != null ? e.lat.toFixed(5) : '—') + ', ' + (e.lng != null ? e.lng.toFixed(5) : '—'), { wide: true }));
+    if (e.devices) {
+      cells.push(kvCell('Devices', e.devices.n + (e.devices.online != null ? ' · ' + e.devices.online + ' on' : '')));
     }
-    if (s.coverage_radius_m) cells.push(kvCell('Coverage', s.coverage_radius_m + ' m'));
+    if (e.sector_count != null && (e.type === 'tower' || e.sector_count > 0)) {
+      cells.push(kvCell('Sectors', String(e.sector_count)));
+    }
+    if (e.backbone_count != null) {
+      cells.push(kvCell('Backbone', e.backbone_count + ' link' + (e.backbone_count === 1 ? '' : 's')));
+    }
+    if (e.coverage_radius_m) cells.push(kvCell('Coverage', e.coverage_radius_m + ' m'));
     return ''
       + '<div class="mdp-card" data-role="' + role + '">'
       +   '<div class="mdp-name">'
-      +     '<input type="text" value="' + escapeHtml(s.name) + '" readonly>'
+      +     '<input type="text" value="' + escapeHtml(e.name) + '" readonly>'
       +     '<span class="mdp-type-pill" style="color:' + typeCol + ';background:' + typeCol + '20;">' + escapeHtml(typeLbl) + '</span>'
       +   '</div>'
       +   '<div class="mdp-kv">' + cells.join('') + '</div>'
@@ -1956,7 +1990,7 @@
   function showSectorSkeleton(s, tower) {
     const sec = s;
     const towerCard = tower ? siteCardFromDetail({
-      name: tower.name, type: tower.type, lat: tower.lat, lng: tower.lng,
+      id: tower.id, name: tower.name, type: tower.type, lat: tower.lat, lng: tower.lng,
     }, 'tower') : '<div class="mdp-card"></div>';
     panel.classList.remove('is-site');
     panelGrid.innerHTML = ''
@@ -1971,7 +2005,7 @@
   function renderSectorDetail(j) {
     const s = j.sector, t = j.tower, ap = j.ap_device, st = j.stats || {}, oa = j.outage;
     const towerCard = t ? siteCardFromDetail({
-      name: t.name, type: t.type, lat: t.lat, lng: t.lng,
+      id: t.id, name: t.name, type: t.type, lat: t.lat, lng: t.lng,
     }, 'tower') : '<div class="mdp-card"></div>';
     panel.classList.remove('is-site');
     panelGrid.innerHTML = ''

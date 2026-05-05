@@ -1654,12 +1654,12 @@ $map_data['wireless_link_summary'] = $wl_by_site;
     background: linear-gradient(180deg, rgba(16,20,27,.97) 0%, rgba(10,13,18,1) 100%);
     border-top: 1px solid var(--border);
     box-shadow: 0 -8px 24px rgba(0,0,0,.5), inset 0 1px 0 rgba(5,218,253,.06);
-    padding: 10px 18px 12px;
+    padding: 8px 18px 10px;
     transform: translateY(100%);
     opacity: 1;
     pointer-events: none;
     transition: transform .25s cubic-bezier(.2,.7,.2,1);
-    max-height: 220px;
+    max-height: 200px;
     overflow-y: auto;
   }
   .map-detail-panel.is-open {
@@ -1687,15 +1687,15 @@ $map_data['wireless_link_summary'] = $wl_by_site;
 
   .map-detail-panel .mdp-grid {
     display: grid;
-    grid-template-columns: 1fr 1.3fr 1fr;
-    gap: 18px;
-    align-items: stretch;
+    grid-template-columns: 1.05fr 1.6fr 1.05fr;
+    gap: 12px;
+    align-items: start;          /* cards size to content, no empty stretch */
   }
   .map-detail-panel .mdp-card {
     display: flex;
     flex-direction: column;
-    gap: 6px;
-    padding: 10px 12px;
+    gap: 4px;
+    padding: 8px 11px 9px;
     background: rgba(255,255,255,.02);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
@@ -1745,7 +1745,7 @@ $map_data['wireless_link_summary'] = $wl_by_site;
   .map-detail-panel .mdp-kv {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    gap: 6px 10px;
+    gap: 4px 10px;
     margin-top: 2px;
   }
   .map-detail-panel .mdp-kv .mdp-cell {
@@ -1753,32 +1753,34 @@ $map_data['wireless_link_summary'] = $wl_by_site;
     flex-direction: column;
     min-width: 0;
   }
-  .map-detail-panel .mdp-kv .mdp-cell-wide { grid-column: span 2; }
+  .map-detail-panel .mdp-kv .mdp-cell-wide { grid-column: 1 / -1; }
   .map-detail-panel .mdp-kv .mdp-label {
-    font-size: 9.5px;
+    font-size: 9px;
     text-transform: uppercase;
     letter-spacing: .1em;
     color: var(--text-muted);
     font-weight: 600;
+    line-height: 1.3;
   }
   .map-detail-panel .mdp-kv .mdp-val {
-    font-size: 12px;
+    font-size: 11.5px;
     color: var(--text);
-    margin-top: 2px;
+    margin-top: 1px;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+    line-height: 1.3;
   }
 
   /* Centre column — link metrics (capacity bar, distance, signal gradient) */
   .map-detail-panel .mdp-center {
-    padding: 12px 14px;
+    padding: 9px 12px 10px;
     background: linear-gradient(180deg, rgba(5,218,253,0.04) 0%, transparent 100%);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 7px;
   }
   .map-detail-panel .mdp-cap-row {
     display: flex;
@@ -1904,7 +1906,7 @@ $map_data['wireless_link_summary'] = $wl_by_site;
     position: absolute;
     top: 12px;
     right: 0;
-    bottom: 232px;       /* clear of bottom strip + a 12px gap */
+    bottom: 212px;       /* clear of bottom strip + a 12px gap */
     width: 340px;
     z-index: 850;
     background: var(--bg-card);
