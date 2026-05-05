@@ -968,112 +968,76 @@ $map_data['wireless_link_summary'] = $wl_by_site;
   body:has(.map-fs) .portal-main  { padding: 0 !important; overflow: hidden; }
   body:has(.map-fs) .portal-inner { max-width: none !important; width: 100%; }
 
-  /* Auto-collapsing admin sidebar — only on the map page so the map
-     gets the full viewport. We pull .portal-side out of flow with
-     position:fixed so the map flexes to fill, then collapse it to a
-     6px gradient strip at the edge. Hover (or focus-within for
-     keyboard users) re-expands it to its normal width with a slide
-     animation; an 8px shadow makes it overlay the map cleanly. */
-  body:has(.map-fs) .portal-side {
-    position: fixed;
-    left: 0; top: 0; bottom: 0;
-    height: 100vh;
-    width: 6px;
-    padding: 0;
-    z-index: 1500;
-    overflow: hidden;
-    border-right: 1px solid transparent;
-    background: linear-gradient(90deg, rgba(5,218,253,.35) 0%, rgba(5,218,253,.08) 60%, transparent 100%);
-    transition: width .2s cubic-bezier(.2,.7,.2,1),
-                padding .2s,
-                background .15s,
-                box-shadow .2s,
-                border-color .15s;
-  }
-  /* Fade child content along with the width — looks smoother than
-     a hard cutoff and keeps assistive tech happy while collapsed.
-     Hover-to-open is intentionally NOT wired: the floating chevron
-     button is the only opener, so the experience is the same on
-     touch and desktop and the operator never expands it by accident
-     while moving the cursor along the left edge. */
-  body:has(.map-fs) .portal-side > * {
-    opacity: 0;
-    transition: opacity .15s;
-    pointer-events: none;
-  }
+  /* ---------- Map-page sidebar (rewritten from scratch) ----------
+     Approach: take the .portal-side aside out of flow with
+     position:fixed and park it OFF-SCREEN to the left.  Clicking
+     the floating chevron button slides it in via JS (inline style
+     change on the element), no class-based CSS specificity tricks.
+     The map gets the full viewport.
 
-  /* Sidebar opens when the .is-open class is added by JS (the chevron
-     button click handler). */
-  body:has(.map-fs) .portal-side.is-open {
-    width: 252px;
-    padding: 24px 16px;
+     We use !important on the off-screen rules to be defensive
+     against portal.css's base .portal-side { width: 252px; ... }
+     and the @media (max-width:720px) override that resets
+     position:static. */
+  body:has(.map-fs) .portal-side {
+    position: fixed !important;
+    left: 0 !important;
+    top: 0 !important;
+    bottom: 0 !important;
+    width: 252px !important;
+    height: 100vh !important;
+    padding: 24px 16px !important;
+    z-index: 1500 !important;
     background: var(--bg-elev);
-    border-right-color: var(--border);
+    border-right: 1px solid var(--border);
     box-shadow: 8px 0 24px rgba(0,0,0,.5);
     overflow-y: auto;
-  }
-  body:has(.map-fs) .portal-side.is-open > * {
-    opacity: 1;
-    pointer-events: auto;
+    transform: translateX(-100%);
+    transition: transform .25s cubic-bezier(.2,.7,.2,1);
   }
 
-  /* Floating chevron — mounts at the very left edge so it always sits
-     on top of the 6px collapsed strip; slides to the right edge of
-     the expanded sidebar (and flips its arrow) when the sidebar is
-     open via hover or pin. Visible on every device — primary trigger
-     on touch (where there's no hover) and a one-click alternative on
-     desktop when you don't want to chase the edge. */
+  /* Floating chevron — the only opener for the sidebar on the map. */
   body:has(.map-fs) .map-sidebar-toggle {
     position: fixed;
     top: 14px;
     left: 14px;
     z-index: 1600;
-    width: 32px;
-    height: 32px;
+    width: 36px;
+    height: 36px;
     padding: 0;
-    border-radius: 6px;
+    border-radius: 8px;
     background: var(--bg-card);
     border: 1px solid var(--border);
-    color: var(--text-dim);
+    color: var(--text);
     cursor: pointer;
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 4px 10px rgba(0,0,0,.45);
-    transition: left .22s cubic-bezier(.2,.7,.2,1),
-                color .15s, background .15s, border-color .15s;
+    box-shadow: 0 4px 12px rgba(0,0,0,.55);
+    transition: left .25s cubic-bezier(.2,.7,.2,1),
+                background .15s, border-color .15s, color .15s;
   }
-  body:has(.map-fs) .map-sidebar-toggle:hover {
-    background: var(--accent-soft);
-    color: var(--accent);
+  body:has(.map-fs) .map-sidebar-toggle:hover,
+  body:has(.map-fs) .map-sidebar-toggle:focus-visible {
+    background: var(--accent);
+    color: #001218;
     border-color: var(--accent);
+    outline: none;
   }
   body:has(.map-fs) .map-sidebar-toggle svg {
-    width: 16px;
-    height: 16px;
+    width: 18px;
+    height: 18px;
     stroke: currentColor;
     stroke-width: 2;
     fill: none;
     stroke-linecap: round;
     stroke-linejoin: round;
-    transition: transform .22s cubic-bezier(.2,.7,.2,1);
+    transition: transform .25s cubic-bezier(.2,.7,.2,1);
+    pointer-events: none;     /* let clicks always hit the button itself */
   }
-  /* Slide the button to the open-sidebar edge whenever the nav is
-     showing.  We can't use a sibling combinator because the button
-     and the sidebar live in different DOM branches (button is inside
-     .portal-main); instead the JS adds .is-open to the button when
-     it's hovered or pinned. */
-  body:has(.map-fs) .map-sidebar-toggle.is-open {
-    left: 260px;
-  }
-  body:has(.map-fs) .map-sidebar-toggle.is-open svg {
-    transform: rotate(180deg);
-  }
-  /* On narrow viewports the sidebar takes the whole screen when open,
-     so the button slides all the way to the right edge. */
+  /* On narrow viewports the sidebar takes the full screen when open. */
   @media (max-width: 600px) {
-    body:has(.map-fs) .portal-side.is-open { width: 100vw; }
-    body:has(.map-fs) .map-sidebar-toggle.is-open { left: calc(100vw - 46px); }
+    body:has(.map-fs) .portal-side { width: 100vw !important; }
   }
 
   .map-fs {
@@ -2406,80 +2370,54 @@ $map_data['wireless_link_summary'] = $wl_by_site;
 <script src="/assets/js/admin-map.js" defer></script>
 
 <script>
-/* Sidebar toggle — clicking the floating chevron is the ONLY way to
-   open the admin nav on the map page.  Hover-to-open was dropped so
-   the same UX works on touch and desktop.
-
-   We push the open-state styles in directly via element.style instead
-   of relying on a CSS class — inline styles beat any CSS specificity
-   trap and guarantee the sidebar visibly expands the moment the
-   class is toggled.  Closing clears the inline styles so the existing
-   collapsed CSS (width: 6px, opacity: 0 children) takes over again. */
+/* Map sidebar — fresh rewrite.
+   • Sidebar is parked off-screen via CSS (transform: translateX(-100%)).
+   • Click the chevron → set inline transform: translateX(0) to slide
+     it in.  Click again, click the map, or press Esc → slide out.
+   • Inline styles beat any cached or third-party CSS that might be
+     fighting us.
+   • Logs a one-line breadcrumb to the console on first wire-up so
+     you can confirm in DevTools that the script attached. */
 (function () {
-  function init() {
+  function wire() {
     const btn  = document.getElementById('map-sidebar-toggle');
     const side = document.querySelector('.portal-side');
-    if (!btn || !side) {
-      // The portal-header may render after this script runs in some
-      // edge cases — retry a couple of times then give up.
-      if (init._tries == null) init._tries = 0;
-      if (++init._tries > 10) return;
-      return setTimeout(init, 100);
+    if (!btn) { console.warn('[map-sidebar] toggle button missing'); return; }
+    if (!side) { console.warn('[map-sidebar] .portal-side missing'); return; }
+    console.log('[map-sidebar] wired — click the chevron to open the nav');
+
+    let isOpen = false;
+    function open()  { isOpen = true;  side.style.transform = 'translateX(0)';    btn.setAttribute('aria-expanded', 'true');  rotateChevron(true); }
+    function close() { isOpen = false; side.style.transform = 'translateX(-100%)'; btn.setAttribute('aria-expanded', 'false'); rotateChevron(false); }
+    function rotateChevron(opened) {
+      const svg = btn.querySelector('svg');
+      if (svg) svg.style.transform = opened ? 'rotate(180deg)' : 'rotate(0deg)';
+      btn.style.left = opened ? '260px' : '14px';
     }
-    let open = false;
-    function applyOpenStyles(v) {
-      if (v) {
-        side.style.width            = '252px';
-        side.style.padding          = '24px 16px';
-        side.style.background       = 'var(--bg-elev)';
-        side.style.boxShadow        = '8px 0 24px rgba(0,0,0,.5)';
-        side.style.borderRightColor = 'var(--border)';
-        side.style.overflowY        = 'auto';
-        Array.from(side.children).forEach((c) => {
-          c.style.opacity       = '1';
-          c.style.pointerEvents = 'auto';
-        });
-        btn.style.left = '260px';
-      } else {
-        // Clear inline styles so the collapsed CSS rules apply again.
-        side.style.width            = '';
-        side.style.padding          = '';
-        side.style.background       = '';
-        side.style.boxShadow        = '';
-        side.style.borderRightColor = '';
-        side.style.overflowY        = '';
-        Array.from(side.children).forEach((c) => {
-          c.style.opacity       = '';
-          c.style.pointerEvents = '';
-        });
-        btn.style.left = '';
-      }
-    }
-    function setOpen(v) {
-      open = !!v;
-      applyOpenStyles(open);
-      side.classList.toggle('is-open', open);
-      btn.classList.toggle('is-open', open);
-      btn.setAttribute('aria-expanded', open ? 'true' : 'false');
-    }
-    btn.addEventListener('click', (e) => {
+
+    btn.addEventListener('click', function (e) {
       e.preventDefault();
       e.stopPropagation();
-      setOpen(!open);
+      isOpen ? close() : open();
     });
-    document.addEventListener('click', (e) => {
-      if (!open) return;
-      if (e.target.closest('.portal-side') || e.target.closest('.map-sidebar-toggle')) return;
-      setOpen(false);
+    // Tap the map closes it.
+    document.addEventListener('click', function (e) {
+      if (!isOpen) return;
+      if (e.target.closest('.portal-side')) return;
+      if (e.target.closest('.map-sidebar-toggle')) return;
+      close();
     });
-    document.addEventListener('keydown', (e) => {
-      if (e.key === 'Escape' && open) setOpen(false);
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && isOpen) close();
     });
   }
+
+  // Run as soon as the DOM has both elements; defer / DOMContentLoaded
+  // safe because the inline script lives at the bottom of the page.
   if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
+    document.addEventListener('DOMContentLoaded', wire);
   } else {
-    init();
+    wire();
   }
 })();
 </script>
