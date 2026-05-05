@@ -764,20 +764,27 @@ p { margin: 0 0 1em; color: var(--text-dim); }
 /* ---------- Cards / Why-choose ---------- */
 .feature-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 20px;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 16px;
   counter-reset: feature;
 }
+@media (max-width: 1200px) { .feature-grid { grid-template-columns: repeat(3, 1fr); gap: 20px; } }
+@media (max-width: 800px)  { .feature-grid { grid-template-columns: repeat(2, 1fr); } }
+@media (max-width: 520px)  { .feature-grid { grid-template-columns: 1fr; } }
 .feature {
   background:
     linear-gradient(180deg, rgba(16,20,27,.95), rgba(10,13,18,.95));
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 30px;
+  padding: 24px 22px;
   transition: transform .25s ease, border-color .25s ease, box-shadow .25s ease, background .25s ease;
   position: relative;
   overflow: hidden;
   counter-increment: feature;
+}
+@media (min-width: 1201px) {
+  .feature h3 { font-size: 1.05rem; }
+  .feature p  { font-size: .85rem; }
 }
 .feature::before {
   content: '';
