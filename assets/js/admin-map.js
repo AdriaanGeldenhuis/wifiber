@@ -379,10 +379,49 @@
       weight: l.type === 'fiber' ? 4 : 3,
       dashArray: l.type === 'ptmp' ? '6 4' : null,
       opacity: 0.85,
+      className: 'wf-link',
     });
     line.bindPopup(linkPopupHTML(l, a.data, b.data));
+    // UISP-style rich tooltip on hover (distance + capacity + endpoints).
+    line.bindTooltip(linkTooltipHTML(l, a.data, b.data), {
+      sticky: true,
+      direction: 'top',
+      offset: [0, -8],
+      className: 'leaflet-link-tip',
+    });
+    // Stash link metadata on the polyline so the detail panel module
+    // can pull it out from a click event without crossing IIFE walls.
+    line.wfLinkId = l.id;
     line.addTo(linksLayer);
     linkLines.set(l.id, { line, data: l });
+  }
+
+  // Great-circle distance in metres. Used by the hover tooltip + detail
+  // panel; kept inline so we don't depend on the PHP-side haversine
+  // which only runs server-side.
+  function distanceMetres(lat1, lng1, lat2, lng2) {
+    const R = 6371000;
+    const φ1 = lat1 * Math.PI / 180, φ2 = lat2 * Math.PI / 180;
+    const Δφ = (lat2 - lat1) * Math.PI / 180;
+    const Δλ = (lng2 - lng1) * Math.PI / 180;
+    const a = Math.sin(Δφ/2) ** 2 + Math.cos(φ1) * Math.cos(φ2) * Math.sin(Δλ/2) ** 2;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(a)));
+  }
+  function fmtDistance(m) {
+    if (m >= 1000) return (m / 1000).toFixed(2) + ' km';
+    return Math.round(m) + ' m';
+  }
+
+  function linkTooltipHTML(l, from, to) {
+    const dist = distanceMetres(from.lat, from.lng, to.lat, to.lng);
+    const cap  = l.capacity_mbps != null ? l.capacity_mbps + ' Mbps' : '—';
+    const freq = l.frequency ? escapeHtml(l.frequency) : '—';
+    return ''
+      + '<div class="ltip-title">' + escapeHtml(l.label || (l.type.toUpperCase() + ' link')) + '</div>'
+      + '<div class="ltip-row"><span>Distance</span><strong>' + fmtDistance(dist) + '</strong></div>'
+      + '<div class="ltip-row"><span>Capacity</span><strong>' + cap + '</strong></div>'
+      + '<div class="ltip-row"><span>Frequency</span><strong>' + freq + '</strong></div>'
+      + '<div class="ltip-route">' + escapeHtml(from.name) + ' ↔ ' + escapeHtml(to.name) + '</div>';
   }
 
   function linkPopupHTML(l, from, to) {
@@ -1028,6 +1067,535 @@
   boot.site_links.forEach(renderLink);
   boot.clients.forEach(renderClient);
   (boot.sectors || []).forEach(renderSector);
+
+  /* ==========================================================
+     UISP-style enhancements
+     ----------------------------------------------------------
+     Adds: bottom detail panel for links/sites, hover tooltip
+     on links (already wired in renderLink), live cursor coord
+     readout, fit-all / locate / measure tools, search jump.
+     Self-contained — only reads from already-built indices.
+     ========================================================== */
+
+  /* ---------- live coord readout ---------- */
+  const coordLat  = document.getElementById('coord-lat');
+  const coordLng  = document.getElementById('coord-lng');
+  const coordZoom = document.getElementById('coord-zoom');
+  function fmtCoord(v) { return (v >= 0 ? ' ' : '') + v.toFixed(5); }
+  if (coordLat && coordLng) {
+    map.on('mousemove', (e) => {
+      coordLat.textContent = fmtCoord(e.latlng.lat);
+      coordLng.textContent = fmtCoord(e.latlng.lng);
+    });
+  }
+  if (coordZoom) {
+    const updateZ = () => { coordZoom.textContent = String(map.getZoom()); };
+    map.on('zoomend', updateZ);
+    updateZ();
+  }
+
+  /* ---------- fit-all + locate + measure quick-tools ---------- */
+  const fitBtn     = document.getElementById('qt-fit-all');
+  const locateBtn  = document.getElementById('qt-locate');
+  const measureBtn = document.getElementById('qt-measure');
+
+  if (fitBtn) {
+    fitBtn.addEventListener('click', () => {
+      const pts = [];
+      siteIndex.forEach((e) => pts.push([e.data.lat, e.data.lng]));
+      // Include placed clients too so the bound is faithful to what's drawn.
+      (boot.clients || []).forEach((c) => {
+        if (c.lat != null && c.lng != null) pts.push([c.lat, c.lng]);
+      });
+      if (!pts.length) return;
+      map.fitBounds(L.latLngBounds(pts), { padding: [50, 50], maxZoom: 16 });
+    });
+  }
+  if (locateBtn) {
+    locateBtn.addEventListener('click', () => {
+      map.setView(boot.center, boot.zoom);
+    });
+  }
+
+  // ----- distance measure tool -----
+  // Click once to set point A, second click locks point B and shows
+  // the live distance as a small chip on the dashed line. Esc clears.
+  let measureActive = false;
+  let measureA      = null;
+  let measureLine   = null;
+  let measureDot    = null;
+  let measureTip    = null;
+  function clearMeasure() {
+    measureActive = false;
+    measureA = null;
+    if (measureLine)  { map.removeLayer(measureLine);  measureLine = null; }
+    if (measureDot)   { map.removeLayer(measureDot);   measureDot = null; }
+    if (measureTip)   { map.removeLayer(measureTip);   measureTip = null; }
+    if (measureBtn) measureBtn.classList.remove('is-active');
+    map.getContainer().classList.remove('mdp-measuring');
+    map.getContainer().style.cursor = '';
+    setHint('');
+  }
+  function startMeasure() {
+    if (measureActive) { clearMeasure(); return; }
+    // Don't fight the existing add-site / add-link / add-sector modes.
+    if (mode !== 'pan') setMode('pan');
+    measureActive = true;
+    if (measureBtn) measureBtn.classList.add('is-active');
+    map.getContainer().style.cursor = 'crosshair';
+    setHint('Click two points on the map to measure distance. Esc cancels.');
+  }
+  if (measureBtn) measureBtn.addEventListener('click', startMeasure);
+
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && measureActive) clearMeasure();
+  });
+
+  map.on('click', (e) => {
+    if (!measureActive) return;
+    L.DomEvent.stopPropagation(e);
+    if (!measureA) {
+      measureA = e.latlng;
+      measureDot = L.circleMarker(measureA, {
+        radius: 4, color: '#05DAFD', weight: 2,
+        fillColor: '#001218', fillOpacity: 1,
+      }).addTo(map);
+      return;
+    }
+    // Second click — lock the line and leave the chip in place. Click
+    // the measure button again (or Esc) to clear.
+    const b = e.latlng;
+    if (measureLine) { map.removeLayer(measureLine); measureLine = null; }
+    if (measureTip)  { map.removeLayer(measureTip);  measureTip = null; }
+    measureLine = L.polyline([measureA, b], {
+      color: '#05DAFD', weight: 2, dashArray: '6 5', opacity: .9,
+    }).addTo(map);
+    const dist = distanceMetres(measureA.lat, measureA.lng, b.lat, b.lng);
+    const mid = [(measureA.lat + b.lat) / 2, (measureA.lng + b.lng) / 2];
+    measureTip = L.tooltip({
+      permanent: true, direction: 'center',
+      className: 'leaflet-measure-tip', offset: [0, 0],
+    }).setLatLng(mid).setContent(fmtDistance(dist)).addTo(map);
+    L.circleMarker(b, {
+      radius: 4, color: '#05DAFD', weight: 2,
+      fillColor: '#001218', fillOpacity: 1,
+    }).addTo(map);
+    measureA = null;  // ready for next pair, but keep tool active
+    setHint('Click two more points, or press Esc to finish.');
+  });
+
+  // Live preview while drawing the second leg.
+  map.on('mousemove', (e) => {
+    if (!measureActive || !measureA) return;
+    if (measureLine) map.removeLayer(measureLine);
+    measureLine = L.polyline([measureA, e.latlng], {
+      color: '#05DAFD', weight: 2, dashArray: '4 4', opacity: .55,
+    }).addTo(map);
+    if (measureTip) map.removeLayer(measureTip);
+    const dist = distanceMetres(measureA.lat, measureA.lng, e.latlng.lat, e.latlng.lng);
+    measureTip = L.tooltip({
+      permanent: true, direction: 'top', offset: [0, -8],
+      className: 'leaflet-measure-tip',
+    }).setLatLng(e.latlng).setContent(fmtDistance(dist)).addTo(map);
+  });
+
+  /* ---------- search box ---------- */
+  const searchInput   = document.getElementById('map-search-input');
+  const searchResults = document.getElementById('map-search-results');
+  let searchCursor    = -1;
+  let searchHits      = [];
+
+  function buildSearchHits() {
+    const hits = [];
+    siteIndex.forEach((e) => {
+      hits.push({ kind: 'site', id: e.data.id, label: e.data.name,
+                  meta: siteTypeLabel(e.data.type),
+                  color: SITE_COLOR[e.data.type] || '#888',
+                  lat: e.data.lat, lng: e.data.lng, ref: e });
+    });
+    linkLines.forEach((e) => {
+      const a = siteIndex.get(e.data.from_site_id);
+      const b = siteIndex.get(e.data.to_site_id);
+      if (!a || !b) return;
+      hits.push({ kind: 'link', id: e.data.id,
+                  label: e.data.label || (a.data.name + ' ↔ ' + b.data.name),
+                  meta: e.data.type,
+                  color: LINK_COLOR[e.data.type] || '#888',
+                  lat: (a.data.lat + b.data.lat) / 2,
+                  lng: (a.data.lng + b.data.lng) / 2,
+                  ref: e });
+    });
+    (boot.clients || []).forEach((c) => {
+      if (c.lat == null || c.lng == null) return;
+      hits.push({ kind: 'client', id: c.id,
+                  label: c.account_no || c.username || c.name || ('client ' + c.id),
+                  meta: c.name || '',
+                  color: STATUS_COLOR[c.status] || '#888',
+                  lat: c.lat, lng: c.lng });
+    });
+    return hits;
+  }
+  let allHits = buildSearchHits();
+
+  function renderSearchResults(q) {
+    if (!searchResults) return;
+    if (!q) {
+      searchResults.classList.remove('is-open');
+      searchResults.innerHTML = '';
+      searchHits = [];
+      searchCursor = -1;
+      return;
+    }
+    const ql = q.toLowerCase();
+    searchHits = allHits.filter((h) => {
+      return (h.label || '').toLowerCase().includes(ql)
+          || (h.meta  || '').toLowerCase().includes(ql);
+    }).slice(0, 12);
+    searchCursor = searchHits.length ? 0 : -1;
+    if (!searchHits.length) {
+      searchResults.innerHTML = '<div class="msr-empty">No matches</div>';
+    } else {
+      searchResults.innerHTML = searchHits.map((h, i) => ''
+        + '<div class="msr-row' + (i === searchCursor ? ' is-cursor' : '') + '" data-idx="' + i + '">'
+        +   '<span class="msr-dot" style="background:' + h.color + ';"></span>'
+        +   '<span>' + escapeHtml(h.label) + '</span>'
+        +   '<span class="msr-meta">' + escapeHtml(h.kind === 'link' ? ('link · ' + h.meta) : h.meta) + '</span>'
+        + '</div>').join('');
+    }
+    searchResults.classList.add('is-open');
+  }
+  function jumpToHit(h) {
+    if (!h) return;
+    map.setView([h.lat, h.lng], Math.max(map.getZoom(), 14), { animate: true });
+    if (h.kind === 'site' && h.ref && h.ref.marker) {
+      h.ref.marker.openPopup();
+      openSiteDetail(h.ref.data);
+    } else if (h.kind === 'link' && h.ref && h.ref.line) {
+      h.ref.line.openPopup();
+      openLinkDetail(h.ref.data);
+    }
+  }
+  if (searchInput && searchResults) {
+    searchInput.addEventListener('input', (e) => {
+      // Refresh hits each keystroke so newly added sites are findable
+      // without a full reload.
+      allHits = buildSearchHits();
+      renderSearchResults(e.target.value.trim());
+    });
+    searchInput.addEventListener('focus', () => {
+      if (searchInput.value.trim()) renderSearchResults(searchInput.value.trim());
+    });
+    searchInput.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' && searchHits.length) {
+        e.preventDefault();
+        searchCursor = (searchCursor + 1) % searchHits.length;
+        renderSearchResults(searchInput.value.trim());
+      } else if (e.key === 'ArrowUp' && searchHits.length) {
+        e.preventDefault();
+        searchCursor = (searchCursor - 1 + searchHits.length) % searchHits.length;
+        renderSearchResults(searchInput.value.trim());
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        if (searchCursor >= 0 && searchHits[searchCursor]) {
+          jumpToHit(searchHits[searchCursor]);
+          searchResults.classList.remove('is-open');
+          searchInput.blur();
+        }
+      } else if (e.key === 'Escape') {
+        searchResults.classList.remove('is-open');
+        searchInput.blur();
+      }
+    });
+    searchResults.addEventListener('mousedown', (e) => {
+      const row = e.target.closest('.msr-row');
+      if (!row) return;
+      const i = parseInt(row.dataset.idx, 10);
+      jumpToHit(searchHits[i]);
+      searchResults.classList.remove('is-open');
+      searchInput.blur();
+    });
+    document.addEventListener('click', (e) => {
+      if (!searchResults.contains(e.target) && e.target !== searchInput) {
+        searchResults.classList.remove('is-open');
+      }
+    });
+  }
+
+  /* ---------- detail panel ---------- */
+  const panel       = document.getElementById('map-detail-panel');
+  const panelGrid   = document.getElementById('mdp-grid');
+  const panelClose  = document.getElementById('mdp-close');
+  let selectedFeature = null;   // {kind, id, layer}
+  let pulseRing       = null;
+
+  function clearSelection() {
+    if (selectedFeature && selectedFeature.layer && selectedFeature.layer._path) {
+      selectedFeature.layer._path.classList.remove('is-mdp-selected');
+    }
+    if (pulseRing) { map.removeLayer(pulseRing); pulseRing = null; }
+    selectedFeature = null;
+  }
+  function closePanel() {
+    if (!panel) return;
+    panel.classList.remove('is-open');
+    panel.setAttribute('aria-hidden', 'true');
+    clearSelection();
+  }
+  if (panelClose) panelClose.addEventListener('click', closePanel);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && panel && panel.classList.contains('is-open')) closePanel();
+  });
+
+  // Health-bar marker position from a 0..100 score, returns a percentage.
+  function healthPct(score) {
+    if (score == null || isNaN(score)) return 50;   // unknown → middle
+    return Math.max(0, Math.min(100, score));
+  }
+
+  function siteCardHTML(site, role) {
+    const devs    = (devicesBySite.get(site.id) || []);
+    const onlineD = devs.filter((d) => d.status === 'online').length;
+    const sectors = (sectorsByTower.get(site.id) || new Set()).size;
+    const wl      = (boot.wireless_link_summary && boot.wireless_link_summary[site.id]) || null;
+    const typeLbl = siteTypeLabel(site.type);
+    const typeCol = SITE_COLOR[site.type] || '#888';
+    const pillStyle = 'color:' + typeCol + ';background:' + typeCol + '20;';
+    const cells = [];
+    cells.push(['Location', site.lat.toFixed(5) + ', ' + site.lng.toFixed(5)]);
+    if (site.coverage_radius_m) cells.push(['Coverage', site.coverage_radius_m + ' m']);
+    cells.push(['Devices', devs.length + (devs.length ? ' · ' + onlineD + ' online' : '')]);
+    if (site.type === 'tower') cells.push(['Sectors', String(sectors)]);
+    if (wl) cells.push(['Wireless links', wl.count + (wl.degraded ? ' · ' + wl.degraded + ' degraded' : '')]);
+    return ''
+      + '<div class="mdp-card" data-role="' + role + '">'
+      +   '<div class="mdp-name">'
+      +     '<input type="text" value="' + escapeHtml(site.name) + '" readonly>'
+      +     '<span class="mdp-type-pill" style="' + pillStyle + '">' + escapeHtml(typeLbl) + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-kv">'
+      +     cells.map(([k, v]) => ''
+      +       + '<div class="mdp-cell' + (k === 'Location' ? ' mdp-cell-wide' : '') + '">'
+      +         '<span class="mdp-label">' + escapeHtml(k) + '</span>'
+      +         '<span class="mdp-val" title="' + escapeHtml(String(v)) + '">' + escapeHtml(String(v)) + '</span>'
+      +       '</div>').join('')
+      +   '</div>'
+      + '</div>';
+  }
+
+  // Heuristic: with no measured signal on site_links, infer a notional
+  // "expected" signal from distance + capacity. Lets the gradient bar
+  // give the operator a visual cue rather than always sitting blank.
+  function expectedSignalDbm(distM, capMbps, freq) {
+    // Simplified free-space path loss approximation, anchored so
+    // 1 km at 5 GHz lands around -55 dBm and 10 km lands around -75 dBm.
+    // Capacity slightly biases — high-capacity links tend to be tighter LoS.
+    if (!distM) return null;
+    const km = distM / 1000;
+    let dbm = -55 - 20 * Math.log10(Math.max(0.1, km));
+    if (capMbps && capMbps > 500) dbm += 2;   // assume better link budget
+    if (freq && /60\s*GHz/i.test(freq)) dbm -= 6;
+    return Math.round(dbm);
+  }
+  function dbmToPct(dbm) {
+    // Map -95..-45 dBm to 0..100 % for the gradient marker.
+    if (dbm == null) return 50;
+    const p = ((dbm + 95) / 50) * 100;
+    return Math.max(0, Math.min(100, p));
+  }
+
+  function openLinkDetail(link) {
+    if (!panel || !panelGrid) return;
+    const a = siteIndex.get(link.from_site_id);
+    const b = siteIndex.get(link.to_site_id);
+    if (!a || !b) return;
+    const fromSite = a.data, toSite = b.data;
+    const dist = distanceMetres(fromSite.lat, fromSite.lng, toSite.lat, toSite.lng);
+    const cap  = link.capacity_mbps;
+    const sig  = expectedSignalDbm(dist, cap, link.frequency);
+    const sigPct = dbmToPct(sig);
+    // Ratio against a notional 1 Gbps backbone for the bar fill.
+    const capPct = cap ? Math.max(8, Math.min(100, (cap / 1000) * 100)) : 35;
+    const linkTypeLabel = (link.type || '').toUpperCase();
+    const linkLabel     = link.label || (linkTypeLabel + ' link');
+
+    const centerHTML = ''
+      + '<div class="mdp-center">'
+      +   '<div class="mdp-cap-row">'
+      +     '<span>' + escapeHtml(linkLabel) + '</span>'
+      +     '<span class="mdp-cap-val">' + (cap != null ? cap + ' Mbps' : 'Capacity —') + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-cap-bar"><div class="mdp-cap-fill" style="width:' + capPct.toFixed(0) + '%;"></div></div>'
+      +   '<div class="mdp-distance">'
+      +     '<span>' + escapeHtml(fromSite.name) + '</span>'
+      +     '<span class="mdp-arrow"></span>'
+      +     '<span class="mdp-dist-val">' + fmtDistance(dist) + '</span>'
+      +     '<span class="mdp-arrow"></span>'
+      +     '<span>' + escapeHtml(toSite.name) + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-signal-bar">'
+      +     '<div class="mdp-signal-marker" style="left:calc(' + sigPct.toFixed(0) + '% - 1.5px);" title="' + (sig != null ? sig + ' dBm' : 'unknown') + '"></div>'
+      +   '</div>'
+      +   '<div class="mdp-signal-meta">'
+      +     '<span>Expected signal</span>'
+      +     '<span>' + (sig != null ? sig + ' dBm' : 'no data') + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-kv" style="grid-template-columns:1fr 1fr 1fr;">'
+      +     '<div class="mdp-cell"><span class="mdp-label">Type</span><span class="mdp-val">' + escapeHtml(linkTypeLabel) + '</span></div>'
+      +     '<div class="mdp-cell"><span class="mdp-label">Frequency</span><span class="mdp-val">' + escapeHtml(link.frequency || '—') + '</span></div>'
+      +     '<div class="mdp-cell"><span class="mdp-label">Capacity</span><span class="mdp-val">' + (cap != null ? cap + ' Mbps' : '—') + '</span></div>'
+      +   '</div>'
+      +   '<div class="mdp-actions">'
+      +     '<button type="button" class="btn btn-ghost btn-sm" data-mdp-zoom-link="' + link.id + '">Zoom to</button>'
+      +     '<button type="button" class="btn btn-danger btn-sm" data-delete-link="' + link.id + '">Delete</button>'
+      +   '</div>'
+      + '</div>';
+
+    panel.classList.remove('is-site');
+    panelGrid.innerHTML = siteCardHTML(fromSite, 'a') + centerHTML + siteCardHTML(toSite, 'b');
+    panel.classList.add('is-open');
+    panel.setAttribute('aria-hidden', 'false');
+
+    clearSelection();
+    const entry = linkLines.get(link.id);
+    if (entry) {
+      selectedFeature = { kind: 'link', id: link.id, layer: entry.line };
+      if (entry.line._path) entry.line._path.classList.add('is-mdp-selected');
+    }
+  }
+
+  function openSiteDetail(site) {
+    if (!panel || !panelGrid) return;
+    const devs    = (devicesBySite.get(site.id) || []);
+    const onlineD = devs.filter((d) => d.status === 'online').length;
+    const sectors = (sectorsByTower.get(site.id) || new Set()).size;
+    const wl      = (boot.wireless_link_summary && boot.wireless_link_summary[site.id]) || null;
+
+    // Connected backbone links from this site (PTP / fibre / backhaul rows).
+    const connections = [];
+    linkLines.forEach((e) => {
+      if (e.data.from_site_id === site.id || e.data.to_site_id === site.id) {
+        const otherId = e.data.from_site_id === site.id ? e.data.to_site_id : e.data.from_site_id;
+        const other = siteIndex.get(otherId);
+        if (other) {
+          const d = distanceMetres(site.lat, site.lng, other.data.lat, other.data.lng);
+          connections.push({ name: other.data.name, type: e.data.type, dist: d, cap: e.data.capacity_mbps });
+        }
+      }
+    });
+
+    const wlScore = wl && wl.worst != null ? wl.worst : null;
+    const sigPct  = healthPct(wlScore);
+    const cap     = connections.reduce((sum, c) => sum + (c.cap || 0), 0);
+    const capPct  = cap ? Math.max(8, Math.min(100, (cap / 1000) * 100)) : 35;
+
+    const centerHTML = ''
+      + '<div class="mdp-center">'
+      +   '<div class="mdp-cap-row">'
+      +     '<span>Site overview</span>'
+      +     '<span class="mdp-cap-val">' + (cap ? cap + ' Mbps backbone' : (devs.length + ' device' + (devs.length === 1 ? '' : 's'))) + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-cap-bar"><div class="mdp-cap-fill" style="width:' + capPct.toFixed(0) + '%;"></div></div>'
+      + (connections.length
+          ? '<div class="mdp-distance" style="border:none;padding:2px 0;font-size:11px;">'
+            + '<span style="color:var(--text-muted);text-transform:uppercase;letter-spacing:.08em;font-weight:600;font-size:10px;">Connections</span>'
+            + '<span style="margin-left:auto;color:var(--text-dim);">'
+            + connections.map((c) => escapeHtml(c.name) + ' (' + fmtDistance(c.dist) + ')').join(' · ')
+            + '</span>'
+            + '</div>'
+          : ''
+        )
+      +   '<div class="mdp-signal-bar">'
+      +     '<div class="mdp-signal-marker" style="left:calc(' + sigPct.toFixed(0) + '% - 1.5px);"></div>'
+      +   '</div>'
+      +   '<div class="mdp-signal-meta">'
+      +     '<span>Wireless link health</span>'
+      +     '<span>' + (wlScore != null ? wlScore + ' / 100' : 'no data') + '</span>'
+      +   '</div>'
+      +   '<div class="mdp-kv" style="grid-template-columns:1fr 1fr 1fr;">'
+      +     '<div class="mdp-cell"><span class="mdp-label">Devices</span><span class="mdp-val">' + devs.length + ' · ' + onlineD + ' online</span></div>'
+      +     '<div class="mdp-cell"><span class="mdp-label">Sectors</span><span class="mdp-val">' + sectors + '</span></div>'
+      +     '<div class="mdp-cell"><span class="mdp-label">Backbone</span><span class="mdp-val">' + connections.length + ' link' + (connections.length === 1 ? '' : 's') + '</span></div>'
+      +   '</div>'
+      +   '<div class="mdp-actions">'
+      +     '<button type="button" class="btn btn-ghost btn-sm" data-mdp-zoom-site="' + site.id + '">Zoom to</button>'
+      +     (site.type === 'tower'
+            ? '<button type="button" class="btn btn-primary btn-sm" data-add-sector="' + site.id + '">+ Sector</button>'
+            : '')
+      +     '<button type="button" class="btn btn-ghost btn-sm" data-edit-site="' + site.id + '">Edit</button>'
+      +     '<button type="button" class="btn btn-danger btn-sm" data-delete-site="' + site.id + '">Delete</button>'
+      +   '</div>'
+      + '</div>';
+
+    panel.classList.remove('is-site');
+    panelGrid.innerHTML = siteCardHTML(site, 'a') + centerHTML;
+    panel.classList.add('is-open', 'is-site');
+    panel.setAttribute('aria-hidden', 'false');
+
+    // Pulse ring under the selected site marker.
+    clearSelection();
+    pulseRing = L.marker([site.lat, site.lng], {
+      interactive: false,
+      icon: L.divIcon({
+        className: '',
+        html: '<div class="mdp-pulse-marker"></div>',
+        iconSize: [22, 22], iconAnchor: [11, 11],
+      }),
+    }).addTo(map);
+    selectedFeature = { kind: 'site', id: site.id };
+  }
+
+  // Zoom-to handlers in the panel
+  document.addEventListener('click', (e) => {
+    const zl = e.target.closest('[data-mdp-zoom-link]');
+    if (zl) {
+      const id = parseInt(zl.dataset.mdpZoomLink, 10);
+      const entry = linkLines.get(id);
+      if (entry) map.fitBounds(entry.line.getBounds(), { padding: [60, 60], maxZoom: 16 });
+      return;
+    }
+    const zs = e.target.closest('[data-mdp-zoom-site]');
+    if (zs) {
+      const id = parseInt(zs.dataset.mdpZoomSite, 10);
+      const entry = siteIndex.get(id);
+      if (entry) map.setView([entry.data.lat, entry.data.lng], Math.max(map.getZoom(), 16), { animate: true });
+      return;
+    }
+  });
+
+  // Wire link clicks → open the detail panel. We hook on popupopen so we
+  // don't fight the existing popup binding (which carries the Delete
+  // button) — both surface together and the panel closes when the popup
+  // closes via its own × button or panel close.
+  map.on('popupopen', (e) => {
+    const src = e.popup && e.popup._source;
+    if (!src) return;
+    if (src.wfLinkId != null) {
+      const entry = linkLines.get(src.wfLinkId);
+      if (entry) openLinkDetail(entry.data);
+      return;
+    }
+    // Site marker — match by lat/lng since markers don't carry an id.
+    if (src instanceof L.Marker) {
+      const ll = src.getLatLng();
+      let match = null;
+      siteIndex.forEach((entry) => {
+        if (!match && entry.marker === src) match = entry.data;
+      });
+      if (match) openSiteDetail(match);
+    }
+  });
+  map.on('popupclose', (e) => {
+    // Only auto-close the panel if its current selection matches the
+    // popup that just closed — keeps the panel sticky when the operator
+    // dismisses an unrelated popup.
+    const src = e.popup && e.popup._source;
+    if (!selectedFeature || !src) return;
+    if (selectedFeature.kind === 'link' && src.wfLinkId === selectedFeature.id) closePanel();
+    else if (selectedFeature.kind === 'site' && src instanceof L.Marker) {
+      const entry = siteIndex.get(selectedFeature.id);
+      if (entry && entry.marker === src) closePanel();
+    }
+  });
 
   /* ---------- live refresh (device status + active outages) ----------
      Every 30 seconds we hit /admin/map.php?poll=1 for a snapshot of
