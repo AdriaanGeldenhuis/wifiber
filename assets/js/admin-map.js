@@ -1330,9 +1330,222 @@
   const panel       = document.getElementById('map-detail-panel');
   const panelGrid   = document.getElementById('mdp-grid');
   const panelClose  = document.getElementById('mdp-close');
+  const shellEl     = document.querySelector('.map-shell');
   let selectedFeature = null;   // {kind, id, layer}
   let pulseRing       = null;
 
+  /* ---------- right-side panel (related entities) ----------
+     Opened in addition to the bottom panel — gives the operator the
+     "list of things connected to what you clicked": sectors+links
+     for a tower, clients for a sector, etc.  Each tab renders
+     [{kind, id, name, meta, color, pill}] rows; clicking a row
+     triggers the same flow as clicking the feature on the map. */
+  const sidePanel    = document.getElementById('map-side-panel');
+  const spTitleEl    = document.getElementById('msp-title');
+  const spSubtitleEl = document.getElementById('msp-subtitle');
+  const spTabsEl     = document.getElementById('msp-tabs');
+  const spBodyEl     = document.getElementById('msp-body');
+  const spCloseEl    = document.getElementById('msp-close');
+  let sideContext = null;        // { tabs: [...], activeIdx }
+
+  function closeSidePanel() {
+    if (!sidePanel) return;
+    sidePanel.classList.remove('is-open');
+    sidePanel.setAttribute('aria-hidden', 'true');
+    if (shellEl) shellEl.classList.remove('is-side-open');
+    sideContext = null;
+  }
+  function openSidePanel(opts) {
+    if (!sidePanel) return;
+    spTitleEl.textContent    = opts.title    || '—';
+    spSubtitleEl.textContent = opts.subtitle || '';
+    sideContext = { tabs: opts.tabs || [], activeIdx: 0 };
+    renderSideTabs();
+    renderSideBody();
+    sidePanel.classList.add('is-open');
+    sidePanel.setAttribute('aria-hidden', 'false');
+    if (shellEl) shellEl.classList.add('is-side-open');
+  }
+  function renderSideTabs() {
+    if (!sideContext) return;
+    spTabsEl.innerHTML = sideContext.tabs.map((t, i) => ''
+      + '<button type="button" class="msp-tab' + (i === sideContext.activeIdx ? ' is-active' : '') + '" data-tab="' + i + '" role="tab">'
+      +   escapeHtml(t.label)
+      +   ' <span class="msp-tab-count">' + ((t.items && t.items.length) || 0) + '</span>'
+      + '</button>'
+    ).join('');
+  }
+  function renderSideBody() {
+    if (!sideContext) return;
+    const tab = sideContext.tabs[sideContext.activeIdx];
+    if (!tab || !tab.items || !tab.items.length) {
+      spBodyEl.innerHTML = '<div class="msp-empty">' + escapeHtml((tab && tab.empty) || 'Nothing connected.') + '</div>';
+      return;
+    }
+    spBodyEl.innerHTML = '<ul class="msp-list">'
+      + tab.items.map((it) => ''
+        + '<li class="msp-item" data-msp-kind="' + escapeHtml(it.kind || '') + '" data-msp-id="' + escapeHtml(String(it.id ?? '')) + '">'
+        +   '<span class="msp-item-dot" style="background:' + (it.color || '#888') + ';"></span>'
+        +   '<div class="msp-item-body">'
+        +     '<div class="msp-item-name">' + escapeHtml(it.name || '') + '</div>'
+        +     (it.meta ? '<div class="msp-item-meta">' + escapeHtml(it.meta) + '</div>' : '')
+        +   '</div>'
+        +   (it.pill ? '<span class="msp-item-pill' + (it.pillClass ? ' ' + it.pillClass : '') + '">' + escapeHtml(it.pill) + '</span>' : '')
+        + '</li>').join('')
+      + '</ul>';
+  }
+  if (spCloseEl) spCloseEl.addEventListener('click', closeSidePanel);
+  if (spTabsEl) {
+    spTabsEl.addEventListener('click', (e) => {
+      const t = e.target.closest('.msp-tab');
+      if (!t || !sideContext) return;
+      const i = parseInt(t.dataset.tab, 10);
+      if (isNaN(i)) return;
+      sideContext.activeIdx = i;
+      renderSideTabs();
+      renderSideBody();
+    });
+  }
+  if (spBodyEl) {
+    spBodyEl.addEventListener('click', (e) => {
+      const li = e.target.closest('.msp-item');
+      if (!li) return;
+      const kind = li.dataset.mspKind;
+      const id   = parseInt(li.dataset.mspId, 10);
+      if (!kind || isNaN(id)) return;
+      // Reuse the same dispatch flow as a real click on the map: open
+      // the popup which then triggers popupopen → openXDetail.
+      if (kind === 'site' || kind === 'tower') {
+        const entry = siteIndex.get(id);
+        if (entry) {
+          map.setView([entry.data.lat, entry.data.lng], Math.max(map.getZoom(), 15), { animate: true });
+          entry.marker.openPopup();
+        }
+      } else if (kind === 'sector') {
+        const entry = sectorIndex.get(id);
+        if (entry && entry.layer) {
+          map.fitBounds(entry.layer.getBounds(), { maxZoom: 16, padding: [40, 40] });
+          entry.layer.openPopup();
+        }
+      } else if (kind === 'link') {
+        const entry = linkLines.get(id);
+        if (entry) {
+          map.fitBounds(entry.line.getBounds(), { padding: [60, 60], maxZoom: 16 });
+          entry.line.openPopup();
+        }
+      } else if (kind === 'client') {
+        const c = clientById.get(id);
+        if (c && c.lat != null && c.lng != null) {
+          map.setView([c.lat, c.lng], Math.max(map.getZoom(), 17), { animate: true });
+          openClientDetail(c);
+        }
+      }
+    });
+  }
+
+  /* ---------- builders for sidebar contents per feature ---------- */
+  function buildTowerSidebarTabs(site) {
+    // Sectors at this tower
+    const sectorIds = sectorsByTower.get(site.id) || new Set();
+    const sectorItems = [...sectorIds].map((sid) => sectorIndex.get(sid)).filter(Boolean).map((e) => {
+      const s = e.data;
+      const az = s.azimuth_deg != null ? 'az ' + s.azimuth_deg + '°' : '';
+      const bw = s.beamwidth_deg != null ? 'bw ' + s.beamwidth_deg + '°' : '';
+      const fq = s.frequency_mhz != null ? s.frequency_mhz + ' MHz' : '';
+      const meta = [s.band, az, bw, fq].filter(Boolean).join(' · ');
+      const cap = (s.max_clients && s.customer_count != null)
+                ? s.customer_count + ' / ' + s.max_clients : null;
+      const apOff = outageSectorIds && outageSectorIds.has(s.id);
+      return {
+        kind: 'sector', id: s.id, name: s.name, meta: meta,
+        color: BAND_COLOR[s.band] || '#888',
+        pill: apOff ? 'outage' : (cap || s.band),
+        pillClass: apOff ? 'is-danger' : (s.max_clients && s.customer_count >= s.max_clients ? 'is-warn' : ''),
+      };
+    });
+
+    // Backbone links touching this tower
+    const linkItems = [];
+    linkLines.forEach((e) => {
+      const l = e.data;
+      if (l.from_site_id !== site.id && l.to_site_id !== site.id) return;
+      const otherId = l.from_site_id === site.id ? l.to_site_id : l.from_site_id;
+      const other = siteIndex.get(otherId);
+      if (!other) return;
+      const dist = distanceMetres(site.lat, site.lng, other.data.lat, other.data.lng);
+      const meta = [l.type ? l.type.toUpperCase() : null,
+                    l.capacity_mbps ? l.capacity_mbps + ' Mbps' : null,
+                    l.frequency || null,
+                    fmtDistance(dist)].filter(Boolean).join(' · ');
+      linkItems.push({
+        kind: 'link', id: l.id,
+        name: l.label || (other.data.name + ' link'),
+        meta: '→ ' + other.data.name + ' · ' + meta,
+        color: LINK_COLOR[l.type] || '#888',
+        pill: l.type, pillClass: 'is-muted',
+      });
+    });
+
+    // Devices at this tower
+    const devs = devicesBySite.get(site.id) || [];
+    const devItems = devs.map((d) => ({
+      kind: 'device', id: d.id, name: d.name,
+      meta: [d.role, d.vendor + (d.model ? ' ' + d.model : '')].filter(Boolean).join(' · '),
+      color: DEVICE_COLOR[d.status] || '#888',
+      pill: d.status,
+      pillClass: d.status === 'offline' ? 'is-danger' : (d.status === 'online' ? '' : 'is-muted'),
+    }));
+
+    return [
+      { label: 'Sectors', items: sectorItems, empty: 'No sectors on this tower.' },
+      { label: 'Links',   items: linkItems,   empty: 'No backbone links from here.' },
+      { label: 'Devices', items: devItems,    empty: 'No devices on this tower.' },
+    ];
+  }
+
+  function buildSectorSidebarTabs(sector) {
+    // Clients keyed to this sector via boot.clients[].sector_id
+    const items = (boot.clients || [])
+      .filter((c) => Number(c.sector_id) === Number(sector.id))
+      .map((c) => {
+        const apOff = c.network_status === 'offline';
+        const placed = c.lat != null && c.lng != null;
+        return {
+          kind: 'client', id: c.id,
+          name: c.account_no || c.username || c.name || ('client ' + c.id),
+          meta: [c.name, placed ? null : 'unplaced', c.address].filter(Boolean).join(' · '),
+          color: STATUS_COLOR[c.status] || '#888',
+          pill: apOff ? 'AP down' : c.status,
+          pillClass: apOff ? 'is-danger' : (c.status === 'suspended' ? 'is-warn' : ''),
+        };
+      });
+    return [
+      { label: 'Clients', items, empty: 'No customers assigned to this sector.' },
+    ];
+  }
+
+  function buildLinkSidebarTabs(link) {
+    const a = siteIndex.get(link.from_site_id);
+    const b = siteIndex.get(link.to_site_id);
+    function tabFor(siteEntry) {
+      if (!siteEntry) return { label: '?', items: [] };
+      const site = siteEntry.data;
+      const sectorIds = sectorsByTower.get(site.id) || new Set();
+      const sectorItems = [...sectorIds].map((sid) => sectorIndex.get(sid)).filter(Boolean).map((e) => {
+        const s = e.data;
+        const az = s.azimuth_deg != null ? 'az ' + s.azimuth_deg + '°' : '';
+        const bw = s.beamwidth_deg != null ? 'bw ' + s.beamwidth_deg + '°' : '';
+        const fq = s.frequency_mhz != null ? s.frequency_mhz + ' MHz' : '';
+        const meta = [s.band, az, bw, fq].filter(Boolean).join(' · ');
+        return {
+          kind: 'sector', id: s.id, name: s.name, meta,
+          color: BAND_COLOR[s.band] || '#888',
+        };
+      });
+      return { label: site.name, items: sectorItems, empty: 'No sectors on this site.' };
+    }
+    return [tabFor(a), tabFor(b)];
+  }
   function clearSelection() {
     if (selectedFeature && selectedFeature.layer && selectedFeature.layer._path) {
       selectedFeature.layer._path.classList.remove('is-mdp-selected');
@@ -1344,11 +1557,19 @@
     if (!panel) return;
     panel.classList.remove('is-open');
     panel.setAttribute('aria-hidden', 'true');
+    if (shellEl) shellEl.classList.remove('is-bottom-open');
     clearSelection();
+    closeSidePanel();
   }
   if (panelClose) panelClose.addEventListener('click', closePanel);
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && panel && panel.classList.contains('is-open')) closePanel();
+    if (e.key === 'Escape') {
+      if (sidePanel && sidePanel.classList.contains('is-open')) {
+        closeSidePanel();
+        return;
+      }
+      if (panel && panel.classList.contains('is-open')) closePanel();
+    }
   });
 
   // Health-bar marker position from a 0..100 score, returns a percentage.
@@ -1379,7 +1600,7 @@
       +   '</div>'
       +   '<div class="mdp-kv">'
       +     cells.map(([k, v]) => ''
-      +       + '<div class="mdp-cell' + (k === 'Location' ? ' mdp-cell-wide' : '') + '">'
+      +         '<div class="mdp-cell' + (k === 'Location' ? ' mdp-cell-wide' : '') + '">'
       +         '<span class="mdp-label">' + escapeHtml(k) + '</span>'
       +         '<span class="mdp-val" title="' + escapeHtml(String(v)) + '">' + escapeHtml(String(v)) + '</span>'
       +       '</div>').join('')
@@ -1429,6 +1650,7 @@
     });
     panel.classList.add('is-open');
     panel.setAttribute('aria-hidden', 'false');
+    if (shellEl) shellEl.classList.add('is-bottom-open');
 
     clearSelection();
     const entry = linkLines.get(link.id);
@@ -1436,6 +1658,14 @@
       selectedFeature = { kind: 'link', id: link.id, layer: entry.line };
       if (entry.line._path) entry.line._path.classList.add('is-mdp-selected');
     }
+
+    // Sidebar: sectors at each endpoint tower (so the operator can
+    // see "what's behind this link" at a glance).
+    openSidePanel({
+      title: (fromSite.name + ' ↔ ' + toSite.name),
+      subtitle: 'Link · sectors at each endpoint',
+      tabs: buildLinkSidebarTabs(link),
+    });
 
     const j = await fetchDetail('link', link.id);
     if (!j) return;
@@ -1597,6 +1827,7 @@
     panelGrid.innerHTML = siteCardHTML(site, 'a') + centerHTML;
     panel.classList.add('is-open', 'is-site');
     panel.setAttribute('aria-hidden', 'false');
+    if (shellEl) shellEl.classList.add('is-bottom-open');
 
     // Pulse ring under the selected site marker.
     clearSelection();
@@ -1609,6 +1840,14 @@
       }),
     }).addTo(map);
     selectedFeature = { kind: 'site', id: site.id };
+
+    // Sidebar: sectors + backbone links + devices for this site
+    // (the operator-asked "everything connected to this tower").
+    openSidePanel({
+      title: site.name,
+      subtitle: siteTypeLabel(site.type) + ' · everything connected',
+      tabs: buildTowerSidebarTabs(site),
+    });
   }
 
   // Zoom-to handlers in the panel
@@ -1719,6 +1958,13 @@
     if (selectedFeature.layer && selectedFeature.layer._path) selectedFeature.layer._path.classList.add('is-mdp-selected');
     if (pulseRing) { map.removeLayer(pulseRing); pulseRing = null; }
 
+    // Sidebar: clients connected to this sector
+    openSidePanel({
+      title: sector.name,
+      subtitle: 'Sector · clients on this AP',
+      tabs: buildSectorSidebarTabs(sector),
+    });
+
     const j = await fetchDetail('sector', sector.id);
     if (!j) return;
     if (!selectedFeature || selectedFeature.kind !== 'sector' || selectedFeature.id !== sector.id) return; // user moved on
@@ -1737,6 +1983,7 @@
       + towerCard;
     panel.classList.add('is-open');
     panel.setAttribute('aria-hidden', 'false');
+    if (shellEl) shellEl.classList.add('is-bottom-open');
   }
 
   function renderSectorDetail(j) {
@@ -1844,6 +2091,10 @@
     showClientSkeleton(client);
     selectedFeature = { kind: 'client', id: client.id };
     if (pulseRing) { map.removeLayer(pulseRing); pulseRing = null; }
+    // Clients don't carry a useful related-list of their own — the
+    // sector that owns them is already shown in the right card of
+    // the bottom panel. Close the sidebar to give the map back.
+    closeSidePanel();
     if (client.lat != null && client.lng != null) {
       pulseRing = L.marker([client.lat, client.lng], {
         interactive: false,
@@ -1865,6 +2116,7 @@
       + '<div class="mdp-card"><div class="mdp-name"><input value="…" readonly></div></div>';
     panel.classList.add('is-open');
     panel.setAttribute('aria-hidden', 'false');
+    if (shellEl) shellEl.classList.add('is-bottom-open');
   }
 
   function renderClientDetail(j) {

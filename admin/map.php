@@ -1595,32 +1595,34 @@ $map_data['wireless_link_summary'] = $wl_by_site;
   }
   .leaflet-tooltip.leaflet-measure-tip::before { display: none; }
 
-  /* ---------- Bottom detail panel (UISP-style) ---------- */
+  /* ---------- Bottom detail panel (UISP-style flat strip) ----------
+     Anchored to the bottom edge of the map, full width. Slides up
+     when a feature is selected.  Internally a 3-column flex layout
+     (left card | centre metrics | right card) so it stays compact
+     even when packed with sector / link telemetry. */
   .map-detail-panel {
     position: absolute;
-    bottom: 12px;
-    left: 50%;
-    transform: translateX(-50%) translateY(20px);
+    bottom: 0;
+    left: 0;
+    right: 0;
     z-index: 900;
-    width: min(1040px, calc(100% - 32px));
-    max-height: calc(100% - 36px);
-    overflow-y: auto;
-    background: var(--bg-card);
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    box-shadow: 0 12px 32px rgba(0,0,0,.6), 0 0 0 1px rgba(5,218,253,.04);
-    padding: 14px 16px;
-    opacity: 0;
+    background: linear-gradient(180deg, rgba(16,20,27,.97) 0%, rgba(10,13,18,1) 100%);
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -8px 24px rgba(0,0,0,.5), inset 0 1px 0 rgba(5,218,253,.06);
+    padding: 10px 18px 12px;
+    transform: translateY(100%);
+    opacity: 1;
     pointer-events: none;
-    transition: transform .25s cubic-bezier(.2,.7,.2,1), opacity .2s;
+    transition: transform .25s cubic-bezier(.2,.7,.2,1);
+    max-height: 220px;
+    overflow-y: auto;
+  }
+  .map-detail-panel.is-open {
+    transform: translateY(0);
+    pointer-events: auto;
   }
   .map-detail-panel #mdp-grid {
     transition: opacity .15s;
-  }
-  .map-detail-panel.is-open {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0);
-    pointer-events: auto;
   }
   .map-detail-panel .mdp-close {
     position: absolute;
@@ -1847,6 +1849,196 @@ $map_data['wireless_link_summary'] = $wl_by_site;
     grid-template-columns: 1fr 1.4fr;
   }
 
+  /* ---------- Right sidebar — related entities for selection ----------
+     Slides in from the right when a feature is clicked.  Holds the
+     "list of things connected to what you clicked" (sectors + links
+     for a tower; clients for a sector; sectors for each endpoint of a
+     link).  Sits ABOVE the bottom detail panel so the two never
+     collide.  Closed by an × in its header or by Esc. */
+  .map-side-panel {
+    position: absolute;
+    top: 12px;
+    right: 0;
+    bottom: 232px;       /* clear of bottom strip + a 12px gap */
+    width: 340px;
+    z-index: 850;
+    background: var(--bg-card);
+    border-left: 1px solid var(--border);
+    border-top-left-radius: var(--radius);
+    border-bottom-left-radius: var(--radius);
+    box-shadow: -8px 0 24px rgba(0,0,0,.45);
+    transform: translateX(100%);
+    pointer-events: none;
+    transition: transform .25s cubic-bezier(.2,.7,.2,1), bottom .2s;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  .map-side-panel.is-open {
+    transform: translateX(0);
+    pointer-events: auto;
+  }
+  /* When the bottom panel is closed, the sidebar can extend further. */
+  .map-shell.is-bottom-closed .map-side-panel { bottom: 12px; }
+
+  .map-side-panel .msp-head {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 12px 14px 10px;
+    border-bottom: 1px solid var(--border);
+    background: linear-gradient(180deg, rgba(5,218,253,.05) 0%, transparent 100%);
+  }
+  .map-side-panel .msp-title {
+    flex: 1;
+    min-width: 0;
+    font-family: 'Space Grotesk', 'Inter', sans-serif;
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    letter-spacing: -.005em;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .map-side-panel .msp-subtitle {
+    font-size: 10.5px;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    margin-top: 2px;
+  }
+  .map-side-panel .msp-close {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    font-size: 18px;
+    line-height: 1;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    transition: background .15s, color .15s;
+  }
+  .map-side-panel .msp-close:hover { background: rgba(255,255,255,.06); color: var(--text); }
+
+  .map-side-panel .msp-tabs {
+    flex-shrink: 0;
+    display: flex;
+    border-bottom: 1px solid var(--border);
+    background: rgba(255,255,255,.02);
+  }
+  .map-side-panel .msp-tab {
+    flex: 1;
+    padding: 9px 8px;
+    text-align: center;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .08em;
+    color: var(--text-muted);
+    cursor: pointer;
+    transition: color .15s, border-color .15s, background .15s;
+    font-family: inherit;
+  }
+  .map-side-panel .msp-tab:hover { color: var(--text); }
+  .map-side-panel .msp-tab.is-active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+    background: rgba(5,218,253,.04);
+  }
+  .map-side-panel .msp-tab .msp-tab-count {
+    margin-left: 4px;
+    color: var(--text-muted);
+    font-weight: 500;
+  }
+  .map-side-panel .msp-tab.is-active .msp-tab-count { color: var(--accent); opacity: .75; }
+
+  .map-side-panel .msp-body {
+    flex: 1;
+    overflow-y: auto;
+    overflow-x: hidden;
+  }
+  .map-side-panel .msp-empty {
+    padding: 24px 14px;
+    text-align: center;
+    color: var(--text-muted);
+    font-size: 12px;
+    font-style: italic;
+  }
+  .map-side-panel .msp-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .map-side-panel .msp-item {
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    cursor: pointer;
+    transition: background .15s;
+    color: var(--text);
+  }
+  .map-side-panel .msp-item:hover { background: var(--accent-soft); }
+  .map-side-panel .msp-item-dot {
+    width: 9px; height: 9px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    border: 1.5px solid var(--bg-card);
+    box-shadow: 0 0 0 1px rgba(255,255,255,.06);
+  }
+  .map-side-panel .msp-item-body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .map-side-panel .msp-item-name {
+    font-family: 'Space Grotesk', 'Inter', sans-serif;
+    font-size: 12.5px;
+    font-weight: 500;
+    color: var(--text);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .map-side-panel .msp-item-meta {
+    font-size: 10.5px;
+    color: var(--text-muted);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .map-side-panel .msp-item-pill {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-size: 9.5px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    background: var(--accent-soft);
+    color: var(--accent);
+    flex-shrink: 0;
+  }
+  .map-side-panel .msp-item-pill.is-warn   { background: rgba(234,179,8,.18);  color: #facc15; }
+  .map-side-panel .msp-item-pill.is-danger { background: rgba(220,68,68,.20);  color: #ff6e85; }
+  .map-side-panel .msp-item-pill.is-muted  { background: rgba(120,140,160,.16); color: var(--text-dim); }
+
+  /* Push the floating signal legend down when the sidebar is open
+     so it doesn't collide with it on narrow viewports. */
+  .map-shell.is-side-open .map-signal-legend { display: none; }
+  /* Coords chip (bottom-left) overlaps the bottom strip; fade it out
+     when the strip is open to keep things tidy. */
+  .map-coords { transition: opacity .2s; }
+  .map-shell.is-bottom-open .map-coords { opacity: 0; pointer-events: none; }
+
   /* ---------- Highlight selected feature ---------- */
   .leaflet-interactive.is-mdp-selected {
     filter: drop-shadow(0 0 6px rgba(5,218,253,.85));
@@ -1917,11 +2109,19 @@ $map_data['wireless_link_summary'] = $wl_by_site;
     .map-search { display: none; }
     .map-quicktools { left: 56px; top: 10px; }
     .map-signal-legend { display: none; }
+    .map-detail-panel { max-height: 60vh; padding: 10px 12px; }
     .map-detail-panel .mdp-grid,
     .map-detail-panel.is-site .mdp-grid {
       grid-template-columns: 1fr;
+      gap: 8px;
     }
     .map-coords { display: none; }
+    .map-side-panel {
+      width: 100%;
+      bottom: 0;        /* on mobile take full screen when open */
+      top: 0;
+      border-radius: 0;
+    }
   }
 </style>
 
@@ -2044,6 +2244,20 @@ $map_data['wireless_link_summary'] = $wl_by_site;
       <span><strong id="coord-lat">–</strong>, <strong id="coord-lng">–</strong></span>
       <span style="margin-left:10px;">z<strong id="coord-zoom">–</strong></span>
     </div>
+
+    <!-- Right sidebar — related entities for the current selection
+         (sectors+links for a tower, clients for a sector, etc) -->
+    <aside id="map-side-panel" class="map-side-panel" role="complementary" aria-label="Related entities" aria-hidden="true">
+      <header class="msp-head">
+        <div class="msp-title-wrap" style="flex:1;min-width:0;">
+          <div class="msp-title" id="msp-title">—</div>
+          <div class="msp-subtitle" id="msp-subtitle"></div>
+        </div>
+        <button class="msp-close" id="msp-close" type="button" aria-label="Close sidebar">×</button>
+      </header>
+      <div class="msp-tabs" id="msp-tabs" role="tablist"></div>
+      <div class="msp-body" id="msp-body"></div>
+    </aside>
 
     <!-- Bottom detail panel (slides up when a link or site is selected) -->
     <div id="map-detail-panel" class="map-detail-panel" role="dialog" aria-label="Selection detail" aria-hidden="true">
