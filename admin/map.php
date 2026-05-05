@@ -1015,8 +1015,10 @@ $map_data['wireless_link_summary'] = $wl_by_site;
 
   /* When the sidebar is pinned open via the toggle button, behave the
      same as :hover. Lets touch / keyboard users open it without a
-     hover state. The body.map-side-pinned class is toggled in JS. */
-  body:has(.map-fs).map-side-pinned .portal-side {
+     hover state. The .is-open class is toggled in JS directly on
+     .portal-side so the rule doesn't depend on :has() reaching back
+     up to the body. */
+  body:has(.map-fs) .portal-side.is-open {
     width: 252px;
     padding: 24px 16px;
     background: var(--bg-elev);
@@ -1024,7 +1026,7 @@ $map_data['wireless_link_summary'] = $wl_by_site;
     box-shadow: 8px 0 24px rgba(0,0,0,.5);
     overflow-y: auto;
   }
-  body:has(.map-fs).map-side-pinned .portal-side > * {
+  body:has(.map-fs) .portal-side.is-open > * {
     opacity: 1;
     pointer-events: auto;
   }
@@ -1071,20 +1073,21 @@ $map_data['wireless_link_summary'] = $wl_by_site;
     transition: transform .22s cubic-bezier(.2,.7,.2,1);
   }
   /* Slide the button to the open-sidebar edge whenever the nav is
-     showing — both pinned-open AND hover-open. */
-  body:has(.map-fs) .portal-side:hover ~ .map-sidebar-toggle,
-  body:has(.map-fs).map-side-pinned .map-sidebar-toggle {
+     showing.  We can't use a sibling combinator because the button
+     and the sidebar live in different DOM branches (button is inside
+     .portal-main); instead the JS adds .is-open to the button when
+     it's hovered or pinned. */
+  body:has(.map-fs) .map-sidebar-toggle.is-open {
     left: 260px;
   }
-  body:has(.map-fs) .portal-side:hover ~ .map-sidebar-toggle svg,
-  body:has(.map-fs).map-side-pinned .map-sidebar-toggle svg {
+  body:has(.map-fs) .map-sidebar-toggle.is-open svg {
     transform: rotate(180deg);
   }
   /* On narrow viewports the sidebar takes the whole screen when open,
      so the button slides all the way to the right edge. */
   @media (max-width: 600px) {
-    body:has(.map-fs).map-side-pinned .portal-side { width: 100vw; }
-    body:has(.map-fs).map-side-pinned .map-sidebar-toggle { left: calc(100vw - 46px); }
+    body:has(.map-fs) .portal-side.is-open { width: 100vw; }
+    body:has(.map-fs) .map-sidebar-toggle.is-open { left: calc(100vw - 46px); }
   }
 
   .map-fs {
@@ -2417,29 +2420,44 @@ $map_data['wireless_link_summary'] = $wl_by_site;
 <script>
 /* Sidebar pin toggle — taps the floating chevron on/off so phones,
    tablets and keyboard users can open the admin nav without hover.
-   Also closes when you tap outside the sidebar. */
+   Toggles .is-open directly on .portal-side (so the rule fires
+   regardless of where the button lives in the DOM tree) and on the
+   button (for the chevron flip + slide).  Also mirrors :hover into
+   the button so the chevron behaves the same when the user simply
+   hovers the strip on desktop. */
 (function () {
   const btn  = document.getElementById('map-sidebar-toggle');
   const side = document.querySelector('.portal-side');
-  if (!btn) return;
-  function setOpen(open) {
-    document.body.classList.toggle('map-side-pinned', open);
-    btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  if (!btn || !side) return;
+  let pinned = false;
+  function syncBtn() {
+    const open = pinned || side.matches(':hover');
+    btn.classList.toggle('is-open', open);
+    btn.setAttribute('aria-expanded', pinned ? 'true' : 'false');
+  }
+  function setPinned(v) {
+    pinned = !!v;
+    side.classList.toggle('is-open', pinned);
+    syncBtn();
   }
   btn.addEventListener('click', (e) => {
+    e.preventDefault();
     e.stopPropagation();
-    setOpen(!document.body.classList.contains('map-side-pinned'));
+    setPinned(!pinned);
   });
-  // Tap outside the sidebar closes it (only when it's pinned — hover
-  // mode handles its own dismissal naturally).
+  // Mirror the sidebar's hover into the button so the chevron slides
+  // and flips during a desktop hover too.
+  side.addEventListener('mouseenter', syncBtn);
+  side.addEventListener('mouseleave', syncBtn);
+  // Tap outside the sidebar closes it when pinned.
   document.addEventListener('click', (e) => {
-    if (!document.body.classList.contains('map-side-pinned')) return;
+    if (!pinned) return;
     if (e.target.closest('.portal-side') || e.target.closest('.map-sidebar-toggle')) return;
-    setOpen(false);
+    setPinned(false);
   });
   // Esc closes it too.
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && document.body.classList.contains('map-side-pinned')) setOpen(false);
+    if (e.key === 'Escape' && pinned) setPinned(false);
   });
 })();
 </script>
