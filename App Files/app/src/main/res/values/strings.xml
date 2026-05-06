@@ -1,3 +1,48 @@
 <resources>
     <string name="app_name">WiFiber</string>
+    <string name="portal_title">My WiFiber Account</string>
+    <string name="portal_base_url">https://www.wifiber.co.za/account/</string>
+    <string name="portal_host">www.wifiber.co.za</string>
+
+    <string name="nav_dashboard">Dashboard</string>
+    <string name="nav_service">Service</string>
+    <string name="nav_link_health">Link health</string>
+    <string name="nav_invoices">Invoices</string>
+    <string name="nav_payments">Payments</string>
+    <string name="nav_statement">Statement</string>
+    <string name="nav_tickets">Support tickets</string>
+    <string name="nav_notifications">Notifications</string>
+    <string name="nav_profile">My profile</string>
+    <string name="nav_password">Change password</string>
+    <string name="nav_logout">Sign out</string>
+
+    <string name="group_my_service">My service</string>
+    <string name="group_billing">Billing</string>
+    <string name="group_support">Support</string>
+    <string name="group_account">Account</string>
+
+    <string name="action_refresh">Refresh</string>
+    <string name="action_open_in_browser">Open in browser</string>
+    <string name="action_share">Share</string>
+    <string name="action_call_support">Call support</string>
+    <string name="action_new_ticket">New ticket</string>
+    <string name="action_pay_now">Pay now</string>
+    <string name="action_back">Back</string>
+    <string name="action_menu">Menu</string>
+    <string name="action_more">More</string>
+    <string name="action_retry">Try again</string>
+
+    <string name="error_offline_title">You\'re offline</string>
+    <string name="error_offline_body">Check your connection and try again. The portal needs internet to load your account.</string>
+    <string name="error_load_title">Couldn\'t load the portal</string>
+    <string name="error_load_body">Something went wrong loading %1$s.</string>
+
+    <string name="support_phone">0800111222</string>
+    <string name="support_phone_label">0800 111 222</string>
+
+    <string name="notif_channel_id">wifiber_default</string>
+    <string name="notif_channel_name">Account updates</string>
+    <string name="notif_channel_desc">Invoices, ticket replies and outage alerts from WiFiber.</string>
+
+    <string name="firebase_not_configured">Push notifications are off — Firebase isn\'t configured for this build.</string>
 </resources>

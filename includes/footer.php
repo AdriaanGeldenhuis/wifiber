@@ -45,6 +45,7 @@
         <li><a href="/pricing">Packages</a></li>
         <li><a href="/coverage">Coverage map</a></li>
         <li><a href="/status">Network status</a></li>
+        <li><a href="/#app">Mobile app</a></li>
         <li><a href="/legal">Legal</a></li>
       </ul>
     </div>
