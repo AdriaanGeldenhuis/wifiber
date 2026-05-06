@@ -523,45 +523,134 @@ input[type="radio"]:focus-visible {
 .cap-bar-fill.cap-warn  { background: #fbbf24; }
 .cap-bar-fill.cap-full  { background: var(--danger); }
 
-/* ---------- Mobile ---------- */
-@media (max-width: 720px) {
-  body { flex-direction: column; }
-  .portal-side {
-    width: 100%; height: auto; position: static;
-    flex-direction: column; align-items: stretch;
-    padding: 12px;
-    gap: 6px;
-    border-right: none;
-    border-bottom: 1px solid var(--border);
-  }
-  .portal-brand { padding: 0 0 10px; margin: 0; }
-  .portal-nav { flex-direction: column; flex: 1 1 100%; overflow: visible; gap: 2px; }
-  .portal-nav-item { padding: 8px 12px; font-size: .85rem; }
-  .portal-nav-group {
-    display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(140px, 1fr));
-    gap: 4px;
-    margin-top: 8px;
-  }
-  .portal-nav-group-label {
-    grid-column: 1 / -1;
-    padding: 4px 4px 2px;
-    font-size: .62rem;
-  }
-  .portal-user {
-    border-top: 1px solid var(--border);
-    padding-top: 12px;
-    margin-top: 8px;
-    display: flex; align-items: center; gap: 12px;
-  }
-  .portal-user-role { display: none; }
-  .portal-logout { margin: 0 0 0 auto; }
-  .portal-main { padding: 24px 16px; }
+/* ---------- Mobile top bar + drawer toggle ----------
+ * Below the breakpoint the sidebar is hidden behind a hamburger
+ * button at the top right; tapping it slides the sidebar in as a
+ * drawer with a backdrop behind. Hidden by default on desktop. */
+.portal-mobile-bar {
+  display: none;
+  position: sticky;
+  top: 0;
+  z-index: 90;
+  background: var(--bg-elev);
+  border-bottom: 1px solid var(--border);
+  padding: 10px 14px;
+  align-items: center;
+  justify-content: space-between;
+  height: 60px;
+}
+.portal-mobile-brand {
+  display: flex; align-items: center; gap: 10px;
+  color: var(--text);
+  min-width: 0;
+}
+.portal-mobile-brand img { height: 32px; width: auto; flex-shrink: 0; }
+.portal-mobile-brand span {
+  font-family: 'Space Grotesk', sans-serif;
+  font-weight: 700;
+  font-size: .9rem;
+  color: var(--accent);
+  text-transform: uppercase;
+  letter-spacing: .12em;
+}
 
-  /* Squeeze data tables onto narrow viewports without breaking columns. */
-  .portal-card { padding: 18px; }
+.portal-toggle {
+  display: none;
+  background: transparent;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  width: 44px; height: 44px;
+  cursor: pointer;
+  padding: 0;
+  flex-direction: column;
+  justify-content: center;
+  align-items: center;
+  gap: 5px;
+  transition: border-color .15s, background .15s;
+  flex-shrink: 0;
+}
+.portal-toggle:hover  { border-color: var(--accent); }
+.portal-toggle:active { background: var(--accent-soft); }
+.portal-toggle span {
+  display: block;
+  width: 20px; height: 2px;
+  background: var(--text);
+  border-radius: 2px;
+  transition: transform .25s, opacity .25s;
+}
+body.is-side-open .portal-toggle span:nth-child(1) { transform: translateY(7px) rotate(45deg); }
+body.is-side-open .portal-toggle span:nth-child(2) { opacity: 0; }
+body.is-side-open .portal-toggle span:nth-child(3) { transform: translateY(-7px) rotate(-45deg); }
+
+.portal-backdrop {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, .72);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity .25s;
+  z-index: 99;
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
+}
+
+/* ---------- Mobile / tablet portrait — drawer pattern ----------
+ * The 960px breakpoint catches phones AND tablets in portrait, since
+ * the admin nav has so many groups that a 252px sidebar at 800px is
+ * cramped (roughly a third of the viewport). Above this width the
+ * sidebar is sticky in the flex layout. */
+@media (max-width: 960px) {
+  body { display: block; min-height: 100vh; }
+
+  .portal-mobile-bar { display: flex; }
+  .portal-toggle     { display: inline-flex; }
+  .portal-backdrop   { display: block; }
+
+  .portal-side {
+    position: fixed;
+    top: 0; left: 0; bottom: 0;
+    width: 280px;
+    max-width: 86vw;
+    height: 100vh;
+    transform: translateX(-100%);
+    transition: transform .25s ease;
+    z-index: 100;
+    overflow-y: auto;
+    border-right: 1px solid var(--border);
+    border-bottom: none;
+    box-shadow: 18px 0 40px rgba(0, 0, 0, .35);
+  }
+  body.is-side-open .portal-side     { transform: translateX(0); }
+  body.is-side-open .portal-backdrop { opacity: 1; pointer-events: auto; }
+  body.is-side-open                   { overflow: hidden; }
+
+  .portal-main { padding: 22px 16px; }
+}
+
+/* ---------- Mobile (phones) — content density ---------- */
+@media (max-width: 720px) {
+  .portal-main { padding: 18px 14px; }
+
+  /* Cards: tighten padding, allow long URLs / IDs to wrap, and let
+     anything wider than the card (data tables, code blocks, the odd
+     wide image) scroll horizontally inside the card instead of
+     blowing out the whole page. */
+  .portal-card {
+    padding: 18px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+  }
+  .portal-card .data-table { min-width: 100%; }
   .data-table th, .data-table td { padding: 9px 10px; font-size: .82rem; }
   .row-actions details summary { padding: 5px 10px; font-size: .76rem; }
+
+  /* Form / button rows wrap so two buttons don't push past the card. */
+  .form-actions       { flex-wrap: wrap; gap: 8px; }
+  .form-actions .btn  { white-space: nowrap; }
+  .form-grid          { grid-template-columns: 1fr; }
 
   /* Bulk bar wraps on phones and the action buttons go full width. */
   .bulk-bar { flex-wrap: wrap; padding: 8px 12px; }
@@ -569,6 +658,26 @@ input[type="radio"]:focus-visible {
 
   .toast-stack { bottom: 12px; right: 12px; left: 12px; }
   .toast { font-size: .85rem; }
+
+  /* Free-floating data is happier in a card stack than a wide table on
+     a 360px viewport — but most pages already wrap with .table-scroll,
+     so we just shrink padding here. */
+  h1 { font-size: 1.4rem; }
+  h2 { font-size: 1.05rem; }
+  .portal-head { margin-bottom: 18px; }
+  .card-grid   { grid-template-columns: 1fr; gap: 12px; }
+  .card-num    { font-size: 2rem; }
+
+  /* Many admin pages drop a `<div class="portal-card" style=
+     "display:grid; grid-template-columns: auto 1fr">` for two-column
+     layouts. Force those inline grids to stack on mobile so the
+     right-hand column doesn't overflow. */
+  .portal-card[style*="grid"] { grid-template-columns: 1fr !important; }
+
+  /* Sticky filter bars / action toolbars that use inline flex with
+     fixed gaps tend to overflow — wrap them. */
+  .portal-card > div[style*="display:flex"],
+  .portal-card > div[style*="display: flex"] { flex-wrap: wrap; gap: 8px; }
 }
 
 /* ---------- Slider editor rows ---------- */

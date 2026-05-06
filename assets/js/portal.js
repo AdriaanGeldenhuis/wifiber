@@ -206,4 +206,41 @@
     sync();
   }
   document.querySelectorAll('table[data-bulk]').forEach(wireBulkTable);
+
+  /* ---------- mobile sidebar drawer ----------
+     Below the CSS breakpoint the sidebar slides in from the left on
+     hamburger tap. Closes on backdrop tap, ESC, or any nav-item click
+     so the user lands on the new page without the drawer covering
+     half of it. */
+  function setSideOpen(on) {
+    document.body.classList.toggle('is-side-open', !!on);
+    var btn = document.querySelector('.portal-toggle');
+    if (btn) {
+      btn.setAttribute('aria-expanded', on ? 'true' : 'false');
+      btn.setAttribute('aria-label', on ? 'Close navigation' : 'Open navigation');
+    }
+  }
+  document.addEventListener('click', function (e) {
+    if (e.target.closest('[data-side-toggle]')) {
+      e.preventDefault();
+      setSideOpen(!document.body.classList.contains('is-side-open'));
+      return;
+    }
+    if (!document.body.classList.contains('is-side-open')) return;
+    if (e.target.closest('[data-side-close]')) { setSideOpen(false); return; }
+    if (e.target.closest('.portal-nav-item'))  { setSideOpen(false); }
+  });
+  document.addEventListener('keydown', function (e) {
+    if (e.key === 'Escape' && document.body.classList.contains('is-side-open')) {
+      setSideOpen(false);
+    }
+  });
+  /* If the viewport is resized back to desktop while the drawer is
+     open (e.g. rotating a tablet from portrait to landscape), the
+     overlay state isn't meaningful any more — drop it. */
+  window.addEventListener('resize', function () {
+    if (window.innerWidth > 960 && document.body.classList.contains('is-side-open')) {
+      setSideOpen(false);
+    }
+  });
 })();

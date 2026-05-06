@@ -540,6 +540,19 @@ function require_admin_write(): void {
 
 /* ---------------------------------------------------------------- flash */
 
+/**
+ * Append a `?v=<mtime>` cache-buster to a static-asset URL so a
+ * deployment automatically invalidates the browser cache without
+ * waiting for users to hard-refresh.
+ *
+ * Usage:  <link rel="stylesheet" href="<?= asset_url('/assets/css/portal.css') ?>">
+ */
+function asset_url(string $rel): string {
+    $abs = __DIR__ . '/..' . $rel;
+    $v   = @filemtime($abs);
+    return $v ? $rel . '?v=' . $v : $rel;
+}
+
 function flash(string $type, string $message): void {
     $_SESSION['_flash'] = ['type' => $type, 'message' => $message];
 }

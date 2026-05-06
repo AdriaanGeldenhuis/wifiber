@@ -26,8 +26,9 @@ require_once __DIR__ . '/channels/email.php';
 require_once __DIR__ . '/channels/sms.php';
 require_once __DIR__ . '/channels/whatsapp.php';
 require_once __DIR__ . '/channels/slack.php';
+require_once __DIR__ . '/channels/push.php';
 
-const NOTIFY_CHANNELS = ['email', 'sms', 'whatsapp', 'slack'];
+const NOTIFY_CHANNELS = ['email', 'sms', 'whatsapp', 'slack', 'push'];
 
 /**
  * Templates: subject + email/SMS body builders. Add new templates here
@@ -181,8 +182,9 @@ function notify_default_channels(string $template): array {
     // NOC-internal alerts → email only.
     $group = _notify_template_group($template);
     if ($group === 'noc') return ['email'];
-    // Customer-visible: try SMS first (most reliable in SA), then email.
-    return ['sms', 'email'];
+    // Customer-visible: try push (instant on the native app) and SMS
+    // (most reliable in SA) first, with email as the durable fallback.
+    return ['push', 'sms', 'email'];
 }
 
 function notify_channel_available(string $channel, array $config): bool {
@@ -190,6 +192,7 @@ function notify_channel_available(string $channel, array $config): bool {
     if ($channel === 'sms')      return !empty($config['sms']['enabled']);
     if ($channel === 'whatsapp') return !empty($config['whatsapp']['enabled']);
     if ($channel === 'slack')    return !empty($config['slack']['enabled']);
+    if ($channel === 'push')     return !empty($config['push']['enabled']);
     return false;
 }
 
@@ -205,6 +208,7 @@ function notify_load_config(): array {
         'sms'      => $raw['notify_sms']      ?? ['enabled' => false],
         'whatsapp' => $raw['notify_whatsapp'] ?? ['enabled' => false],
         'slack'    => $raw['notify_slack']    ?? ['enabled' => false],
+        'push'     => $raw['notify_push']     ?? ['enabled' => false],
     ];
     return $cfg;
 }
@@ -244,4 +248,146 @@ function notify_recent(?int $user_id = null, int $limit = 50): array {
     $stmt = pdo()->prepare($sql);
     $stmt->execute($args);
     return $stmt->fetchAll();
+}
+
+/**
+ * Notification log search for the admin notifications page. Returns
+ * rows joined with the user (so the operator sees who got what)
+ * filtered by channel, status, template, user_id, free-text and date.
+ */
+function notify_search(array $filters = [], int $limit = 200): array {
+    $limit = max(1, min(2000, $limit));
+    $sql = "SELECT n.*, u.username, u.name AS client_name, u.role AS user_role
+              FROM notification_log n
+              LEFT JOIN users u ON u.id = n.user_id";
+    $where = [];
+    $args  = [];
+    if (!empty($filters['channel'])  && in_array($filters['channel'], NOTIFY_CHANNELS, true)) {
+        $where[] = 'n.channel = ?'; $args[] = $filters['channel'];
+    }
+    if (!empty($filters['status'])) {
+        $where[] = 'n.status = ?'; $args[] = $filters['status'];
+    }
+    if (!empty($filters['template'])) {
+        $where[] = 'n.template = ?'; $args[] = $filters['template'];
+    }
+    if (!empty($filters['user_id'])) {
+        $where[] = 'n.user_id = ?'; $args[] = (int)$filters['user_id'];
+    }
+    if (!empty($filters['from'])) { $where[] = 'n.sent_at >= ?'; $args[] = $filters['from'] . ' 00:00:00'; }
+    if (!empty($filters['to']))   { $where[] = 'n.sent_at <= ?'; $args[] = $filters['to']   . ' 23:59:59'; }
+    if (!empty($filters['search'])) {
+        $like = '%' . $filters['search'] . '%';
+        $where[] = '(n.subject LIKE ? OR n.recipient LIKE ? OR u.username LIKE ? OR u.name LIKE ?)';
+        array_push($args, $like, $like, $like, $like);
+    }
+    if ($where) $sql .= ' WHERE ' . implode(' AND ', $where);
+    $sql .= " ORDER BY n.sent_at DESC, n.id DESC LIMIT $limit";
+    $stmt = pdo()->prepare($sql);
+    $stmt->execute($args);
+    return $stmt->fetchAll();
+}
+
+/**
+ * Per-channel + per-status counts over the last `$days` days. Powers
+ * the summary tiles on /admin/notifications.php.
+ */
+function notify_stats(int $days = 30): array {
+    $days = max(1, min(365, $days));
+    $stmt = pdo()->prepare(
+        "SELECT channel, status, COUNT(*) AS c
+           FROM notification_log
+          WHERE sent_at >= (NOW() - INTERVAL $days DAY)
+          GROUP BY channel, status"
+    );
+    $stmt->execute();
+    $out = [];
+    foreach ($stmt->fetchAll() as $r) {
+        $out[$r['channel']][$r['status']] = (int)$r['c'];
+        $out[$r['channel']]['total'] = ($out[$r['channel']]['total'] ?? 0) + (int)$r['c'];
+    }
+    return $out;
+}
+
+/* -------------------------------------------------- device tokens (FCM)
+ * The native app calls a small API endpoint with its FCM registration
+ * token; we store one row per (user, device) here. The push channel
+ * (auth/channels/push.php) reads from this table when delivering and
+ * marks tokens inactive on FCM 404 / UNREGISTERED responses.
+ */
+
+/**
+ * Register or refresh a device token. Tokens are unique — re-registering
+ * a known token on the same user just bumps last_seen_at; on a different
+ * user it transfers the token (sign-out → sign-in on the same device).
+ */
+function device_token_register(int $user_id, string $platform, string $token, array $extra = []): int {
+    $platforms = ['android', 'ios', 'web'];
+    if (!in_array($platform, $platforms, true)) $platform = 'android';
+    $token = trim($token);
+    if ($user_id <= 0 || $token === '') {
+        throw new InvalidArgumentException('user_id and token required');
+    }
+    $app_version  = mb_substr((string)($extra['app_version']  ?? ''), 0, 32);
+    $device_label = mb_substr((string)($extra['device_label'] ?? ''), 0, 120);
+
+    pdo()->prepare(
+        "INSERT INTO device_tokens
+            (user_id, platform, token, app_version, device_label, is_active, registered_at, last_seen_at)
+         VALUES (?, ?, ?, ?, ?, 1, NOW(), NOW())
+         ON DUPLICATE KEY UPDATE
+            user_id = VALUES(user_id),
+            platform = VALUES(platform),
+            app_version = VALUES(app_version),
+            device_label = VALUES(device_label),
+            is_active = 1,
+            last_seen_at = NOW()"
+    )->execute([$user_id, $platform, $token, $app_version, $device_label]);
+
+    $stmt = pdo()->prepare("SELECT id FROM device_tokens WHERE token = ? LIMIT 1");
+    $stmt->execute([$token]);
+    return (int)($stmt->fetchColumn() ?: 0);
+}
+
+/** Idempotent — bumps last_seen_at on an existing row. No-op on stale id. */
+function device_token_touch(int $id): void {
+    if ($id <= 0) return;
+    pdo()->prepare("UPDATE device_tokens SET last_seen_at = NOW() WHERE id = ?")->execute([$id]);
+}
+
+/**
+ * Soft-revoke (is_active = 0). Safer than DELETE because the row is
+ * still useful for audit ("when did we stop reaching this device?")
+ * and the unique key on token blocks accidental duplicate inserts
+ * from a buggy app re-registration loop.
+ */
+function device_token_revoke(int $id): void {
+    if ($id <= 0) return;
+    pdo()->prepare("UPDATE device_tokens SET is_active = 0 WHERE id = ?")->execute([$id]);
+}
+
+function device_token_revoke_by_token(string $token): void {
+    $token = trim($token);
+    if ($token === '') return;
+    pdo()->prepare("UPDATE device_tokens SET is_active = 0 WHERE token = ?")->execute([$token]);
+}
+
+function device_tokens_for_user(int $user_id): array {
+    if ($user_id <= 0) return [];
+    $stmt = pdo()->prepare(
+        "SELECT * FROM device_tokens
+          WHERE user_id = ? AND is_active = 1
+          ORDER BY last_seen_at DESC"
+    );
+    $stmt->execute([$user_id]);
+    return $stmt->fetchAll();
+}
+
+function device_tokens_count(int $user_id, bool $active_only = true): int {
+    if ($user_id <= 0) return 0;
+    $sql = "SELECT COUNT(*) FROM device_tokens WHERE user_id = ?";
+    if ($active_only) $sql .= " AND is_active = 1";
+    $stmt = pdo()->prepare($sql);
+    $stmt->execute([$user_id]);
+    return (int)$stmt->fetchColumn();
 }

@@ -18,7 +18,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     // Notification opt-in checkboxes (notify_prefs JSON column).
     $prefs = [];
     foreach (['outage','maintenance','link'] as $g) {
-        foreach (['email','sms','whatsapp'] as $c) {
+        foreach (['email','sms','whatsapp','push'] as $c) {
             $key = "{$c}_{$g}";
             $prefs[$key] = !empty($_POST['notify'][$key]);
         }
@@ -88,7 +88,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         ];
       ?>
       <table style="width:100%;font-size:.9rem;">
-        <thead><tr><th style="text-align:left;">&nbsp;</th><th>Email</th><th>SMS</th><th>WhatsApp</th></tr></thead>
+        <thead><tr><th style="text-align:left;">&nbsp;</th><th>Email</th><th>SMS</th><th>WhatsApp</th><th>Push <small class="muted">(app)</small></th></tr></thead>
         <tbody>
           <?php foreach ($groups as $g => $label):
             // Default-on for outage, default-off for the rest.
@@ -96,7 +96,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           ?>
             <tr>
               <td><?= htmlspecialchars($label) ?></td>
-              <?php foreach (['email','sms','whatsapp'] as $c):
+              <?php foreach (['email','sms','whatsapp','push'] as $c):
                 $key = "{$c}_{$g}";
                 $checked = array_key_exists($key, $current) ? !empty($current[$key]) : $default;
               ?>
@@ -108,6 +108,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
           <?php endforeach; ?>
         </tbody>
       </table>
+      <p class="muted" style="margin-top:8px;font-size:.8rem;">Push notifications need our native app — they activate as soon as you sign in on the app and grant notification permission.</p>
     </div>
 
     <div class="form-actions">
