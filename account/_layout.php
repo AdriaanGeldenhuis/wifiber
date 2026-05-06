@@ -9,13 +9,36 @@ $user = require_role('client', '/account/login.php');
 
 $portal = 'account';
 $nav = [
-    ['key' => 'dashboard',   'label' => 'Dashboard',       'href' => '/account/'],
-    ['key' => 'link-health', 'label' => 'Link health',     'href' => '/account/link-health.php'],
-    ['key' => 'profile',     'label' => 'My profile',      'href' => '/account/profile.php'],
-    ['key' => 'invoices',    'label' => 'Invoices',        'href' => '/account/invoices.php'],
-    ['key' => 'statement',   'label' => 'Statement',       'href' => '/account/statement.php'],
-    ['key' => 'tickets',     'label' => 'Support tickets', 'href' => '/account/tickets.php'],
-    ['key' => 'password',    'label' => 'Change password', 'href' => '/account/password.php'],
+    ['key' => 'dashboard', 'label' => 'Dashboard', 'href' => '/account/'],
+    [
+        'group' => 'My service',
+        'items' => [
+            ['key' => 'service',     'label' => 'Service & equipment', 'href' => '/account/service.php'],
+            ['key' => 'link-health', 'label' => 'Link health',         'href' => '/account/link-health.php'],
+        ],
+    ],
+    [
+        'group' => 'Billing',
+        'items' => [
+            ['key' => 'invoices',  'label' => 'Invoices',  'href' => '/account/invoices.php'],
+            ['key' => 'payments',  'label' => 'Payments',  'href' => '/account/payments.php'],
+            ['key' => 'statement', 'label' => 'Statement', 'href' => '/account/statement.php'],
+        ],
+    ],
+    [
+        'group' => 'Support',
+        'items' => [
+            ['key' => 'tickets',       'label' => 'Support tickets', 'href' => '/account/tickets.php'],
+            ['key' => 'notifications', 'label' => 'Notifications',   'href' => '/account/notifications.php'],
+        ],
+    ],
+    [
+        'group' => 'Account',
+        'items' => [
+            ['key' => 'profile',  'label' => 'My profile',      'href' => '/account/profile.php'],
+            ['key' => 'password', 'label' => 'Change password', 'href' => '/account/password.php'],
+        ],
+    ],
 ];
 
 require __DIR__ . '/../auth/portal-header.php';
