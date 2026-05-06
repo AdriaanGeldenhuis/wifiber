@@ -24,6 +24,12 @@ $active_key = $active_key ?? '';
 $user       = $user ?? null;
 $is_admin   = $portal === 'admin';
 
+// Detect the native Android/iOS shell — the WebView appends `WiFiberApp/<v>`
+// to its User-Agent. When in-app the native chrome (top bar + drawer)
+// already provides navigation, so we suppress the duplicate web chrome.
+$_in_app = isset($_SERVER['HTTP_USER_AGENT']) &&
+           stripos((string)$_SERVER['HTTP_USER_AGENT'], 'WiFiberApp') !== false;
+
 // Brand override (set in /admin/settings.php). Falls back to defaults
 // so a fresh install renders without site.json present.
 $_site_settings = function_exists('load_site_settings') ? load_site_settings() : [];
@@ -62,8 +68,8 @@ if ($_brand_colour && preg_match('/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/',
 </style>
 <?php endif; ?>
 </head>
-<body class="portal portal-<?= htmlspecialchars($portal) ?>">
-<?php if ($user && !empty($nav)): ?>
+<body class="portal portal-<?= htmlspecialchars($portal) ?><?= $_in_app ? ' portal-in-app' : '' ?>">
+<?php if ($user && !empty($nav) && !$_in_app): ?>
 <header class="portal-mobile-bar">
   <a href="<?= $is_admin ? '/admin/' : '/account/' ?>" class="portal-mobile-brand" title="<?= htmlspecialchars($_site_settings['name'] ?? 'WiFIBER') ?>">
     <img src="<?= htmlspecialchars($_brand_logo) ?>" alt="<?= htmlspecialchars($_site_settings['name'] ?? 'Brand') ?>">

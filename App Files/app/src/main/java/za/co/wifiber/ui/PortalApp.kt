@@ -109,6 +109,9 @@ fun PortalApp(
 
     ModalNavigationDrawer(
         drawerState = drawerState,
+        // Open only via the menu button — swipe gestures were getting
+        // confused with vertical scrolls inside the WebView.
+        gesturesEnabled = drawerState.isOpen,
         drawerContent = {
             PortalDrawer(
                 active = activeDestination,
