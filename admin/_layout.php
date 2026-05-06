@@ -20,9 +20,10 @@ $user = require_role(acl_staff_roles(), '/admin/login.php');
 $portal = 'admin';
 $nav = [
     ['group' => 'Overview', 'items' => [
-        ['key' => 'dashboard', 'label' => 'Dashboard', 'href' => '/admin/'],
-        ['key' => 'inbox',     'label' => 'Inbox',     'href' => '/admin/inbox.php'],
-        ['key' => 'reports',   'label' => 'Reports',   'href' => '/admin/reports.php'],
+        ['key' => 'dashboard',     'label' => 'Dashboard',     'href' => '/admin/'],
+        ['key' => 'inbox',         'label' => 'Inbox',         'href' => '/admin/inbox.php'],
+        ['key' => 'notifications', 'label' => 'Notifications', 'href' => '/admin/notifications.php'],
+        ['key' => 'reports',       'label' => 'Reports',       'href' => '/admin/reports.php'],
     ]],
     ['group' => 'Operations', 'items' => [
         ['key' => 'incidents',   'label' => 'Service status',     'href' => '/admin/incidents.php'],

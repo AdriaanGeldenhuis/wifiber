@@ -38,7 +38,13 @@ $pref_groups = [
     'maintenance' => 'Planned maintenance',
     'link'        => 'Link health',
 ];
-$channels = ['email', 'sms', 'whatsapp'];
+$channels = ['email', 'sms', 'whatsapp', 'push'];
+
+// Active push registrations for this customer — gives them a quick
+// "yes my phone is registered" check.
+$push_active = function_exists('device_tokens_count')
+    ? device_tokens_count((int)$user['id'])
+    : 0;
 
 $status_pill = [
     'queued'  => 'status-open',
@@ -52,6 +58,7 @@ $channel_label = [
     'email'    => 'Email',
     'sms'      => 'SMS',
     'whatsapp' => 'WhatsApp',
+    'push'     => 'App push',
     'webhook'  => 'Webhook',
 ];
 ?>
@@ -96,7 +103,14 @@ $channel_label = [
     </tbody>
   </table>
   </div>
-  <p class="muted small" style="margin-top:10px;">SMS and WhatsApp may need to be enabled by us before they start sending — we'll confirm by email when they're live.</p>
+  <p class="muted small" style="margin-top:10px;">
+    SMS and WhatsApp may need to be enabled by us before they start sending — we'll confirm by email when they're live.
+    <?php if ($push_active > 0): ?>
+      <br>App push: <strong><?= (int)$push_active ?> device<?= $push_active === 1 ? '' : 's' ?> registered</strong>.
+    <?php else: ?>
+      <br>App push activates the moment you sign in on our native app and grant notifications.
+    <?php endif; ?>
+  </p>
 </div>
 
 <div class="portal-card">
