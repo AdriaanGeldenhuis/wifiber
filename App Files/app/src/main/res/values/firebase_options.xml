@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Drop your real values from the Firebase Console here to enable push.
+    Until every required value is non-empty the app starts with FCM disabled
+    (FirebaseSetup logs it and the messaging service no-ops).
+-->
+<resources>
+    <string name="firebase_api_key" translatable="false"></string>
+    <string name="firebase_application_id" translatable="false"></string>
+    <string name="firebase_project_id" translatable="false"></string>
+    <string name="firebase_sender_id" translatable="false"></string>
+    <string name="firebase_storage_bucket" translatable="false"></string>
+    <string name="firebase_database_url" translatable="false"></string>
+</resources>

@@ -1,47 +1,97 @@
 package za.co.wifiber
 
+import android.Manifest
+import android.content.Intent
+import android.content.pm.PackageManager
+import android.os.Build
 import android.os.Bundle
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
-import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Text
-import androidx.compose.runtime.Composable
-import androidx.compose.ui.Modifier
-import androidx.compose.ui.tooling.preview.Preview
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.core.content.ContextCompat
+import kotlinx.coroutines.flow.MutableStateFlow
+import za.co.wifiber.firebase.FirebaseSetup
+import za.co.wifiber.ui.PortalApp
 import za.co.wifiber.ui.theme.WiFiberTheme
 
 class MainActivity : ComponentActivity() {
+
+    private val pendingDeepLink = MutableStateFlow<String?>(null)
+
+    private val notificationPermissionLauncher = registerForActivityResult(
+        ActivityResultContracts.RequestPermission()
+    ) { granted ->
+        if (!granted) {
+            Toast.makeText(
+                this,
+                "Notifications are off — turn them on in Settings to get account alerts.",
+                Toast.LENGTH_LONG
+            ).show()
+        }
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         enableEdgeToEdge()
+        pendingDeepLink.value = extractTargetUrl(intent)
+        ensureNotificationPermission()
+        registerFcmTokenIfPossible()
+
         setContent {
             WiFiberTheme {
-                Scaffold(modifier = Modifier.fillMaxSize()) { innerPadding ->
-                    Greeting(
-                        name = "Android",
-                        modifier = Modifier.padding(innerPadding)
-                    )
-                }
+                val deepLink by pendingDeepLink.collectAsState()
+                PortalApp(
+                    portalHost = getString(R.string.portal_host),
+                    portalBaseUrl = getString(R.string.portal_base_url),
+                    supportPhone = getString(R.string.support_phone),
+                    deepLinkUrl = deepLink,
+                    onDeepLinkConsumed = { pendingDeepLink.value = null },
+                    onSignOut = {
+                        // Hit the portal logout endpoint inside the WebView so the
+                        // session cookie is cleared server-side.
+                    }
+                )
             }
         }
     }
-}
 
-@Composable
-fun Greeting(name: String, modifier: Modifier = Modifier) {
-    Text(
-        text = "Hello $name!",
-        modifier = modifier
-    )
-}
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        extractTargetUrl(intent)?.let { pendingDeepLink.value = it }
+    }
 
-@Preview(showBackground = true)
-@Composable
-fun GreetingPreview() {
-    WiFiberTheme {
-        Greeting("Android")
+    private fun extractTargetUrl(intent: Intent?): String? {
+        if (intent == null) return null
+        val data = intent.data ?: return null
+        val raw = data.toString()
+        return when {
+            data.scheme.equals("wifiber", ignoreCase = true) -> {
+                val path = data.path?.ifEmpty { "/account/" } ?: "/account/"
+                "https://${getString(R.string.portal_host)}$path"
+            }
+            raw.startsWith("https://${getString(R.string.portal_host)}/account") -> raw
+            else -> null
+        }
+    }
+
+    private fun ensureNotificationPermission() {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
+        val granted = ContextCompat.checkSelfPermission(
+            this, Manifest.permission.POST_NOTIFICATIONS
+        ) == PackageManager.PERMISSION_GRANTED
+        if (!granted) notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+    }
+
+    private fun registerFcmTokenIfPossible() {
+        if (!FirebaseSetup.isReady) return
+        runCatching {
+            com.google.firebase.messaging.FirebaseMessaging.getInstance().token
+                .addOnCompleteListener { /* token logged via WiFiberMessagingService */ }
+        }
     }
 }
