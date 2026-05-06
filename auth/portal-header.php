@@ -64,7 +64,21 @@ if ($_brand_colour && preg_match('/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/',
 </head>
 <body class="portal portal-<?= htmlspecialchars($portal) ?>">
 <?php if ($user && !empty($nav)): ?>
-<aside class="portal-side">
+<header class="portal-mobile-bar">
+  <a href="<?= $is_admin ? '/admin/' : '/account/' ?>" class="portal-mobile-brand" title="<?= htmlspecialchars($_site_settings['name'] ?? 'WiFIBER') ?>">
+    <img src="<?= htmlspecialchars($_brand_logo) ?>" alt="<?= htmlspecialchars($_site_settings['name'] ?? 'Brand') ?>">
+    <span><?= $is_admin ? 'Admin' : 'Account' ?></span>
+  </a>
+  <button type="button" class="portal-toggle"
+          aria-label="Open navigation"
+          aria-controls="portal-side"
+          aria-expanded="false"
+          data-side-toggle>
+    <span></span><span></span><span></span>
+  </button>
+</header>
+<div class="portal-backdrop" data-side-close aria-hidden="true"></div>
+<aside class="portal-side" id="portal-side">
   <a href="/" class="portal-brand" title="Back to home">
     <img src="<?= htmlspecialchars($_brand_logo) ?>" alt="<?= htmlspecialchars($_site_settings['name'] ?? 'Brand') ?>">
     <span><?= $is_admin ? 'Admin' : 'Account' ?></span>
