@@ -137,6 +137,20 @@ $h         = fn ($v) => htmlspecialchars((string)($v ?? ''), ENT_QUOTES);
 $money     = fn (float $v) => 'R&nbsp;' . number_format($v, 2);
 $site_name = (string)($site['name'] ?? 'WiFIBER');
 
+// Brand asset (logo) — same source of truth as the portal header so a
+// custom logo uploaded in /admin/settings.php carries through to the
+// statement without a second config knob.
+$brand        = $site['brand'] ?? [];
+$brand_logo   = !empty($brand['logo_url']) ? (string)$brand['logo_url'] : '/assets/images/header-logo-2x.webp';
+$brand_tagline = (string)($site['tagline'] ?? '');
+
+// Build the company address block. The site JSON splits the address
+// across address_line1 / address_line2; either may be absent.
+$company_address_lines = array_values(array_filter([
+    (string)($site['address_line1'] ?? ''),
+    (string)($site['address_line2'] ?? ''),
+], fn ($v) => trim($v) !== ''));
+
 $pay_ref = strtr((string)($billing['bank_reference_format'] ?? '{number}'), [
     '{number}'   => $customer['account_no'] ?? $customer['username'],
     '{username}' => (string)$customer['username'],
@@ -169,15 +183,21 @@ ob_start();
       <p class="statement-meta">Generated <?= $h(date('Y-m-d H:i')) ?></p>
     </div>
     <div class="statement-brand">
+      <img class="statement-logo" src="<?= $h($brand_logo) ?>" alt="<?= $h($site_name) ?>">
       <strong><?= $h($site_name) ?></strong>
-      <?php if (!empty($site['address'])): ?>
-        <small><?= nl2br($h((string)$site['address'])) ?></small>
+      <?php if ($brand_tagline !== ''): ?>
+        <small class="statement-tagline"><?= $h($brand_tagline) ?></small>
       <?php endif; ?>
+      <?php foreach ($company_address_lines as $line): ?>
+        <small><?= $h($line) ?></small>
+      <?php endforeach; ?>
       <?php if (!empty($site['phone'])): ?>
         <small><?= $h((string)$site['phone']) ?></small>
       <?php endif; ?>
-      <?php if (!empty($site['email_accounts']) || !empty($site['email_support'])): ?>
-        <small><?= $h((string)($site['email_accounts'] ?? $site['email_support'])) ?></small>
+      <?php
+      $accounts_email = (string)($site['email_accounts'] ?? $site['email_support'] ?? '');
+      if ($accounts_email !== ''): ?>
+        <small><?= $h($accounts_email) ?></small>
       <?php endif; ?>
     </div>
   </header>
@@ -373,9 +393,18 @@ ob_start();
 .statement-meta   { font-size: .82rem; color: #6b7280; margin: 4px 0 0; }
 .statement-brand {
   text-align: right; display: flex; flex-direction: column; gap: 2px;
+  align-items: flex-end;
+}
+.statement-logo {
+  display: block;
+  height: 56px; width: auto;
+  max-width: 220px;
+  object-fit: contain;
+  margin-bottom: 8px;
 }
 .statement-brand strong { font-size: 1.05rem; color: #0e1622; }
-.statement-brand small  { color: #6b7280; font-size: .82rem; }
+.statement-brand small  { color: #6b7280; font-size: .82rem; line-height: 1.45; }
+.statement-tagline { color: #4a5468 !important; font-style: italic; }
 
 .statement-grid {
   display: grid; grid-template-columns: 1.2fr 1fr; gap: 32px;
@@ -494,8 +523,9 @@ ob_start();
 @media (max-width: 720px) {
   .statement-paper       { padding: 24px 18px; border-radius: 10px; }
   .statement-grid        { grid-template-columns: 1fr; gap: 18px; }
-  .statement-brand       { text-align: left; }
-  .statement-head        { flex-direction: column; }
+  .statement-brand       { text-align: left; align-items: flex-start; }
+  .statement-logo        { height: 44px; }
+  .statement-head        { flex-direction: column; gap: 16px; }
   .statement-ledger      { font-size: .82rem; }
   .statement-ledger th, .statement-ledger td { padding: 8px 6px; }
   .statement-actions     { flex-direction: column; align-items: stretch; }
