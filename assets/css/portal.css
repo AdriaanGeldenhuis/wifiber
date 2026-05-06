@@ -586,11 +586,13 @@ body.is-side-open .portal-toggle span:nth-child(3) { transform: translateY(-7px)
   display: none;
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, .55);
+  background: rgba(0, 0, 0, .72);
   opacity: 0;
   pointer-events: none;
   transition: opacity .25s;
   z-index: 99;
+  -webkit-backdrop-filter: blur(2px);
+  backdrop-filter: blur(2px);
 }
 
 /* ---------- Mobile / tablet portrait — drawer pattern ----------
@@ -630,10 +632,25 @@ body.is-side-open .portal-toggle span:nth-child(3) { transform: translateY(-7px)
 @media (max-width: 720px) {
   .portal-main { padding: 18px 14px; }
 
-  /* Squeeze data tables onto narrow viewports without breaking columns. */
-  .portal-card { padding: 18px; }
+  /* Cards: tighten padding, allow long URLs / IDs to wrap, and let
+     anything wider than the card (data tables, code blocks, the odd
+     wide image) scroll horizontally inside the card instead of
+     blowing out the whole page. */
+  .portal-card {
+    padding: 18px;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+    overflow-wrap: break-word;
+    word-wrap: break-word;
+  }
+  .portal-card .data-table { min-width: 100%; }
   .data-table th, .data-table td { padding: 9px 10px; font-size: .82rem; }
   .row-actions details summary { padding: 5px 10px; font-size: .76rem; }
+
+  /* Form / button rows wrap so two buttons don't push past the card. */
+  .form-actions       { flex-wrap: wrap; gap: 8px; }
+  .form-actions .btn  { white-space: nowrap; }
+  .form-grid          { grid-template-columns: 1fr; }
 
   /* Bulk bar wraps on phones and the action buttons go full width. */
   .bulk-bar { flex-wrap: wrap; padding: 8px 12px; }
@@ -646,8 +663,21 @@ body.is-side-open .portal-toggle span:nth-child(3) { transform: translateY(-7px)
      a 360px viewport — but most pages already wrap with .table-scroll,
      so we just shrink padding here. */
   h1 { font-size: 1.4rem; }
+  h2 { font-size: 1.05rem; }
   .portal-head { margin-bottom: 18px; }
-  .card-grid { grid-template-columns: 1fr; gap: 12px; }
+  .card-grid   { grid-template-columns: 1fr; gap: 12px; }
+  .card-num    { font-size: 2rem; }
+
+  /* Many admin pages drop a `<div class="portal-card" style=
+     "display:grid; grid-template-columns: auto 1fr">` for two-column
+     layouts. Force those inline grids to stack on mobile so the
+     right-hand column doesn't overflow. */
+  .portal-card[style*="grid"] { grid-template-columns: 1fr !important; }
+
+  /* Sticky filter bars / action toolbars that use inline flex with
+     fixed gaps tend to overflow — wrap them. */
+  .portal-card > div[style*="display:flex"],
+  .portal-card > div[style*="display: flex"] { flex-wrap: wrap; gap: 8px; }
 }
 
 /* ---------- Slider editor rows ---------- */
