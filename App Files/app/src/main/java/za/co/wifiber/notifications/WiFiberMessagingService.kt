@@ -15,7 +15,7 @@ import za.co.wifiber.R
  * Receives push payloads from Firebase Cloud Messaging.
  *
  * Payload shape we render — either an FCM "notification" block or a "data"
- * block with `title`, `body`, optional `url` (deep link into /account/*).
+ * block with `title`, `body`, optional `url` (deep link into the portal).
  */
 class WiFiberMessagingService : FirebaseMessagingService() {
 
