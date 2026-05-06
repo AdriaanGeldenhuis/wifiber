@@ -142,4 +142,41 @@
       }
     });
   }
+
+  // ---------- App-store coming-soon toast ----------
+  // Until the published App Store / Google Play URLs are wired into the
+  // <a> elements, intercept clicks on .is-coming-soon buttons and show
+  // a small toast instead of navigating to "#".
+  (function () {
+    var triggers = document.querySelectorAll('.store-btn.is-coming-soon');
+    if (!triggers.length) return;
+
+    var toast;
+    var hideTimer;
+    function showToast(label) {
+      if (!toast) {
+        toast = document.createElement('div');
+        toast.className = 'app-toast';
+        toast.setAttribute('role', 'status');
+        toast.setAttribute('aria-live', 'polite');
+        document.body.appendChild(toast);
+      }
+      toast.textContent = label + ' link goes live the day we publish — thanks for the interest!';
+      // Force reflow so the transition fires every time.
+      void toast.offsetWidth;
+      toast.classList.add('is-visible');
+      clearTimeout(hideTimer);
+      hideTimer = setTimeout(function () { toast.classList.remove('is-visible'); }, 3200);
+    }
+
+    triggers.forEach(function (a) {
+      a.addEventListener('click', function (ev) {
+        // If a real URL has been wired in, let the browser handle it.
+        var href = a.getAttribute('href') || '';
+        if (href && href !== '#' && href.charAt(0) !== '#') return;
+        ev.preventDefault();
+        showToast(a.dataset.comingSoon || 'App store');
+      });
+    });
+  })();
 })();

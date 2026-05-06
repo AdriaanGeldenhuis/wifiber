@@ -206,6 +206,141 @@ require __DIR__ . '/includes/header.php';
   </div>
 </section>
 
+<section class="section app-promo" id="app">
+  <div class="container">
+    <div class="app-promo-grid">
+      <div class="app-promo-copy">
+        <span class="eyebrow">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true">
+            <rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/>
+          </svg>
+          New mobile app
+        </span>
+        <h2>Your WiFIBER account, in your pocket.</h2>
+        <p class="lead">
+          The WiFIBER app puts your whole account on your phone &mdash; pay invoices,
+          log support tickets, watch your line health and get a push the moment
+          something needs your attention. Same secure login as the web portal.
+        </p>
+
+        <ul class="app-promo-features">
+          <li>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>
+            Pay invoices &amp; view statements in seconds
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>
+            Open or reply to support tickets on the go
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>
+            Live service quality &mdash; uptime, signal, latency
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>
+            Push alerts for outages, ticket replies and new invoices
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>
+            Update your contact details and password
+          </li>
+          <li>
+            <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="M5 13l4 4L19 7"/></svg>
+            Works offline-friendly &mdash; reconnects when you do
+          </li>
+        </ul>
+
+        <div class="app-promo-stores" aria-label="Get the WiFIBER app">
+          <!-- TODO: replace href="#" with the live App Store URL when published -->
+          <a href="#" class="store-btn store-btn-apple is-coming-soon"
+             data-coming-soon="App Store"
+             aria-label="Download on the App Store (coming soon)">
+            <svg viewBox="0 0 24 24" width="26" height="26" fill="currentColor" aria-hidden="true">
+              <path d="M16.365 1.43c0 1.14-.42 2.27-1.18 3.06-.78.83-2.07 1.46-3.16 1.4-.13-1.13.42-2.32 1.16-3.07.84-.83 2.27-1.45 3.18-1.39zM20.5 17.34c-.55 1.27-.81 1.83-1.51 2.95-.97 1.55-2.34 3.48-4.04 3.5-1.51.02-1.9-.99-3.95-.98-2.05.01-2.48 1-3.99.98-1.7-.02-3-1.77-3.97-3.32C.42 16.13.13 11.07 1.85 8.42c1.21-1.86 3.13-2.95 4.93-2.95 1.83 0 2.98.99 4.5.99 1.47 0 2.36-.99 4.48-.99 1.6 0 3.3.87 4.51 2.38-3.96 2.18-3.32 7.84.23 9.49z"/>
+            </svg>
+            <span class="store-btn-label">
+              <span class="store-btn-tiny">Download on the</span>
+              <span class="store-btn-name">App Store</span>
+            </span>
+            <span class="coming-pill">Soon</span>
+          </a>
+          <!-- TODO: replace href="#" with the live Google Play URL when published -->
+          <a href="#" class="store-btn store-btn-google is-coming-soon"
+             data-coming-soon="Google Play"
+             aria-label="Get it on Google Play (coming soon)">
+            <svg viewBox="0 0 512 512" width="26" height="26" aria-hidden="true">
+              <path fill="#34A853" d="M325.3 234L104.6 13.3c-1.7-1.7-3.6-3-5.6-4l229 229 73.7-73.7c-13.5-7.5-29-15.6-43.7-23.4-11.5-6.1-22.5-12-32.7-17.2z"/>
+              <path fill="#FBBC04" d="M464 256c0-9.6-5-19-15.5-25.6l-47.2-26.7L325.3 278l108.6 60.6c10.5-6.6 30.1-15.4 30.1-25.6V256z"/>
+              <path fill="#EA4335" d="M99 4.7C90 8.4 84 16.3 84 28v456c0 11.7 6 19.6 15 23.3l229-229L99 4.7z"/>
+              <path fill="#4285F4" d="M328 278L99 507.3c5.4 2.2 12.1 1.7 19-2.2l324.5-184.4L328 278z"/>
+            </svg>
+            <span class="store-btn-label">
+              <span class="store-btn-tiny">Get it on</span>
+              <span class="store-btn-name">Google Play</span>
+            </span>
+            <span class="coming-pill">Soon</span>
+          </a>
+        </div>
+        <p class="app-promo-foot muted small">
+          Already a WiFIBER customer? Sign in with your existing portal username and
+          password &mdash; no separate registration needed.
+        </p>
+      </div>
+
+      <div class="app-promo-visual" aria-hidden="true">
+        <div class="device">
+          <span class="device-notch"></span>
+          <div class="device-screen">
+            <div class="device-bar">
+              <span class="device-bar-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
+              </span>
+              <img src="<?= asset('images/header-logo-2x.webp') ?>" alt="">
+              <span class="device-bar-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a13 13 0 0 1 0 18M12 3a13 13 0 0 0 0 18"/></svg>
+              </span>
+            </div>
+
+            <div class="device-card">
+              <span class="device-eyebrow">Welcome back</span>
+              <span class="device-title">Adriaan</span>
+              <span class="device-meta"><span class="device-pill device-pill-good">Account active</span></span>
+            </div>
+
+            <div class="device-card">
+              <span class="device-eyebrow">Balance</span>
+              <span class="device-title device-title-ok">R0.00</span>
+              <span class="device-meta">All paid &middot; next bill in 18 days</span>
+            </div>
+
+            <div class="device-card">
+              <span class="device-eyebrow">Service quality (7d)</span>
+              <span class="device-title">99.8% uptime</span>
+              <span class="device-meta">SNR 42 dB &middot; -58 dBm &middot; 12 ms</span>
+            </div>
+
+            <div class="device-card device-cta">
+              <div>
+                <span class="device-eyebrow">Quick action</span>
+                <strong>Open new ticket</strong>
+              </div>
+              <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+            </div>
+
+            <div class="device-tabs">
+              <span class="is-active">Home</span>
+              <span>Service</span>
+              <span>Billing</span>
+              <span>Support</span>
+              <span>Profile</span>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
 <?php if (!empty($partner_logos)): ?>
 <section class="partners">
   <div class="container">
