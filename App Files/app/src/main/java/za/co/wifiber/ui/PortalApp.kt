@@ -7,12 +7,12 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
@@ -137,17 +137,27 @@ fun PortalApp(
                         actionIconContentColor = MaterialTheme.colorScheme.onPrimary
                     ),
                     title = {
-                        Column {
-                            Text(
-                                pageHeading,
-                                fontWeight = FontWeight.SemiBold,
-                                style = MaterialTheme.typography.titleMedium
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Image(
+                                painter = painterResource(id = R.drawable.logo_brand),
+                                contentDescription = "WiFiber",
+                                modifier = Modifier.height(32.dp)
                             )
-                            if (webState.isLoading && webState.progress in 1..99) {
+                            Column {
                                 Text(
-                                    "Loading… ${webState.progress}%",
-                                    style = MaterialTheme.typography.bodyMedium
+                                    pageHeading,
+                                    fontWeight = FontWeight.SemiBold,
+                                    style = MaterialTheme.typography.titleMedium
                                 )
+                                if (webState.isLoading && webState.progress in 1..99) {
+                                    Text(
+                                        "Loading… ${webState.progress}%",
+                                        style = MaterialTheme.typography.bodyMedium
+                                    )
+                                }
                             }
                         }
                     },
@@ -284,16 +294,11 @@ private fun PortalDrawer(
             ) {
                 Column {
                     Image(
-                        painter = painterResource(id = R.drawable.ic_logo_wifiber),
-                        contentDescription = null,
-                        modifier = Modifier.size(40.dp)
+                        painter = painterResource(id = R.drawable.logo_brand),
+                        contentDescription = "WiFiber",
+                        modifier = Modifier.height(44.dp)
                     )
-                    Spacer(Modifier.height(6.dp))
-                    Text(
-                        text = "My WiFiber",
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.primary
-                    )
+                    Spacer(Modifier.height(8.dp))
                     Text(
                         text = "Customer portal",
                         style = MaterialTheme.typography.bodyMedium,
