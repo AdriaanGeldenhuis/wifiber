@@ -15,6 +15,7 @@ require_once __DIR__ . '/../auth/sites.php';
 require_once __DIR__ . '/../auth/devices.php';
 require_once __DIR__ . '/../auth/wireless.php';
 require_once __DIR__ . '/../auth/totp.php';
+require_once __DIR__ . '/../auth/poll_status.php';
 
 $self = '/admin/sectors.php';
 
@@ -155,9 +156,10 @@ $device_label = function (?int $id) use ($all_devices): string {
 };
 ?>
 
+<?php $sectors_freshness = poll_classify(poll_latest_link_sample_at()); ?>
 <div class="portal-head">
-  <h1>Sectors</h1>
-  <p class="portal-sub">AP-on-tower configurations: where each AP is pointed, what band it's on, and how much power it pushes. Live metrics (noise, clients, utilisation) come online with the Phase&nbsp;3 polling worker.</p>
+  <h1>Sectors <?= poll_badge_html($sectors_freshness, 'Newest sector member-link sample') ?></h1>
+  <p class="portal-sub">AP-on-tower configurations: where each AP is pointed, what band it's on, and how much power it pushes. Live metrics (noise, clients, utilisation) flow in from <code>bin/poll-wireless.php</code> via the AP's connected stations — see <a href="/admin/diagnostics.php">polling status</a> if the badge is amber or red.</p>
 </div>
 
 <?php if (!$towers): ?>

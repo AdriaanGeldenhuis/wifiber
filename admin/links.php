@@ -14,6 +14,7 @@ require_once __DIR__ . '/../auth/devices.php';
 require_once __DIR__ . '/../auth/sectors.php';
 require_once __DIR__ . '/../auth/sites.php';
 require_once __DIR__ . '/../auth/csv.php';
+require_once __DIR__ . '/../auth/poll_status.php';
 
 $self = '/admin/links.php';
 
@@ -175,9 +176,10 @@ $health_pill = function (?int $score): string {
   .sl-row-editing td { background:rgba(5,218,253,0.10) !important; outline:1px solid var(--accent); outline-offset:-1px; }
 </style>
 
+<?php $links_freshness = poll_classify(poll_latest_link_sample_at()); ?>
 <div class="portal-head">
-  <h1>Links</h1>
-  <p class="portal-sub">Every link in the network: customer AP↔CPE wireless links (auto-registered by the polling worker) and the backbone PTP / fibre / backhaul lines drawn between sites. Jump to <a href="#backbone">backbone links</a>.</p>
+  <h1>Links <?= poll_badge_html($links_freshness, 'Newest link sample') ?></h1>
+  <p class="portal-sub">Every link in the network: customer AP↔CPE wireless links (auto-registered by the polling worker) and the backbone PTP / fibre / backhaul lines drawn between sites. Jump to <a href="#backbone">backbone links</a>. The badge above turns green only while <code>bin/poll-wireless.php</code> is running on cron — see <a href="/admin/diagnostics.php">diagnostics</a>.</p>
 </div>
 
 <div class="portal-card">

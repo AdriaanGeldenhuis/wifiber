@@ -3,6 +3,7 @@ $page_title = 'Clients';
 $active_key = 'clients';
 require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/sites.php';
+require_once __DIR__ . '/../auth/poll_status.php';
 
 // Address-picker AJAX endpoints for the inline create form. Auth has
 // already been enforced by _layout.php.
@@ -76,6 +77,19 @@ if (($_GET['export'] ?? '') === 'csv') {
     csv_download('clients', $shaped);
 }
 
+$clients_freshness = poll_classify(poll_latest_link_sample_at());
+?>
+<div class="portal-card" style="margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;">
+  <div>
+    <strong>Live wireless telemetry</strong>
+    <small class="muted" style="margin-left:6px;">Per-customer signal, SNR and throughput on <code>/admin/client-view.php</code> fill in when the CPE is seen by an AP and <code>bin/poll-wireless.php</code> is running.</small>
+  </div>
+  <div style="display:flex;gap:10px;align-items:center;">
+    <?= poll_badge_html($clients_freshness, 'Newest customer-link sample') ?>
+    <a class="btn btn-ghost btn-sm" href="/admin/diagnostics.php">Polling status ↗</a>
+  </div>
+</div>
+<?php
 require __DIR__ . '/_users-table.php';
 render_users_admin('client', 'Clients', 'Customer accounts for the WiFIBER customer portal.', $user);
 require __DIR__ . '/../auth/portal-footer.php';

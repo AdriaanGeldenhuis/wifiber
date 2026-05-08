@@ -32,11 +32,13 @@
  */
 $page_title = 'Sector';
 $active_key = 'sectors';
+$auto_refresh_seconds = 60;
 require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/sectors.php';
 require_once __DIR__ . '/../auth/sites.php';
 require_once __DIR__ . '/../auth/devices.php';
 require_once __DIR__ . '/../auth/wireless.php';
+require_once __DIR__ . '/../auth/poll_status.php';
 require_once __DIR__ . '/_link-charts.php';
 
 $id = (int)($_GET['id'] ?? 0);
@@ -262,6 +264,18 @@ $freq_ghz_val = $freq_mhz !== null ? $freq_mhz / 1000.0 : null;
       </svg>
     </span>
   </div>
+</div>
+
+<?php
+  $sector_freshness = poll_classify(poll_sector_latest_at((int)$sector['id']));
+  $sector_pollable  = $ap && !empty($ap['mgmt_ip']) && in_array($ap['vendor'] ?? '', ['ubiquiti','mikrotik','cambium','mimosa'], true);
+?>
+<div style="display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:14px;">
+  <?= poll_badge_html($sector_freshness, 'Newest sample across stations on this sector') ?>
+  <?php if ($sector_pollable): ?>
+    <button type="button" class="btn btn-ghost btn-sm" data-poll-device-now="<?= (int)$ap['id'] ?>" data-poll-device-name="<?= lv_h($ap['name']) ?>" title="Run the vendor adapter against the AP for this sector">Poll AP now</button>
+  <?php endif; ?>
+  <a class="btn btn-ghost btn-sm" href="/admin/diagnostics.php">Polling status ↗</a>
 </div>
 
 <div class="lv-tabs">

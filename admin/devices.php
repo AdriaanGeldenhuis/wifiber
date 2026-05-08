@@ -12,6 +12,7 @@ require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/devices.php';
 require_once __DIR__ . '/../auth/sites.php';
 require_once __DIR__ . '/../auth/wireless.php';
+require_once __DIR__ . '/../auth/poll_status.php';
 
 $self = '/admin/devices.php';
 
@@ -361,10 +362,12 @@ $status_pill = function (string $status): string {
 };
 ?>
 
+<?php $devices_freshness = poll_classify(poll_latest_device_health_at()); ?>
 <div class="portal-head">
-  <h1>Devices</h1>
+  <h1>Devices <?= poll_badge_html($devices_freshness, 'Newest device_health sample') ?></h1>
   <p class="portal-sub">Network gear inventory — APs, CPEs, routers, switches, backhaul radios.
-    &nbsp;·&nbsp; <a href="/admin/devices-import.php">Bulk import CSV</a></p>
+    &nbsp;·&nbsp; <a href="/admin/devices-import.php">Bulk import CSV</a>
+    &nbsp;·&nbsp; <a href="/admin/diagnostics.php">Polling status</a></p>
 </div>
 
 <?php if ($mac_conflicts): ?>

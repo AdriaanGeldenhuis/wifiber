@@ -31,12 +31,14 @@
  */
 $page_title = 'Wireless link';
 $active_key = 'links';
+$auto_refresh_seconds = 60;
 require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/wireless.php';
 require_once __DIR__ . '/../auth/devices.php';
 require_once __DIR__ . '/../auth/sectors.php';
 require_once __DIR__ . '/../auth/sites.php';
 require_once __DIR__ . '/../auth/diagnostics.php';
+require_once __DIR__ . '/../auth/poll_status.php';
 require_once __DIR__ . '/_link-charts.php';
 
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'speedtest') {
@@ -166,6 +168,9 @@ $frequency_label = $link['frequency_mhz'] !== null
     : '—';
 
 $tdd = $link['tdd_framing'] ?: ($link['sector_tdd_framing'] ?? '');
+
+$link_freshness = poll_classify(poll_link_latest_at($id));
+$link_pollable  = !empty($link['ap_mgmt_ip']) && in_array($link['ap_vendor'] ?? '', ['ubiquiti','mikrotik','cambium','mimosa'], true);
 ?>
 
 <style>
@@ -323,6 +328,14 @@ $tdd = $link['tdd_framing'] ?: ($link['sector_tdd_framing'] ?? '');
       </svg>
     </span>
   </div>
+</div>
+
+<div style="display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:14px;">
+  <?= poll_badge_html($link_freshness, 'Newest link_health_samples row for this link') ?>
+  <?php if ($link_pollable): ?>
+    <button type="button" class="btn btn-ghost btn-sm" data-poll-device-now="<?= (int)$link['ap_device_id'] ?>" data-poll-device-name="<?= $h($link['ap_name']) ?>" title="Run the vendor adapter against the AP right now (synchronous)">Poll AP now</button>
+  <?php endif; ?>
+  <a class="btn btn-ghost btn-sm" href="/admin/diagnostics.php" title="Cron + per-vendor poll status">Polling status ↗</a>
 </div>
 
 <div class="lv-tabs">
