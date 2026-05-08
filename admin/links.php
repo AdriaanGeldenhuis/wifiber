@@ -55,6 +55,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($action === 'save_site_link') {
+        $edit_id = (int)($_POST['id'] ?? 0);
         try {
             $saved = site_link_save([
                 'from_site_id'  => (int)($_POST['from_site_id'] ?? 0),
@@ -63,10 +64,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'label'         => $_POST['label']         ?? '',
                 'capacity_mbps' => $_POST['capacity_mbps'] ?? null,
                 'frequency'     => $_POST['frequency']     ?? '',
+                'color'         => $_POST['color']         ?? '',
                 'notes'         => $_POST['notes']         ?? '',
-            ]);
-            audit_log('site_link.create', ['target_type' => 'site_link', 'target_id' => $saved]);
-            flash('success', 'Backbone link added.');
+            ], $edit_id ?: null);
+            audit_log($edit_id ? 'site_link.update' : 'site_link.create',
+                      ['target_type' => 'site_link', 'target_id' => $saved]);
+            flash('success', $edit_id ? 'Backbone link updated.' : 'Backbone link added.');
         } catch (Throwable $e) {
             flash('error', $e->getMessage());
         }
@@ -147,6 +150,36 @@ $health_pill = function (?int $score): string {
   .link-pill { display:inline-block;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:600;letter-spacing:.02em; }
   .data-table tr.row-poor td { background:rgba(212,68,68,0.06); }
   .data-table tr.row-fair td { background:rgba(232,168,20,0.06); }
+
+  /* Whole-row click affordance for the backbone table. The cursor +
+     hover row-tint hint that the row is interactive; .row-actions
+     stays clickable as a normal button via stopPropagation. */
+  .data-table tr.is-clickable td { cursor:pointer; transition:background .12s; }
+  .data-table tr.is-clickable:hover td { background:rgba(5,218,253,0.06); }
+  .data-table tr.is-clickable:focus-within td { background:rgba(5,218,253,0.10); outline:1px solid var(--accent); outline-offset:-1px; }
+
+  /* Modal — uses native <dialog> with backdrop. Falls back to
+     scrolling-to-form-anchor when JS is off (we wire the row to a
+     plain <a href="#sl-edit-form-N"> too). */
+  dialog.sl-modal {
+    background:var(--bg-card); color:var(--text);
+    border:1px solid var(--border); border-radius:var(--radius);
+    padding:0; max-width:560px; width:calc(100% - 32px);
+    box-shadow:0 30px 80px rgba(0,0,0,.55), 0 0 0 1px var(--border);
+  }
+  dialog.sl-modal::backdrop { background:rgba(2,2,2,.72); backdrop-filter:blur(2px); }
+  .sl-modal-head { display:flex; align-items:center; justify-content:space-between; padding:18px 22px 6px; }
+  .sl-modal-head h3 { margin:0; font-size:1.1rem; }
+  .sl-modal-head .sl-modal-close {
+    background:transparent; border:0; color:var(--text-muted); font-size:22px; line-height:1; cursor:pointer; padding:4px 8px; border-radius:6px;
+  }
+  .sl-modal-head .sl-modal-close:hover { color:var(--text); background:rgba(255,255,255,.05); }
+  .sl-modal-body  { padding:6px 22px 18px; }
+  .sl-modal-foot  { display:flex; justify-content:space-between; gap:8px; padding:14px 22px; border-top:1px solid var(--border); flex-wrap:wrap; }
+  .sl-modal-foot .sl-foot-right { display:flex; gap:8px; }
+  .sl-grid { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .sl-grid .field { margin:0; }
+  .sl-grid .field.full { grid-column:1/-1; }
 </style>
 
 <div class="portal-head">
@@ -346,8 +379,29 @@ $health_pill = function (?int $score): string {
           <?php
             $type_lbl = $site_link_type_labels[$sl['type']] ?? $sl['type'];
             $type_bg  = $site_link_type_color[$sl['type']]  ?? '#888';
+            /* Pre-encode every editable field so the JS modal can
+               populate without a roundtrip. htmlspecialchars on the
+               JSON keeps it safe inside a HTML attribute. */
+            $sl_payload = json_encode([
+                'id'            => (int)$sl['id'],
+                'from_site_id'  => (int)$sl['from_site_id'],
+                'to_site_id'    => (int)$sl['to_site_id'],
+                'from_name'     => (string)$sl['from_name'],
+                'to_name'       => (string)$sl['to_name'],
+                'type'          => (string)$sl['type'],
+                'label'         => (string)$sl['label'],
+                'capacity_mbps' => $sl['capacity_mbps'] !== null ? (float)$sl['capacity_mbps'] : null,
+                'frequency'     => (string)($sl['frequency'] ?? ''),
+                'color'         => (string)($sl['color']     ?? ''),
+                'notes'         => (string)($sl['notes']     ?? ''),
+                'distance_km'   => (float)$sl['distance_km'],
+            ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
           ?>
-          <tr>
+          <tr class="is-clickable js-sl-row"
+              data-sl='<?= htmlspecialchars($sl_payload, ENT_QUOTES) ?>'
+              tabindex="0"
+              role="button"
+              aria-label="Edit backbone link <?= htmlspecialchars($sl['from_name']) ?> to <?= htmlspecialchars($sl['to_name']) ?>">
             <td>
               <span class="link-pill" style="background:<?= $type_bg ?>;color:#fff;">
                 <?= htmlspecialchars($type_lbl) ?>
@@ -377,6 +431,7 @@ $health_pill = function (?int $score): string {
               <small><?= number_format($sl['distance_km'], 2) ?> km</small>
             </td>
             <td class="row-actions">
+              <button type="button" class="btn btn-ghost btn-sm js-sl-edit">Edit</button>
               <form method="post" class="inline-form" data-confirm="Delete this backbone link?">
                 <?= csrf_field() ?>
                 <input type="hidden" name="action" value="delete_site_link">
@@ -389,8 +444,175 @@ $health_pill = function (?int $score): string {
       </tbody>
     </table>
     </div>
+    <small class="muted">Click any row to edit a backbone link.</small>
   <?php endif; ?>
 </div>
+
+<dialog class="sl-modal" id="sl-edit-modal" aria-labelledby="sl-modal-title">
+  <div class="sl-modal-head">
+    <h3 id="sl-modal-title">Edit backbone link</h3>
+    <button type="button" class="sl-modal-close" data-sl-cancel aria-label="Close">×</button>
+  </div>
+
+  <!-- Delete + edit kept as sibling forms (HTML disallows form nesting).
+       The Save button uses form="sl-edit-form" to attach without being a child. -->
+  <form method="post" class="inline-form" data-confirm="Delete this backbone link?" id="sl-delete-form" style="display:none;">
+    <?= csrf_field() ?>
+    <input type="hidden" name="action" value="delete_site_link">
+    <input type="hidden" name="id" id="sl-delete-id" value="">
+  </form>
+
+  <form method="post" class="form" id="sl-edit-form" novalidate>
+    <?= csrf_field() ?>
+    <input type="hidden" name="action" value="save_site_link">
+    <input type="hidden" name="id" id="sl-id" value="">
+
+    <div class="sl-modal-body">
+      <div class="sl-grid">
+        <div class="field">
+          <label>From site *</label>
+          <select name="from_site_id" id="sl-from" required>
+            <?php foreach ($sites as $s): ?>
+              <option value="<?= (int)$s['id'] ?>"><?= htmlspecialchars($s['name']) ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+        <div class="field">
+          <label>To site *</label>
+          <select name="to_site_id" id="sl-to" required>
+            <?php foreach ($sites as $s): ?>
+              <option value="<?= (int)$s['id'] ?>"><?= htmlspecialchars($s['name']) ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+        <div class="field">
+          <label>Type</label>
+          <select name="type" id="sl-type">
+            <?php foreach ($site_link_type_labels as $k => $lbl): ?>
+              <option value="<?= htmlspecialchars($k) ?>"><?= htmlspecialchars($lbl) ?></option>
+            <?php endforeach; ?>
+          </select>
+        </div>
+        <div class="field">
+          <label>Label</label>
+          <input type="text" name="label" id="sl-label" maxlength="120" placeholder="e.g. Tower A ↔ Tower B">
+        </div>
+        <div class="field">
+          <label>Capacity (Mbps)</label>
+          <input type="number" step="any" min="0" name="capacity_mbps" id="sl-capacity" placeholder="e.g. 1000">
+        </div>
+        <div class="field">
+          <label>Frequency</label>
+          <input type="text" name="frequency" id="sl-frequency" maxlength="20" placeholder="e.g. 5 GHz / fibre">
+        </div>
+        <div class="field full">
+          <label>Map line colour</label>
+          <input type="text" name="color" id="sl-color" maxlength="20" placeholder="e.g. #08e or 'cyan' (optional)">
+        </div>
+        <div class="field full">
+          <label>Notes</label>
+          <textarea name="notes" id="sl-notes" rows="3" maxlength="2000"></textarea>
+        </div>
+        <div class="field full">
+          <small class="muted" id="sl-distance-hint"></small>
+        </div>
+      </div>
+    </div>
+  </form>
+
+  <div class="sl-modal-foot">
+    <button type="submit" form="sl-delete-form" class="btn btn-danger btn-sm" id="sl-delete-btn">Delete</button>
+    <div class="sl-foot-right">
+      <button type="button" class="btn btn-ghost btn-sm" data-sl-cancel>Cancel</button>
+      <button type="submit" form="sl-edit-form" class="btn btn-primary btn-sm">Save changes</button>
+    </div>
+  </div>
+</dialog>
+
+<script>
+(function () {
+  var dialog = document.getElementById('sl-edit-modal');
+  if (!dialog) return;
+
+  var form = document.getElementById('sl-edit-form');
+  var fields = {
+    id:       document.getElementById('sl-id'),
+    from:     document.getElementById('sl-from'),
+    to:       document.getElementById('sl-to'),
+    type:     document.getElementById('sl-type'),
+    label:    document.getElementById('sl-label'),
+    capacity: document.getElementById('sl-capacity'),
+    frequency:document.getElementById('sl-frequency'),
+    color:    document.getElementById('sl-color'),
+    notes:    document.getElementById('sl-notes'),
+    distance: document.getElementById('sl-distance-hint'),
+    delId:    document.getElementById('sl-delete-id'),
+    title:    document.getElementById('sl-modal-title')
+  };
+
+  function open(payload) {
+    fields.id.value        = payload.id || '';
+    fields.delId.value     = payload.id || '';
+    fields.from.value      = payload.from_site_id || '';
+    fields.to.value        = payload.to_site_id   || '';
+    fields.type.value      = payload.type         || 'ptp';
+    fields.label.value     = payload.label        || '';
+    fields.capacity.value  = payload.capacity_mbps !== null && payload.capacity_mbps !== undefined ? payload.capacity_mbps : '';
+    fields.frequency.value = payload.frequency    || '';
+    fields.color.value     = payload.color        || '';
+    fields.notes.value     = payload.notes        || '';
+    fields.distance.textContent = 'Distance: '
+      + (typeof payload.distance_km === 'number' ? payload.distance_km.toFixed(2) + ' km' : '—')
+      + (payload.from_name && payload.to_name ? '  ·  ' + payload.from_name + ' → ' + payload.to_name : '');
+    fields.title.textContent = payload.id ? 'Edit backbone link' : 'New backbone link';
+
+    if (typeof dialog.showModal === 'function') {
+      dialog.showModal();
+    } else {
+      dialog.setAttribute('open', 'open'); // very-old-browser fallback
+    }
+  }
+
+  function close() {
+    if (typeof dialog.close === 'function') dialog.close();
+    else dialog.removeAttribute('open');
+  }
+
+  function bindRow(tr) {
+    function handle(ev) {
+      // Don't hijack clicks on the row's existing action buttons / forms.
+      if (ev.target.closest('.row-actions')) return;
+      if (ev.type === 'keydown' && ev.key !== 'Enter' && ev.key !== ' ') return;
+      ev.preventDefault();
+      try {
+        open(JSON.parse(tr.getAttribute('data-sl') || '{}'));
+      } catch (e) { /* swallow malformed payload */ }
+    }
+    tr.addEventListener('click', handle);
+    tr.addEventListener('keydown', handle);
+  }
+
+  document.querySelectorAll('.js-sl-row').forEach(bindRow);
+
+  document.querySelectorAll('.js-sl-edit').forEach(function (btn) {
+    btn.addEventListener('click', function (ev) {
+      ev.stopPropagation();
+      var tr = btn.closest('.js-sl-row');
+      if (!tr) return;
+      try { open(JSON.parse(tr.getAttribute('data-sl') || '{}')); }
+      catch (e) {}
+    });
+  });
+
+  dialog.addEventListener('click', function (ev) {
+    // Click outside the form (on the backdrop area inside the dialog box) closes.
+    if (ev.target === dialog) close();
+  });
+  document.querySelectorAll('[data-sl-cancel]').forEach(function (b) {
+    b.addEventListener('click', close);
+  });
+})();
+</script>
 
 <div class="portal-card">
   <h2>Add a backbone link</h2>

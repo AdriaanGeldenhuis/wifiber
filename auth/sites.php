@@ -108,6 +108,19 @@ function site_links_all(): array {
     return $rows;
 }
 
+function site_link_find(int $id): ?array {
+    if ($id <= 0) return null;
+    $stmt = pdo()->prepare("SELECT * FROM site_links WHERE id = ? LIMIT 1");
+    $stmt->execute([$id]);
+    $row = $stmt->fetch();
+    if (!$row) return null;
+    $row['id']            = (int)$row['id'];
+    $row['from_site_id']  = (int)$row['from_site_id'];
+    $row['to_site_id']    = (int)$row['to_site_id'];
+    $row['capacity_mbps'] = $row['capacity_mbps'] !== null ? (float)$row['capacity_mbps'] : null;
+    return $row;
+}
+
 function site_link_save(array $data, ?int $id = null): int {
     $type = in_array($data['type'] ?? '', LINK_TYPES, true) ? $data['type'] : 'ptp';
     $from = (int)($data['from_site_id'] ?? 0);
