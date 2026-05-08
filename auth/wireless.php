@@ -79,9 +79,14 @@ function wireless_link_find(int $id): ?array {
         "SELECT wl.*,
                 ap.name  AS ap_name,  ap.vendor AS ap_vendor,  ap.model AS ap_model,
                 ap.firmware AS ap_firmware, ap.site_id AS ap_site_id,
+                ap.mgmt_ip AS ap_mgmt_ip, ap.network_mode AS ap_network_mode,
+                ap.last_seen_at AS ap_last_seen, ap.status AS ap_status,
                 cpe.name AS cpe_name, cpe.vendor AS cpe_vendor, cpe.model AS cpe_model,
                 cpe.firmware AS cpe_firmware, cpe.site_id AS cpe_site_id,
+                cpe.mgmt_ip AS cpe_mgmt_ip, cpe.network_mode AS cpe_network_mode,
+                cpe.last_seen_at AS cpe_last_seen, cpe.status AS cpe_status,
                 s.name AS sector_name, s.frequency_mhz AS sector_freq, s.channel_width_mhz AS sector_width,
+                s.tdd_framing AS sector_tdd_framing,
                 u.name AS customer_name, u.surname AS customer_surname
            FROM wireless_links wl
            JOIN devices ap       ON ap.id = wl.ap_device_id
@@ -195,6 +200,17 @@ function wireless_link_record_sample(int $link_id, array $s): void {
                 tx_bytes            = COALESCE(?, tx_bytes),
                 rx_bytes            = COALESCE(?, rx_bytes),
                 distance_km         = COALESCE(?, distance_km),
+                chain0_signal_dbm_local  = COALESCE(?, chain0_signal_dbm_local),
+                chain1_signal_dbm_local  = COALESCE(?, chain1_signal_dbm_local),
+                chain0_signal_dbm_remote = COALESCE(?, chain0_signal_dbm_remote),
+                chain1_signal_dbm_remote = COALESCE(?, chain1_signal_dbm_remote),
+                rx_mcs_index_local       = COALESCE(?, rx_mcs_index_local),
+                rx_mcs_index_remote      = COALESCE(?, rx_mcs_index_remote),
+                max_mcs_index            = COALESCE(?, max_mcs_index),
+                modulation_label         = COALESCE(NULLIF(?, ''), modulation_label),
+                tdd_framing              = COALESCE(NULLIF(?, ''), tdd_framing),
+                connection_time_seconds  = COALESCE(?, connection_time_seconds),
+                remote_ip                = COALESCE(NULLIF(?, ''), remote_ip),
                 health_score        = ?,
                 last_evaluated_at   = NOW()
           WHERE id = ?"
@@ -227,6 +243,17 @@ function wireless_link_record_sample(int $link_id, array $s): void {
         $s['tx_bytes']            ?? null,
         $s['rx_bytes']            ?? null,
         $s['distance_km']         ?? null,
+        $s['chain0_signal_dbm_local']  ?? null,
+        $s['chain1_signal_dbm_local']  ?? null,
+        $s['chain0_signal_dbm_remote'] ?? null,
+        $s['chain1_signal_dbm_remote'] ?? null,
+        $s['rx_mcs_index_local']       ?? null,
+        $s['rx_mcs_index_remote']      ?? null,
+        $s['max_mcs_index']            ?? null,
+        (string)($s['modulation_label'] ?? ''),
+        (string)($s['tdd_framing']      ?? ''),
+        $s['connection_time_seconds']  ?? null,
+        (string)($s['remote_ip']        ?? ''),
         wireless_link_score_health($s),
         $link_id,
     ]);
@@ -239,8 +266,12 @@ function wireless_link_record_sample(int $link_id, array $s): void {
              airtime_local_pct, airtime_remote_pct,
              throughput_local_mbps, throughput_remote_mbps,
              capacity_local_mbps, capacity_remote_mbps,
-             tx_retries, rx_retries, ack_pct)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+             tx_retries, rx_retries, ack_pct,
+             chain0_signal_dbm_local, chain1_signal_dbm_local,
+             chain0_signal_dbm_remote, chain1_signal_dbm_remote,
+             rx_mcs_index_local, rx_mcs_index_remote)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                 ?, ?, ?, ?, ?, ?)"
     )->execute([
         $link_id,
         $s['signal_local_dbm']     ?? null,
@@ -261,6 +292,12 @@ function wireless_link_record_sample(int $link_id, array $s): void {
         $s['tx_retries']           ?? null,
         $s['rx_retries']           ?? null,
         $s['ack_pct']              ?? null,
+        $s['chain0_signal_dbm_local']  ?? null,
+        $s['chain1_signal_dbm_local']  ?? null,
+        $s['chain0_signal_dbm_remote'] ?? null,
+        $s['chain1_signal_dbm_remote'] ?? null,
+        $s['rx_mcs_index_local']       ?? null,
+        $s['rx_mcs_index_remote']      ?? null,
     ]);
 }
 

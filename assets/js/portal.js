@@ -243,4 +243,150 @@
       setSideOpen(false);
     }
   });
+
+  /* ---------- declarative <dialog> modal opener ----------
+     Strict CSP forbids inline <script>, so per-page modal wiring lives
+     here and is driven entirely by data-attributes:
+
+       <tr data-modal-open="#sl-edit-modal"
+           data-modal-payload='{"id":42,"label":"…", …}'>...</tr>
+
+       <button data-modal-open="#sl-edit-modal" data-modal-payload="…">Edit</button>
+
+       <dialog id="sl-edit-modal">
+         <input data-modal-field="label">
+         <select data-modal-field="from_site_id">…</select>
+         <span  data-modal-display="distance_km" data-modal-format="distance"></span>
+         <button data-modal-cancel>Cancel</button>
+       </dialog>
+
+     Fields with data-modal-field=KEY get .value populated from
+     payload[KEY]. Elements with data-modal-display=KEY get
+     .textContent populated; data-modal-format optionally formats:
+       distance → "1.23 km"
+       ft       → "4034 ft"
+     The payload is also exposed on the dialog as a `_modalPayload`
+     property for any sibling code that needs it. */
+  function openModalFromTrigger(trigger) {
+    var sel = trigger.getAttribute('data-modal-open');
+    if (!sel) return;
+    var dialog = document.querySelector(sel);
+    if (!dialog) return;
+    var payload = {};
+    try {
+      var raw = trigger.getAttribute('data-modal-payload');
+      if (raw) payload = JSON.parse(raw);
+    } catch (err) { payload = {}; }
+    dialog._modalPayload = payload;
+
+    dialog.querySelectorAll('[data-modal-field]').forEach(function (el) {
+      var k = el.getAttribute('data-modal-field');
+      var v = payload[k];
+      if (v === undefined || v === null) v = '';
+      // checkbox/radio handled separately
+      if (el.type === 'checkbox' || el.type === 'radio') {
+        el.checked = !!v;
+      } else {
+        el.value = v;
+      }
+    });
+    dialog.querySelectorAll('[data-modal-display]').forEach(function (el) {
+      var k = el.getAttribute('data-modal-display');
+      var v = payload[k];
+      var fmt = el.getAttribute('data-modal-format') || '';
+      var out = '';
+      if (v === undefined || v === null || v === '') {
+        out = '—';
+      } else if (fmt === 'distance' && typeof v === 'number') {
+        out = v.toFixed(2) + ' km';
+      } else if (fmt === 'ft' && typeof v === 'number') {
+        out = (v * 1000 / 0.3048).toFixed(0) + ' ft';
+      } else {
+        out = String(v);
+      }
+      el.textContent = out;
+    });
+    // Expose summary text via [data-modal-summary="tplname"] hook —
+    // the page renders a span and JS fills it in. Allows pages to
+    // mix payload fields without us hardcoding the layout.
+    dialog.querySelectorAll('[data-modal-summary]').forEach(function (el) {
+      var tpl = el.getAttribute('data-modal-summary') || '';
+      el.textContent = tpl.replace(/\{(\w+)\}/g, function (_, k) {
+        var v = payload[k];
+        return v === undefined || v === null ? '' : String(v);
+      });
+    });
+
+    if (typeof dialog.showModal === 'function') {
+      // Don't double-open; close first so showModal() succeeds.
+      if (dialog.hasAttribute('open')) dialog.close();
+      dialog.showModal();
+    } else {
+      dialog.setAttribute('open', 'open');
+    }
+  }
+
+  function closeNearestDialog(el) {
+    var dialog = el.closest ? el.closest('dialog') : null;
+    if (!dialog) return;
+    if (typeof dialog.close === 'function') dialog.close();
+    else dialog.removeAttribute('open');
+  }
+
+  /* Walk up from `target` and return whichever attribute we encounter
+     first: data-modal-open (a trigger) or data-modal-skip (a no-op
+     zone). This matters when a row carries data-modal-open AND a child
+     cell carries data-modal-skip but contains its OWN nested trigger
+     (e.g. an Edit button inside a no-row-click actions cell). The
+     nested trigger is encountered before the skip zone, so it wins. */
+  function nearestModalHit(target) {
+    var node = target;
+    while (node && node !== document) {
+      if (node.nodeType === 1 /* ELEMENT_NODE */) {
+        if (node.hasAttribute('data-modal-open')) return { trigger: node };
+        if (node.hasAttribute('data-modal-skip')) return { skip: true };
+      }
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  /* Open: any element with data-modal-open. */
+  document.addEventListener('click', function (e) {
+    var hit = nearestModalHit(e.target);
+    if (!hit || !hit.trigger) return;
+    e.preventDefault();
+    openModalFromTrigger(hit.trigger);
+  });
+
+  /* Same as above but for keyboard activation on a row with
+     role="button" tabindex="0". */
+  document.addEventListener('keydown', function (e) {
+    if (e.key !== 'Enter' && e.key !== ' ') return;
+    // Don't hijack Enter/Space inside form fields.
+    var t = e.target;
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.tagName === 'BUTTON' || t.isContentEditable)) {
+      return;
+    }
+    var hit = nearestModalHit(e.target);
+    if (!hit || !hit.trigger) return;
+    e.preventDefault();
+    openModalFromTrigger(hit.trigger);
+  });
+
+  /* Close: any element with data-modal-cancel inside a <dialog>.
+     Also closes when the click hits the <dialog> itself (i.e. the
+     backdrop area of the centred box). */
+  document.addEventListener('click', function (e) {
+    if (e.target.matches && e.target.matches('dialog')) {
+      // Click on the dialog backdrop (not on its inner box).
+      closeNearestDialog(e.target);
+      return;
+    }
+    var c = e.target.closest('[data-modal-cancel]');
+    if (c) {
+      e.preventDefault();
+      closeNearestDialog(c);
+    }
+  });
 })();

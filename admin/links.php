@@ -55,6 +55,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     }
 
     if ($action === 'save_site_link') {
+        $edit_id = (int)($_POST['id'] ?? 0);
         try {
             $saved = site_link_save([
                 'from_site_id'  => (int)($_POST['from_site_id'] ?? 0),
@@ -63,10 +64,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 'label'         => $_POST['label']         ?? '',
                 'capacity_mbps' => $_POST['capacity_mbps'] ?? null,
                 'frequency'     => $_POST['frequency']     ?? '',
+                'color'         => $_POST['color']         ?? '',
                 'notes'         => $_POST['notes']         ?? '',
-            ]);
-            audit_log('site_link.create', ['target_type' => 'site_link', 'target_id' => $saved]);
-            flash('success', 'Backbone link added.');
+            ], $edit_id ?: null);
+            audit_log($edit_id ? 'site_link.update' : 'site_link.create',
+                      ['target_type' => 'site_link', 'target_id' => $saved]);
+            flash('success', $edit_id ? 'Backbone link updated.' : 'Backbone link added.');
         } catch (Throwable $e) {
             flash('error', $e->getMessage());
         }
@@ -117,6 +120,12 @@ $cpe_devices = array_values(array_filter($devices, fn ($d) => in_array($d['role'
 $site_links_rows = site_links_with_sites();
 $sites           = sites_all();
 
+// Server-side edit: ?edit=N pre-fills the form below the table with that
+// backbone link's current values. The form's hidden id field then makes
+// save_site_link UPDATE in place instead of INSERT.
+$edit_sl_id = (int)($_GET['edit'] ?? 0);
+$edit_sl    = $edit_sl_id ? site_link_find($edit_sl_id) : null;
+
 $site_link_type_labels = [
     'ptp'      => 'Point-to-point',
     'ptmp'     => 'Point-to-multipoint',
@@ -147,6 +156,23 @@ $health_pill = function (?int $score): string {
   .link-pill { display:inline-block;padding:2px 9px;border-radius:10px;font-size:11px;font-weight:600;letter-spacing:.02em; }
   .data-table tr.row-poor td { background:rgba(212,68,68,0.06); }
   .data-table tr.row-fair td { background:rgba(232,168,20,0.06); }
+
+  /* Make every cell of a backbone row a transparent <a> covering the
+     full cell area — the entire row becomes a clickable link to the
+     server-rendered edit form below the table, with no JS. The actions
+     cell on the right still hosts its own buttons (Edit link + Delete
+     form) and lives outside this treatment. */
+  .data-table tr.is-clickable td { transition:background .12s; }
+  .data-table tr.is-clickable:hover td { background:rgba(5,218,253,0.06); }
+  .data-table tr.is-clickable td.cell-link { padding:0; }
+  .data-table tr.is-clickable td.cell-link > a {
+    display:block; padding:12px 14px; color:inherit; text-decoration:none;
+  }
+  .data-table tr.is-clickable td.cell-link > a:hover { color:inherit; }
+
+  /* Visual highlight on the row currently being edited so it's obvious
+     which one you opened. */
+  .sl-row-editing td { background:rgba(5,218,253,0.10) !important; outline:1px solid var(--accent); outline-offset:-1px; }
 </style>
 
 <div class="portal-head">
@@ -346,37 +372,57 @@ $health_pill = function (?int $score): string {
           <?php
             $type_lbl = $site_link_type_labels[$sl['type']] ?? $sl['type'];
             $type_bg  = $site_link_type_color[$sl['type']]  ?? '#888';
+            // Row click → full UISP-style dashboard. The Edit button on
+            // the right takes the operator to the quick-edit form below
+            // the table for fast inline tweaks.
+            $view_url = '/admin/site-link-view.php?id=' . (int)$sl['id'];
+            $edit_url = $self . '?edit=' . (int)$sl['id'] . '#backbone-form';
+            $is_editing = $edit_sl && (int)$edit_sl['id'] === (int)$sl['id'];
+            $aria       = 'Open backbone link ' . $sl['from_name'] . ' to ' . $sl['to_name'];
           ?>
-          <tr>
-            <td>
-              <span class="link-pill" style="background:<?= $type_bg ?>;color:#fff;">
-                <?= htmlspecialchars($type_lbl) ?>
-              </span>
+          <tr class="is-clickable<?= $is_editing ? ' sl-row-editing' : '' ?>">
+            <td class="cell-link">
+              <a href="<?= htmlspecialchars($view_url) ?>" aria-label="<?= htmlspecialchars($aria) ?>">
+                <span class="link-pill" style="background:<?= $type_bg ?>;color:#fff;">
+                  <?= htmlspecialchars($type_lbl) ?>
+                </span>
+              </a>
             </td>
-            <td>
-              <strong><?= htmlspecialchars($sl['from_name']) ?></strong>
-              <span class="muted">→</span>
-              <strong><?= htmlspecialchars($sl['to_name']) ?></strong>
+            <td class="cell-link">
+              <a href="<?= htmlspecialchars($view_url) ?>" aria-label="<?= htmlspecialchars($aria) ?>">
+                <strong><?= htmlspecialchars($sl['from_name']) ?></strong>
+                <span class="muted">→</span>
+                <strong><?= htmlspecialchars($sl['to_name']) ?></strong>
+              </a>
             </td>
-            <td>
-              <?= $sl['label'] !== ''
-                  ? htmlspecialchars($sl['label'])
-                  : '<small class="muted">—</small>' ?>
+            <td class="cell-link">
+              <a href="<?= htmlspecialchars($view_url) ?>" aria-label="<?= htmlspecialchars($aria) ?>">
+                <?= $sl['label'] !== ''
+                    ? htmlspecialchars($sl['label'])
+                    : '<small class="muted">—</small>' ?>
+              </a>
             </td>
-            <td>
-              <?= $sl['capacity_mbps'] !== null
-                  ? number_format((float)$sl['capacity_mbps'], 0) . ' <small class="muted">Mbps</small>'
-                  : '<small class="muted">—</small>' ?>
+            <td class="cell-link">
+              <a href="<?= htmlspecialchars($view_url) ?>" aria-label="<?= htmlspecialchars($aria) ?>">
+                <?= $sl['capacity_mbps'] !== null
+                    ? number_format((float)$sl['capacity_mbps'], 0) . ' <small class="muted">Mbps</small>'
+                    : '<small class="muted">—</small>' ?>
+              </a>
             </td>
-            <td>
-              <?= $sl['frequency']
-                  ? htmlspecialchars((string)$sl['frequency'])
-                  : '<small class="muted">—</small>' ?>
+            <td class="cell-link">
+              <a href="<?= htmlspecialchars($view_url) ?>" aria-label="<?= htmlspecialchars($aria) ?>">
+                <?= $sl['frequency']
+                    ? htmlspecialchars((string)$sl['frequency'])
+                    : '<small class="muted">—</small>' ?>
+              </a>
             </td>
-            <td>
-              <small><?= number_format($sl['distance_km'], 2) ?> km</small>
+            <td class="cell-link">
+              <a href="<?= htmlspecialchars($view_url) ?>" aria-label="<?= htmlspecialchars($aria) ?>">
+                <small><?= number_format($sl['distance_km'], 2) ?> km</small>
+              </a>
             </td>
             <td class="row-actions">
+              <a class="btn btn-ghost btn-sm" href="<?= htmlspecialchars($edit_url) ?>">Edit</a>
               <form method="post" class="inline-form" data-confirm="Delete this backbone link?">
                 <?= csrf_field() ?>
                 <input type="hidden" name="action" value="delete_site_link">
@@ -389,23 +435,54 @@ $health_pill = function (?int $score): string {
       </tbody>
     </table>
     </div>
+    <small class="muted">Click any row to open the full backbone dashboard. Use <strong>Edit</strong> for a quick edit form below.</small>
   <?php endif; ?>
 </div>
 
-<div class="portal-card">
-  <h2>Add a backbone link</h2>
-  <p class="muted">Wire two sites together without leaving this page. For graphical placement use the <a href="/admin/map.php">network map</a>.</p>
+<?php
+/* Server-rendered Add / Edit form. Switches mode based on $edit_sl.
+   Field defaults pull from the link being edited, otherwise are empty. */
+$f_from   = $edit_sl ? (int)$edit_sl['from_site_id']  : 0;
+$f_to     = $edit_sl ? (int)$edit_sl['to_site_id']    : 0;
+$f_type   = $edit_sl ? (string)$edit_sl['type']       : 'ptp';
+$f_label  = $edit_sl ? (string)$edit_sl['label']      : '';
+$f_cap    = $edit_sl && $edit_sl['capacity_mbps'] !== null ? (string)$edit_sl['capacity_mbps'] : '';
+$f_freq   = $edit_sl ? (string)($edit_sl['frequency'] ?? '') : '';
+$f_color  = $edit_sl ? (string)($edit_sl['color']     ?? '') : '';
+$f_notes  = $edit_sl ? (string)($edit_sl['notes']     ?? '') : '';
+?>
+<div class="portal-card" id="backbone-form">
+  <h2><?= $edit_sl ? 'Edit backbone link' : 'Add a backbone link' ?></h2>
+  <p class="muted">
+    <?php if ($edit_sl):
+      // Look up the from/to site names for the descriptive heading.
+      $edit_from = site_find((int)$edit_sl['from_site_id']);
+      $edit_to   = site_find((int)$edit_sl['to_site_id']);
+      $edit_lbl  = trim(($edit_from['name'] ?? '#' . (int)$edit_sl['from_site_id'])
+                  . ' → ' . ($edit_to['name'] ?? '#' . (int)$edit_sl['to_site_id']));
+    ?>
+      Editing <strong><?= htmlspecialchars($edit_lbl) ?></strong> · any changes update the map immediately.
+      <a class="btn btn-ghost btn-sm" href="<?= $self ?>#backbone" style="margin-left:8px;">Cancel edit</a>
+    <?php else: ?>
+      Wire two sites together without leaving this page. For graphical placement use the <a href="/admin/map.php">network map</a>.
+    <?php endif; ?>
+  </p>
   <?php if (count($sites) < 2): ?>
     <p class="muted">You need at least two sites before you can link them. Add some on <a href="/admin/sites.php">/admin/sites.php</a>.</p>
   <?php else: ?>
     <form method="post" class="form form-grid">
       <?= csrf_field() ?>
       <input type="hidden" name="action" value="save_site_link">
+      <?php if ($edit_sl): ?>
+        <input type="hidden" name="id" value="<?= (int)$edit_sl['id'] ?>">
+      <?php endif; ?>
       <div class="field"><label>From site *</label>
         <select name="from_site_id" required>
           <option value="">— pick —</option>
           <?php foreach ($sites as $s): ?>
-            <option value="<?= (int)$s['id'] ?>"><?= htmlspecialchars($s['name']) ?></option>
+            <option value="<?= (int)$s['id'] ?>" <?= $f_from === (int)$s['id'] ? 'selected' : '' ?>>
+              <?= htmlspecialchars($s['name']) ?>
+            </option>
           <?php endforeach; ?>
         </select>
       </div>
@@ -413,31 +490,47 @@ $health_pill = function (?int $score): string {
         <select name="to_site_id" required>
           <option value="">— pick —</option>
           <?php foreach ($sites as $s): ?>
-            <option value="<?= (int)$s['id'] ?>"><?= htmlspecialchars($s['name']) ?></option>
+            <option value="<?= (int)$s['id'] ?>" <?= $f_to === (int)$s['id'] ? 'selected' : '' ?>>
+              <?= htmlspecialchars($s['name']) ?>
+            </option>
           <?php endforeach; ?>
         </select>
       </div>
       <div class="field"><label>Type</label>
         <select name="type">
           <?php foreach ($site_link_type_labels as $k => $lbl): ?>
-            <option value="<?= htmlspecialchars($k) ?>"><?= htmlspecialchars($lbl) ?></option>
+            <option value="<?= htmlspecialchars($k) ?>" <?= $f_type === $k ? 'selected' : '' ?>>
+              <?= htmlspecialchars($lbl) ?>
+            </option>
           <?php endforeach; ?>
         </select>
       </div>
       <div class="field"><label>Label</label>
-        <input type="text" name="label" maxlength="120" placeholder="e.g. Tower A ↔ Tower B">
+        <input type="text" name="label" maxlength="120" placeholder="e.g. Tower A ↔ Tower B"
+               value="<?= htmlspecialchars($f_label) ?>">
       </div>
       <div class="field"><label>Capacity (Mbps)</label>
-        <input type="number" step="any" min="0" name="capacity_mbps" placeholder="e.g. 1000">
+        <input type="number" step="any" min="0" name="capacity_mbps" placeholder="e.g. 1000"
+               value="<?= htmlspecialchars($f_cap) ?>">
       </div>
       <div class="field"><label>Frequency</label>
-        <input type="text" name="frequency" maxlength="20" placeholder="e.g. 5 GHz / fibre">
+        <input type="text" name="frequency" maxlength="20" placeholder="e.g. 5 GHz / fibre"
+               value="<?= htmlspecialchars($f_freq) ?>">
+      </div>
+      <div class="field"><label>Map line colour</label>
+        <input type="text" name="color" maxlength="20" placeholder="e.g. #08e or 'cyan' (optional)"
+               value="<?= htmlspecialchars($f_color) ?>">
       </div>
       <div class="field" style="grid-column:1/-1;"><label>Notes</label>
-        <textarea name="notes" rows="2" maxlength="2000"></textarea>
+        <textarea name="notes" rows="2" maxlength="2000"><?= htmlspecialchars($f_notes) ?></textarea>
       </div>
       <div class="form-actions" style="grid-column:1/-1;">
-        <button type="submit" class="btn btn-primary btn-sm">Add backbone link</button>
+        <button type="submit" class="btn btn-primary btn-sm">
+          <?= $edit_sl ? 'Save changes' : 'Add backbone link' ?>
+        </button>
+        <?php if ($edit_sl): ?>
+          <a class="btn btn-ghost btn-sm" href="<?= $self ?>#backbone">Cancel</a>
+        <?php endif; ?>
       </div>
     </form>
   <?php endif; ?>

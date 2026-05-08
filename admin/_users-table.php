@@ -450,7 +450,8 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
                   <?php if (!empty($u['address'])): ?><li><span>Address</span><strong><?= htmlspecialchars($u['address']) ?></strong></li><?php endif; ?>
                 </ul>
                 <div class="form-actions" style="margin-top:14px;">
-                  <a href="/admin/client-edit.php?id=<?= (int)$u['id'] ?>" class="btn btn-primary btn-sm">Edit full details</a>
+                  <a href="/admin/client-view.php?id=<?= (int)$u['id'] ?>" class="btn btn-primary btn-sm">Open dashboard</a>
+                  <a href="/admin/client-edit.php?id=<?= (int)$u['id'] ?>" class="btn btn-ghost btn-sm">Edit full details</a>
                 </div>
               <?php else: ?>
                 <form method="post" class="form form-grid">
