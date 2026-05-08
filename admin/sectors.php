@@ -291,7 +291,8 @@ $device_label = function (?int $id) use ($all_devices): string {
               <?php endif; ?>
             </td>
             <td>
-              <a class="btn btn-primary btn-sm" href="/admin/sector-edit.php?id=<?= (int)$s['id'] ?>">Open</a>
+              <a class="btn btn-primary btn-sm" href="/admin/sector-view.php?id=<?= (int)$s['id'] ?>">Open</a>
+              <a class="btn btn-ghost btn-sm" href="/admin/sector-edit.php?id=<?= (int)$s['id'] ?>">Edit</a>
               <details style="margin-top:6px;">
                 <summary class="btn btn-ghost btn-sm">Quick edit</summary>
                 <form method="post" class="form form-grid" style="margin-top:12px;">
