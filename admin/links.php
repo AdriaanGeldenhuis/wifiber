@@ -372,48 +372,52 @@ $health_pill = function (?int $score): string {
           <?php
             $type_lbl = $site_link_type_labels[$sl['type']] ?? $sl['type'];
             $type_bg  = $site_link_type_color[$sl['type']]  ?? '#888';
+            // Row click → full UISP-style dashboard. The Edit button on
+            // the right takes the operator to the quick-edit form below
+            // the table for fast inline tweaks.
+            $view_url = '/admin/site-link-view.php?id=' . (int)$sl['id'];
             $edit_url = $self . '?edit=' . (int)$sl['id'] . '#backbone-form';
             $is_editing = $edit_sl && (int)$edit_sl['id'] === (int)$sl['id'];
-            $aria       = 'Edit backbone link ' . $sl['from_name'] . ' to ' . $sl['to_name'];
+            $aria       = 'Open backbone link ' . $sl['from_name'] . ' to ' . $sl['to_name'];
           ?>
           <tr class="is-clickable<?= $is_editing ? ' sl-row-editing' : '' ?>">
             <td class="cell-link">
-              <a href="<?= htmlspecialchars($edit_url) ?>" aria-label="<?= htmlspecialchars($aria) ?>">
+              <a href="<?= htmlspecialchars($view_url) ?>" aria-label="<?= htmlspecialchars($aria) ?>">
                 <span class="link-pill" style="background:<?= $type_bg ?>;color:#fff;">
                   <?= htmlspecialchars($type_lbl) ?>
                 </span>
               </a>
             </td>
             <td class="cell-link">
-              <a href="<?= htmlspecialchars($edit_url) ?>" aria-label="<?= htmlspecialchars($aria) ?>">
+              <a href="<?= htmlspecialchars($view_url) ?>" aria-label="<?= htmlspecialchars($aria) ?>">
                 <strong><?= htmlspecialchars($sl['from_name']) ?></strong>
                 <span class="muted">→</span>
                 <strong><?= htmlspecialchars($sl['to_name']) ?></strong>
               </a>
             </td>
             <td class="cell-link">
-              <a href="<?= htmlspecialchars($edit_url) ?>" aria-label="<?= htmlspecialchars($aria) ?>">
+              <a href="<?= htmlspecialchars($view_url) ?>" aria-label="<?= htmlspecialchars($aria) ?>">
                 <?= $sl['label'] !== ''
                     ? htmlspecialchars($sl['label'])
                     : '<small class="muted">—</small>' ?>
               </a>
             </td>
             <td class="cell-link">
-              <a href="<?= htmlspecialchars($edit_url) ?>" aria-label="<?= htmlspecialchars($aria) ?>">
+              <a href="<?= htmlspecialchars($view_url) ?>" aria-label="<?= htmlspecialchars($aria) ?>">
                 <?= $sl['capacity_mbps'] !== null
                     ? number_format((float)$sl['capacity_mbps'], 0) . ' <small class="muted">Mbps</small>'
                     : '<small class="muted">—</small>' ?>
               </a>
             </td>
             <td class="cell-link">
-              <a href="<?= htmlspecialchars($edit_url) ?>" aria-label="<?= htmlspecialchars($aria) ?>">
+              <a href="<?= htmlspecialchars($view_url) ?>" aria-label="<?= htmlspecialchars($aria) ?>">
                 <?= $sl['frequency']
                     ? htmlspecialchars((string)$sl['frequency'])
                     : '<small class="muted">—</small>' ?>
               </a>
             </td>
             <td class="cell-link">
-              <a href="<?= htmlspecialchars($edit_url) ?>" aria-label="<?= htmlspecialchars($aria) ?>">
+              <a href="<?= htmlspecialchars($view_url) ?>" aria-label="<?= htmlspecialchars($aria) ?>">
                 <small><?= number_format($sl['distance_km'], 2) ?> km</small>
               </a>
             </td>
@@ -431,7 +435,7 @@ $health_pill = function (?int $score): string {
       </tbody>
     </table>
     </div>
-    <small class="muted">Click any row to edit it below.</small>
+    <small class="muted">Click any row to open the full backbone dashboard. Use <strong>Edit</strong> for a quick edit form below.</small>
   <?php endif; ?>
 </div>
 
