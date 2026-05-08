@@ -68,7 +68,12 @@ if ($_brand_colour && preg_match('/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/',
 </style>
 <?php endif; ?>
 </head>
-<body class="portal portal-<?= htmlspecialchars($portal) ?><?= $_in_app ? ' portal-in-app' : '' ?>">
+<body class="portal portal-<?= htmlspecialchars($portal) ?><?= $_in_app ? ' portal-in-app' : '' ?>"<?php
+  // Detail dashboards (link-view, device-view, sector-view, client-view)
+  // can opt into client-side auto-reload by setting $auto_refresh_seconds
+  // before the layout include. /assets/js/dashboard-live.js picks it up.
+  if (!empty($auto_refresh_seconds) && (int)$auto_refresh_seconds >= 5):
+?> data-auto-refresh-seconds="<?= (int)$auto_refresh_seconds ?>"<?php endif; ?>>
 <?php if ($user && !empty($nav) && !$_in_app): ?>
 <header class="portal-mobile-bar">
   <a href="<?= $is_admin ? '/admin/' : '/account/' ?>" class="portal-mobile-brand" title="<?= htmlspecialchars($_site_settings['name'] ?? 'WiFIBER') ?>">

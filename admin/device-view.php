@@ -34,10 +34,12 @@
  */
 $page_title = 'Device';
 $active_key = 'devices';
+$auto_refresh_seconds = 60; // soft-reload every 60s so sparklines stay current
 require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/devices.php';
 require_once __DIR__ . '/../auth/sites.php';
 require_once __DIR__ . '/../auth/wireless.php';
+require_once __DIR__ . '/../auth/poll_status.php';
 require_once __DIR__ . '/_link-charts.php';
 
 $id = (int)($_GET['id'] ?? 0);
@@ -142,6 +144,9 @@ if (!empty($d['last_seen_at'])) {
     elseif  ($age < 86400) $last_seen_age = floor($age / 3600) . 'h ago';
     else                   $last_seen_age = floor($age / 86400) . 'd ago';
 }
+
+$device_freshness = poll_classify(poll_device_latest_at($id));
+$is_pollable = !empty($d['mgmt_ip']) && in_array($d['vendor'], ['ubiquiti','mikrotik','cambium','mimosa'], true);
 
 $role_icon_path = match($d['role'] ?? 'other') {
     'ap'       => '<path d="M5 12a7 7 0 0 1 14 0"/><path d="M8.5 12a3.5 3.5 0 0 1 7 0"/><circle cx="12" cy="12" r="1.2" fill="currentColor"/>',
@@ -305,6 +310,12 @@ $rtt_sparkline = function (array $samples) {
       </div>
       <div class="lv-label" style="text-transform:none;letter-spacing:0;color:var(--text-muted);font-weight:400;">
         Firmware <?= lv_h($d['firmware'] ?: '—') ?>
+      </div>
+      <div style="margin-top:6px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+        <?= poll_badge_html($device_freshness, 'Newest device_health sample') ?>
+        <?php if ($is_pollable): ?>
+          <button type="button" class="btn btn-ghost btn-sm" data-poll-device-now="<?= (int)$d['id'] ?>" data-poll-device-name="<?= lv_h($d['name']) ?>" title="Run the vendor adapter against this device right now">Poll now</button>
+        <?php endif; ?>
       </div>
     </div>
     <div class="lv-dial" title="Uptime (24h online %)">

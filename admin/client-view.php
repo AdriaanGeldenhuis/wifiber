@@ -34,11 +34,13 @@
  */
 $page_title = 'Client';
 $active_key = 'clients';
+$auto_refresh_seconds = 60;
 require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/devices.php';
 require_once __DIR__ . '/../auth/sites.php';
 require_once __DIR__ . '/../auth/sectors.php';
 require_once __DIR__ . '/../auth/wireless.php';
+require_once __DIR__ . '/../auth/poll_status.php';
 require_once __DIR__ . '/_link-charts.php';
 
 $id = (int)($_GET['id'] ?? 0);
@@ -301,6 +303,24 @@ $service_age_d  = !empty($client['service_start']) ? max(0, (int)((time() - strt
       </svg>
     </span>
   </div>
+</div>
+
+<?php
+  $client_freshness = poll_classify(poll_customer_latest_at((int)$client['id']));
+  $client_pollable_dev = null;
+  foreach ($devices as $d) {
+      if (!empty($d['mgmt_ip']) && in_array($d['vendor'] ?? '', ['ubiquiti','mikrotik','cambium','mimosa'], true)) {
+          $client_pollable_dev = $d;
+          break;
+      }
+  }
+?>
+<div style="display:flex;align-items:center;justify-content:center;gap:10px;flex-wrap:wrap;margin-top:14px;">
+  <?= poll_badge_html($client_freshness, "Newest sample on this customer's links") ?>
+  <?php if ($client_pollable_dev): ?>
+    <button type="button" class="btn btn-ghost btn-sm" data-poll-device-now="<?= (int)$client_pollable_dev['id'] ?>" data-poll-device-name="<?= lv_h($client_pollable_dev['name']) ?>" title="Run the vendor adapter against this customer's CPE">Poll CPE now</button>
+  <?php endif; ?>
+  <a class="btn btn-ghost btn-sm" href="/admin/diagnostics.php">Polling status ↗</a>
 </div>
 
 <div class="lv-tabs">
