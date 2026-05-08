@@ -333,34 +333,45 @@
     else dialog.removeAttribute('open');
   }
 
-  /* Open: any element with data-modal-open. We exclude clicks on
-     children that themselves carry [data-modal-skip] so a row can be
-     clickable while its inline action buttons keep their own
-     behaviour (Delete form, etc.). */
+  /* Walk up from `target` and return whichever attribute we encounter
+     first: data-modal-open (a trigger) or data-modal-skip (a no-op
+     zone). This matters when a row carries data-modal-open AND a child
+     cell carries data-modal-skip but contains its OWN nested trigger
+     (e.g. an Edit button inside a no-row-click actions cell). The
+     nested trigger is encountered before the skip zone, so it wins. */
+  function nearestModalHit(target) {
+    var node = target;
+    while (node && node !== document) {
+      if (node.nodeType === 1 /* ELEMENT_NODE */) {
+        if (node.hasAttribute('data-modal-open')) return { trigger: node };
+        if (node.hasAttribute('data-modal-skip')) return { skip: true };
+      }
+      node = node.parentNode;
+    }
+    return null;
+  }
+
+  /* Open: any element with data-modal-open. */
   document.addEventListener('click', function (e) {
-    var skip = e.target.closest('[data-modal-skip]');
-    if (skip) return;
-    var trigger = e.target.closest('[data-modal-open]');
-    if (!trigger) return;
+    var hit = nearestModalHit(e.target);
+    if (!hit || !hit.trigger) return;
     e.preventDefault();
-    openModalFromTrigger(trigger);
+    openModalFromTrigger(hit.trigger);
   });
 
   /* Same as above but for keyboard activation on a row with
      role="button" tabindex="0". */
   document.addEventListener('keydown', function (e) {
     if (e.key !== 'Enter' && e.key !== ' ') return;
-    var skip = e.target.closest('[data-modal-skip]');
-    if (skip) return;
-    var trigger = e.target.closest('[data-modal-open]');
-    if (!trigger) return;
-    // Don't hijack the spacebar inside form fields.
+    // Don't hijack Enter/Space inside form fields.
     var t = e.target;
-    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.isContentEditable)) {
+    if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.tagName === 'SELECT' || t.tagName === 'BUTTON' || t.isContentEditable)) {
       return;
     }
+    var hit = nearestModalHit(e.target);
+    if (!hit || !hit.trigger) return;
     e.preventDefault();
-    openModalFromTrigger(trigger);
+    openModalFromTrigger(hit.trigger);
   });
 
   /* Close: any element with data-modal-cancel inside a <dialog>.
