@@ -397,8 +397,9 @@ $health_pill = function (?int $score): string {
                 'distance_km'   => (float)$sl['distance_km'],
             ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
           ?>
-          <tr class="is-clickable js-sl-row"
-              data-sl='<?= htmlspecialchars($sl_payload, ENT_QUOTES) ?>'
+          <tr class="is-clickable"
+              data-modal-open="#sl-edit-modal"
+              data-modal-payload='<?= htmlspecialchars($sl_payload, ENT_QUOTES) ?>'
               tabindex="0"
               role="button"
               aria-label="Edit backbone link <?= htmlspecialchars($sl['from_name']) ?> to <?= htmlspecialchars($sl['to_name']) ?>">
@@ -430,8 +431,11 @@ $health_pill = function (?int $score): string {
             <td>
               <small><?= number_format($sl['distance_km'], 2) ?> km</small>
             </td>
-            <td class="row-actions">
-              <button type="button" class="btn btn-ghost btn-sm js-sl-edit">Edit</button>
+            <td class="row-actions" data-modal-skip>
+              <button type="button"
+                      class="btn btn-ghost btn-sm"
+                      data-modal-open="#sl-edit-modal"
+                      data-modal-payload='<?= htmlspecialchars($sl_payload, ENT_QUOTES) ?>'>Edit</button>
               <form method="post" class="inline-form" data-confirm="Delete this backbone link?">
                 <?= csrf_field() ?>
                 <input type="hidden" name="action" value="delete_site_link">
@@ -451,27 +455,29 @@ $health_pill = function (?int $score): string {
 <dialog class="sl-modal" id="sl-edit-modal" aria-labelledby="sl-modal-title">
   <div class="sl-modal-head">
     <h3 id="sl-modal-title">Edit backbone link</h3>
-    <button type="button" class="sl-modal-close" data-sl-cancel aria-label="Close">×</button>
+    <button type="button" class="sl-modal-close" data-modal-cancel aria-label="Close">×</button>
   </div>
 
   <!-- Delete + edit kept as sibling forms (HTML disallows form nesting).
-       The Save button uses form="sl-edit-form" to attach without being a child. -->
+       The Save button uses form="sl-edit-form" to attach without being
+       nested. The hidden id input on the delete form is populated by
+       the portal.js modal helper via data-modal-field="id". -->
   <form method="post" class="inline-form" data-confirm="Delete this backbone link?" id="sl-delete-form" style="display:none;">
     <?= csrf_field() ?>
     <input type="hidden" name="action" value="delete_site_link">
-    <input type="hidden" name="id" id="sl-delete-id" value="">
+    <input type="hidden" name="id" data-modal-field="id" value="">
   </form>
 
   <form method="post" class="form" id="sl-edit-form" novalidate>
     <?= csrf_field() ?>
     <input type="hidden" name="action" value="save_site_link">
-    <input type="hidden" name="id" id="sl-id" value="">
+    <input type="hidden" name="id" data-modal-field="id" value="">
 
     <div class="sl-modal-body">
       <div class="sl-grid">
         <div class="field">
           <label>From site *</label>
-          <select name="from_site_id" id="sl-from" required>
+          <select name="from_site_id" data-modal-field="from_site_id" required>
             <?php foreach ($sites as $s): ?>
               <option value="<?= (int)$s['id'] ?>"><?= htmlspecialchars($s['name']) ?></option>
             <?php endforeach; ?>
@@ -479,7 +485,7 @@ $health_pill = function (?int $score): string {
         </div>
         <div class="field">
           <label>To site *</label>
-          <select name="to_site_id" id="sl-to" required>
+          <select name="to_site_id" data-modal-field="to_site_id" required>
             <?php foreach ($sites as $s): ?>
               <option value="<?= (int)$s['id'] ?>"><?= htmlspecialchars($s['name']) ?></option>
             <?php endforeach; ?>
@@ -487,7 +493,7 @@ $health_pill = function (?int $score): string {
         </div>
         <div class="field">
           <label>Type</label>
-          <select name="type" id="sl-type">
+          <select name="type" data-modal-field="type">
             <?php foreach ($site_link_type_labels as $k => $lbl): ?>
               <option value="<?= htmlspecialchars($k) ?>"><?= htmlspecialchars($lbl) ?></option>
             <?php endforeach; ?>
@@ -495,124 +501,42 @@ $health_pill = function (?int $score): string {
         </div>
         <div class="field">
           <label>Label</label>
-          <input type="text" name="label" id="sl-label" maxlength="120" placeholder="e.g. Tower A ↔ Tower B">
+          <input type="text" name="label" data-modal-field="label" maxlength="120" placeholder="e.g. Tower A ↔ Tower B">
         </div>
         <div class="field">
           <label>Capacity (Mbps)</label>
-          <input type="number" step="any" min="0" name="capacity_mbps" id="sl-capacity" placeholder="e.g. 1000">
+          <input type="number" step="any" min="0" name="capacity_mbps" data-modal-field="capacity_mbps" placeholder="e.g. 1000">
         </div>
         <div class="field">
           <label>Frequency</label>
-          <input type="text" name="frequency" id="sl-frequency" maxlength="20" placeholder="e.g. 5 GHz / fibre">
+          <input type="text" name="frequency" data-modal-field="frequency" maxlength="20" placeholder="e.g. 5 GHz / fibre">
         </div>
         <div class="field full">
           <label>Map line colour</label>
-          <input type="text" name="color" id="sl-color" maxlength="20" placeholder="e.g. #08e or 'cyan' (optional)">
+          <input type="text" name="color" data-modal-field="color" maxlength="20" placeholder="e.g. #08e or 'cyan' (optional)">
         </div>
         <div class="field full">
           <label>Notes</label>
-          <textarea name="notes" id="sl-notes" rows="3" maxlength="2000"></textarea>
+          <textarea name="notes" data-modal-field="notes" rows="3" maxlength="2000"></textarea>
         </div>
         <div class="field full">
-          <small class="muted" id="sl-distance-hint"></small>
+          <small class="muted">
+            Distance: <span data-modal-display="distance_km" data-modal-format="distance">—</span>
+            &nbsp;·&nbsp; <span data-modal-summary="{from_name} → {to_name}"></span>
+          </small>
         </div>
       </div>
     </div>
   </form>
 
   <div class="sl-modal-foot">
-    <button type="submit" form="sl-delete-form" class="btn btn-danger btn-sm" id="sl-delete-btn">Delete</button>
+    <button type="submit" form="sl-delete-form" class="btn btn-danger btn-sm">Delete</button>
     <div class="sl-foot-right">
-      <button type="button" class="btn btn-ghost btn-sm" data-sl-cancel>Cancel</button>
+      <button type="button" class="btn btn-ghost btn-sm" data-modal-cancel>Cancel</button>
       <button type="submit" form="sl-edit-form" class="btn btn-primary btn-sm">Save changes</button>
     </div>
   </div>
 </dialog>
-
-<script>
-(function () {
-  var dialog = document.getElementById('sl-edit-modal');
-  if (!dialog) return;
-
-  var form = document.getElementById('sl-edit-form');
-  var fields = {
-    id:       document.getElementById('sl-id'),
-    from:     document.getElementById('sl-from'),
-    to:       document.getElementById('sl-to'),
-    type:     document.getElementById('sl-type'),
-    label:    document.getElementById('sl-label'),
-    capacity: document.getElementById('sl-capacity'),
-    frequency:document.getElementById('sl-frequency'),
-    color:    document.getElementById('sl-color'),
-    notes:    document.getElementById('sl-notes'),
-    distance: document.getElementById('sl-distance-hint'),
-    delId:    document.getElementById('sl-delete-id'),
-    title:    document.getElementById('sl-modal-title')
-  };
-
-  function open(payload) {
-    fields.id.value        = payload.id || '';
-    fields.delId.value     = payload.id || '';
-    fields.from.value      = payload.from_site_id || '';
-    fields.to.value        = payload.to_site_id   || '';
-    fields.type.value      = payload.type         || 'ptp';
-    fields.label.value     = payload.label        || '';
-    fields.capacity.value  = payload.capacity_mbps !== null && payload.capacity_mbps !== undefined ? payload.capacity_mbps : '';
-    fields.frequency.value = payload.frequency    || '';
-    fields.color.value     = payload.color        || '';
-    fields.notes.value     = payload.notes        || '';
-    fields.distance.textContent = 'Distance: '
-      + (typeof payload.distance_km === 'number' ? payload.distance_km.toFixed(2) + ' km' : '—')
-      + (payload.from_name && payload.to_name ? '  ·  ' + payload.from_name + ' → ' + payload.to_name : '');
-    fields.title.textContent = payload.id ? 'Edit backbone link' : 'New backbone link';
-
-    if (typeof dialog.showModal === 'function') {
-      dialog.showModal();
-    } else {
-      dialog.setAttribute('open', 'open'); // very-old-browser fallback
-    }
-  }
-
-  function close() {
-    if (typeof dialog.close === 'function') dialog.close();
-    else dialog.removeAttribute('open');
-  }
-
-  function bindRow(tr) {
-    function handle(ev) {
-      // Don't hijack clicks on the row's existing action buttons / forms.
-      if (ev.target.closest('.row-actions')) return;
-      if (ev.type === 'keydown' && ev.key !== 'Enter' && ev.key !== ' ') return;
-      ev.preventDefault();
-      try {
-        open(JSON.parse(tr.getAttribute('data-sl') || '{}'));
-      } catch (e) { /* swallow malformed payload */ }
-    }
-    tr.addEventListener('click', handle);
-    tr.addEventListener('keydown', handle);
-  }
-
-  document.querySelectorAll('.js-sl-row').forEach(bindRow);
-
-  document.querySelectorAll('.js-sl-edit').forEach(function (btn) {
-    btn.addEventListener('click', function (ev) {
-      ev.stopPropagation();
-      var tr = btn.closest('.js-sl-row');
-      if (!tr) return;
-      try { open(JSON.parse(tr.getAttribute('data-sl') || '{}')); }
-      catch (e) {}
-    });
-  });
-
-  dialog.addEventListener('click', function (ev) {
-    // Click outside the form (on the backdrop area inside the dialog box) closes.
-    if (ev.target === dialog) close();
-  });
-  document.querySelectorAll('[data-sl-cancel]').forEach(function (b) {
-    b.addEventListener('click', close);
-  });
-})();
-</script>
 
 <div class="portal-card">
   <h2>Add a backbone link</h2>
