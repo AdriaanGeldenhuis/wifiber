@@ -64,7 +64,14 @@ $filters = [
     'assigned_to' => (int)($_GET['assigned_to'] ?? 0),
     'search'      => trim((string)($_GET['search'] ?? '')),
 ];
+$group_by_area = ($_GET['group'] ?? '') === 'area';
 $jobs = install_jobs_all($filters);
+
+/* When the operator is looking at a single tech's queue, offer a
+   one-click Google Maps route covering up to 10 of their open jobs.
+   Skipped on the catch-all view since 'route the whole company' is
+   meaningless. */
+$route_url = ($filters['assigned_to'] > 0) ? install_jobs_route_url($jobs) : null;
 
 /* Staff list for the "assigned tech" dropdowns. We pull every staff role
    so super_admin can assign whoever — the field is informational, not a
@@ -169,6 +176,16 @@ function inst_fmt_dt(?string $dt): string {
       <button type="submit" class="btn btn-primary btn-sm">Apply</button>
       <a href="<?= $self ?>" class="btn btn-ghost btn-sm">Reset</a>
       <a href="<?= $self ?>?assigned_to=<?= (int)($user['id'] ?? 0) ?>" class="btn btn-ghost btn-sm">My queue</a>
+      <?php
+        $toggle_qs = $_GET; $toggle_qs['group'] = $group_by_area ? '' : 'area';
+        $toggle_qs = array_filter($toggle_qs, fn($v) => $v !== '' && $v !== null);
+      ?>
+      <a href="<?= $self ?>?<?= htmlspecialchars(http_build_query($toggle_qs)) ?>" class="btn btn-ghost btn-sm">
+        <?= $group_by_area ? 'Flat list' : 'Group by area' ?>
+      </a>
+      <?php if ($route_url): ?>
+        <a href="<?= htmlspecialchars($route_url) ?>" target="_blank" rel="noopener" class="btn btn-primary btn-sm" title="Drive route through up to 10 open jobs in this queue">Open route in Maps ↗</a>
+      <?php endif; ?>
     </div>
   </form>
 </div>
@@ -182,6 +199,47 @@ function inst_fmt_dt(?string $dt): string {
       <p>Schedule a new install below, or change the filters above.</p>
     </div>
   <?php else: ?>
+    <?php
+    /* Render a single job row — used by both the flat list and the
+       clustered view so the layout stays in sync. */
+    $render_row = function (array $j) {
+        $cust = trim(($j['customer_name'] ?? '') . ' ' . ($j['customer_surname'] ?? ''))
+               ?: ($j['customer_username'] ?? ('client #' . $j['customer_id']));
+        ?>
+        <tr>
+          <td><?= inst_status_pill((string)$j['status']) ?></td>
+          <td><?= inst_priority_pill((int)$j['priority']) ?></td>
+          <td>
+            <a href="/admin/client-view.php?id=<?= (int)$j['customer_id'] ?>"><strong><?= inst_h($cust) ?></strong></a>
+            <?php if (!empty($j['customer_account_no'])): ?>
+              <br><small class="muted"><?= inst_h($j['customer_account_no']) ?></small>
+            <?php endif; ?>
+          </td>
+          <td><small><?= inst_h($j['customer_address']) ?: '—' ?></small></td>
+          <td>
+            <?php if (!empty($j['customer_phone'])): ?>
+              <a href="tel:<?= inst_h($j['customer_phone']) ?>"><?= inst_h($j['customer_phone']) ?></a>
+            <?php else: ?>—<?php endif; ?>
+          </td>
+          <td><?= inst_h(inst_fmt_dt($j['scheduled_at'])) ?></td>
+          <td>
+            <?php if (!empty($j['assigned_name']) || !empty($j['assigned_username'])): ?>
+              <?= inst_h($j['assigned_name'] ?: $j['assigned_username']) ?>
+            <?php else: ?>
+              <span class="muted">unassigned</span>
+            <?php endif; ?>
+          </td>
+          <td><small class="muted"><?= inst_h(mb_substr((string)$j['notes'], 0, 60)) ?></small></td>
+          <td style="white-space:nowrap;">
+            <a class="btn btn-ghost btn-sm" href="/admin/install-view.php?id=<?= (int)$j['id'] ?>">Open ↗</a>
+            <?php if (in_array($j['status'], ['pending','in_progress'], true)): ?>
+              <a class="btn btn-ghost btn-sm" href="/admin/align.php?customer_id=<?= (int)$j['customer_id'] ?>" title="Live signal meter">Align</a>
+            <?php endif; ?>
+          </td>
+        </tr>
+        <?php
+    };
+    ?>
     <div class="table-scroll">
     <table class="data-table">
       <thead>
@@ -198,42 +256,31 @@ function inst_fmt_dt(?string $dt): string {
         </tr>
       </thead>
       <tbody>
-        <?php foreach ($jobs as $j):
-          $cust = trim(($j['customer_name'] ?? '') . ' ' . ($j['customer_surname'] ?? ''))
-                 ?: ($j['customer_username'] ?? ('client #' . $j['customer_id']));
+        <?php if ($group_by_area):
+          $clusters = install_jobs_clustered($jobs);
+          foreach ($clusters as $key => $cluster):
+            $hdr = $key === 'unplaced'
+                ? 'Unplaced (no GPS yet) — ' . count($cluster['jobs'])
+                : sprintf('Area near %.3f, %.3f — %d job%s',
+                    $cluster['centroid']['lat'], $cluster['centroid']['lng'],
+                    count($cluster['jobs']),
+                    count($cluster['jobs']) === 1 ? '' : 's');
+            $maps = ($key !== 'unplaced')
+                ? sprintf('https://www.google.com/maps?q=%F,%F', $cluster['centroid']['lat'], $cluster['centroid']['lng'])
+                : null;
         ?>
-          <tr>
-            <td><?= inst_status_pill((string)$j['status']) ?></td>
-            <td><?= inst_priority_pill((int)$j['priority']) ?></td>
-            <td>
-              <a href="/admin/client-view.php?id=<?= (int)$j['customer_id'] ?>"><strong><?= inst_h($cust) ?></strong></a>
-              <?php if (!empty($j['customer_account_no'])): ?>
-                <br><small class="muted"><?= inst_h($j['customer_account_no']) ?></small>
-              <?php endif; ?>
-            </td>
-            <td><small><?= inst_h($j['customer_address']) ?: '—' ?></small></td>
-            <td>
-              <?php if (!empty($j['customer_phone'])): ?>
-                <a href="tel:<?= inst_h($j['customer_phone']) ?>"><?= inst_h($j['customer_phone']) ?></a>
-              <?php else: ?>—<?php endif; ?>
-            </td>
-            <td><?= inst_h(inst_fmt_dt($j['scheduled_at'])) ?></td>
-            <td>
-              <?php if (!empty($j['assigned_name']) || !empty($j['assigned_username'])): ?>
-                <?= inst_h($j['assigned_name'] ?: $j['assigned_username']) ?>
-              <?php else: ?>
-                <span class="muted">unassigned</span>
-              <?php endif; ?>
-            </td>
-            <td><small class="muted"><?= inst_h(mb_substr((string)$j['notes'], 0, 60)) ?></small></td>
-            <td style="white-space:nowrap;">
-              <a class="btn btn-ghost btn-sm" href="/admin/install-view.php?id=<?= (int)$j['id'] ?>">Open ↗</a>
-              <?php if (in_array($j['status'], ['pending','in_progress'], true)): ?>
-                <a class="btn btn-ghost btn-sm" href="/admin/align.php?customer_id=<?= (int)$j['customer_id'] ?>" title="Live signal meter">Align</a>
+          <tr style="background:#0a1530;">
+            <td colspan="9" style="font-weight:600;">
+              <?= inst_h($hdr) ?>
+              <?php if ($maps): ?>
+                <a href="<?= inst_h($maps) ?>" target="_blank" rel="noopener" class="btn btn-ghost btn-sm" style="margin-left:8px;">Maps ↗</a>
               <?php endif; ?>
             </td>
           </tr>
-        <?php endforeach; ?>
+          <?php foreach ($cluster['jobs'] as $j) $render_row($j); ?>
+        <?php endforeach; else: ?>
+          <?php foreach ($jobs as $j) $render_row($j); ?>
+        <?php endif; ?>
       </tbody>
     </table>
     </div>

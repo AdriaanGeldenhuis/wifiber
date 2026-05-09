@@ -204,6 +204,60 @@ function install_jobs_for_customer(int $customer_id): array {
     return $rows;
 }
 
+/* Coarse geohash-style clustering for a tech's daily route. Buckets
+   jobs by ~5 km grid (0.05° ≈ 5.5 km at the equator) so neighbours
+   land in the same bucket; within a bucket they're ordered by lat for
+   a roughly-north-to-south drive. Returns
+     [bucket_key => ['centroid'=>[lat,lng]|null, 'jobs'=>[…]], …]
+   keyed first by 'unplaced' (if any), then by descending job count. */
+function install_jobs_clustered(array $jobs, float $bucket_deg = 0.05): array {
+    $clusters = ['unplaced' => ['centroid' => null, 'jobs' => []]];
+    foreach ($jobs as $j) {
+        $lat = $j['customer_lat'] ?? null;
+        $lng = $j['customer_lng'] ?? null;
+        if ($lat === null || $lng === null) {
+            $clusters['unplaced']['jobs'][] = $j;
+            continue;
+        }
+        $bl = round((float)$lat / $bucket_deg) * $bucket_deg;
+        $bg = round((float)$lng / $bucket_deg) * $bucket_deg;
+        $key = sprintf('%.3f_%.3f', $bl, $bg);
+        if (!isset($clusters[$key])) {
+            $clusters[$key] = ['centroid' => ['lat' => $bl, 'lng' => $bg], 'jobs' => []];
+        }
+        $clusters[$key]['jobs'][] = $j;
+    }
+    if (empty($clusters['unplaced']['jobs'])) unset($clusters['unplaced']);
+    foreach ($clusters as &$c) {
+        usort($c['jobs'], fn($a, $b) =>
+            ((float)($b['customer_lat'] ?? 0)) <=> ((float)($a['customer_lat'] ?? 0))
+        );
+    }
+    unset($c);
+    uasort($clusters, fn($a, $b) => count($b['jobs']) - count($a['jobs']));
+    return $clusters;
+}
+
+/* Build a Google Maps directions URL with up to 10 placed jobs as
+   waypoints (Google's free limit). Returns null if there's nothing
+   to route. */
+function install_jobs_route_url(array $jobs, ?string $origin = null): ?string {
+    $points = [];
+    foreach ($jobs as $j) {
+        if ($j['customer_lat'] !== null && $j['customer_lng'] !== null) {
+            $points[] = (float)$j['customer_lat'] . ',' . (float)$j['customer_lng'];
+        }
+        if (count($points) >= 10) break;
+    }
+    if (!$points) return null;
+    $params = ['api' => '1', 'travelmode' => 'driving'];
+    $params['destination'] = array_pop($points);
+    if ($origin)            $params['origin']     = $origin;
+    elseif ($points)        $params['origin']     = array_shift($points);
+    if ($points)            $params['waypoints']  = implode('|', $points);
+    return 'https://www.google.com/maps/dir/?' . http_build_query($params);
+}
+
 function install_jobs_count_open(): int {
     try {
         return (int)pdo()->query(
