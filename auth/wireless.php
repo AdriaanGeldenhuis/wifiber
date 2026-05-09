@@ -39,6 +39,9 @@ function wireless_links_all(?array $filters = null): array {
                    ap.name  AS ap_name,  ap.vendor AS ap_vendor,  ap.model AS ap_model,
                    cpe.name AS cpe_name, cpe.vendor AS cpe_vendor, cpe.model AS cpe_model,
                    s.name AS sector_name,
+                   s.frequency_mhz     AS sector_freq,
+                   s.channel_width_mhz AS sector_width,
+                   s.band              AS sector_band,
                    u.name AS customer_name, u.surname AS customer_surname,
                    (SELECT COUNT(*) FROM link_alerts la
                      WHERE la.link_id = wl.id AND la.resolved_at IS NULL) AS active_alerts

@@ -345,7 +345,25 @@ $service_age_d  = !empty($client['service_start']) ? max(0, (int)((time() - strt
     </div>
     <?php if (!$links): ?>
       <small class="muted">No wireless link records yet. Once the polling worker sees the customer's CPE associate to an AP, a link auto-registers and live RF data fills in.</small>
-    <?php else: foreach ($links as $l): ?>
+    <?php else: foreach ($links as $l):
+      $freshness = lv_sample_freshness($l['last_evaluated_at'] ?? null);
+      $freshTone = match ($freshness) {
+          'fresh'   => '#4ade80',
+          'aging'   => '#e8a814',
+          'stale'   => '#ff5470',
+          default   => '#6b7480',
+      };
+      $freshLabel = match ($freshness) {
+          'fresh'   => 'live',
+          'aging'   => 'aging',
+          'stale'   => 'stale',
+          default   => 'no data',
+      };
+      $freq_parts = [];
+      if (!empty($l['sector_freq']))  $freq_parts[] = (int)$l['sector_freq'] . ' MHz';
+      if (!empty($l['sector_width'])) $freq_parts[] = (int)$l['sector_width'] . ' MHz wide';
+      if (!empty($l['sector_band']))  $freq_parts[] = (string)$l['sector_band'];
+    ?>
       <div class="lv-mini-section" style="border-top:0;padding-top:0;">
         <div class="lv-grid-hdr">
           <h4 style="margin:0;">
@@ -354,6 +372,8 @@ $service_age_d  = !empty($client['service_start']) ? max(0, (int)((time() - strt
           </h4>
           <a class="btn btn-ghost btn-sm" href="/admin/link-view.php?id=<?= (int)$l['id'] ?>">Open ↗</a>
         </div>
+        <div class="lv-row"><span><b>Frequency</b></span>
+          <span><?= $freq_parts ? lv_h(implode(' · ', $freq_parts)) : '—' ?></span></div>
         <div class="lv-row"><span><b>Signal · noise</b></span>
           <span><?= $l['signal_dbm'] !== null ? (int)$l['signal_dbm'] . ' dBm' : '—' ?>
             <span class="muted"><?= $l['noise_dbm'] !== null ? '/ ' . (int)$l['noise_dbm'] . ' dBm' : '' ?></span>
@@ -372,7 +392,9 @@ $service_age_d  = !empty($client['service_start']) ? max(0, (int)((time() - strt
               ? number_format((float)$l['distance_km'], 2) . ' km · ' . lv_fmt_ft((float)$l['distance_km'])
               : '—' ?></span></div>
         <div class="lv-row"><span><b>Last sample</b></span>
-          <span><?= lv_h(lv_fmt_dt($l['last_evaluated_at'] ?? null)) ?></span></div>
+          <span><?= lv_h(lv_fmt_dt($l['last_evaluated_at'] ?? null)) ?>
+            <span class="lv-pill" style="background:<?= $freshTone ?>;color:#001218;margin-left:6px;"><?= $freshLabel ?></span>
+          </span></div>
       </div>
     <?php endforeach; endif; ?>
   </div>

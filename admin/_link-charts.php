@@ -64,6 +64,22 @@ if (!function_exists('lv_fmt_dt')) {
     }
 }
 
+// Categorises a sample timestamp so the UI can flag stale telemetry.
+// Returns 'fresh' (<5 min), 'aging' (<15 min), 'stale' (older), or
+// 'missing' if there's no timestamp at all. The poller runs every minute,
+// so anything older than a few cycles probably means the radio went silent.
+if (!function_exists('lv_sample_freshness')) {
+    function lv_sample_freshness($dt): string {
+        if (!$dt) return 'missing';
+        $t = strtotime((string)$dt);
+        if (!$t) return 'missing';
+        $age = time() - $t;
+        if ($age < 300)  return 'fresh';
+        if ($age < 900)  return 'aging';
+        return 'stale';
+    }
+}
+
 /* "-48 (-51 / -52) Δ1 dBm" main-signal + per-chain breakdown card. */
 if (!function_exists('lv_chain_label')) {
     function lv_chain_label(?int $main, ?int $c0, ?int $c1): string {
