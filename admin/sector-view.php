@@ -274,6 +274,7 @@ $freq_ghz_val = $freq_mhz !== null ? $freq_mhz / 1000.0 : null;
   <?= poll_badge_html($sector_freshness, 'Newest sample across stations on this sector') ?>
   <?php if ($sector_pollable): ?>
     <button type="button" class="btn btn-ghost btn-sm" data-poll-device-now="<?= (int)$ap['id'] ?>" data-poll-device-name="<?= lv_h($ap['name']) ?>" title="Run the vendor adapter against the AP for this sector">Poll AP now</button>
+    <a class="btn btn-primary btn-sm" href="/admin/sector-commission.php?id=<?= (int)$sector['id'] ?>" title="Mobile-first live AP dashboard for commissioning a fresh install">Commission ↗</a>
   <?php endif; ?>
   <a class="btn btn-ghost btn-sm" href="/admin/diagnostics.php">Polling status ↗</a>
 </div>
