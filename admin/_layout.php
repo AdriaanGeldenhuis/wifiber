@@ -13,9 +13,14 @@
  */
 require_once __DIR__ . '/../auth/helpers.php';
 require_once __DIR__ . '/../auth/acl.php';
+require_once __DIR__ . '/../auth/installs.php';
 
 require_admin_ip();
 $user = require_role(acl_staff_roles(), '/admin/login.php');
+
+// Open install jobs — used by the nav item to show a queue badge so an
+// installer doesn't have to click through to know there's work waiting.
+$nav_open_installs = install_jobs_count_open();
 
 $portal = 'admin';
 $nav = [
@@ -30,6 +35,8 @@ $nav = [
         ['key' => 'outages',     'label' => 'Outages',            'href' => '/admin/outages.php'],
         ['key' => 'maintenance', 'label' => 'Maintenance windows','href' => '/admin/maintenance.php'],
         ['key' => 'tickets',     'label' => 'Support tickets',    'href' => '/admin/tickets.php'],
+        ['key' => 'installs',    'label' => 'Installs',           'href' => '/admin/installs.php',
+         'badge' => $nav_open_installs > 0 ? (int)$nav_open_installs : null],
     ]],
     ['group' => 'Network', 'items' => [
         ['key' => 'coverage',     'label' => 'Coverage',         'href' => '/admin/coverage.php'],

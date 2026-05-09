@@ -435,6 +435,44 @@ $service_age_d  = !empty($client['service_start']) ? max(0, (int)((time() - strt
       </div>
     <?php endif; ?>
   </div>
+
+  <!-- Install jobs — newest first; covers re-installs and equipment swaps. -->
+  <?php $install_jobs = install_jobs_for_customer((int)$client['id']); ?>
+  <div class="portal-card">
+    <div class="lv-grid-hdr">
+      <h3 class="lv-label" style="font-size:11px;">Install history</h3>
+      <a class="btn btn-ghost btn-sm" href="/admin/installs.php?search=<?= urlencode($client['username'] ?? '') ?>">All ↗</a>
+    </div>
+    <?php if (!$install_jobs): ?>
+      <small class="muted">No install jobs scheduled. <a href="/admin/installs.php">Schedule one ↗</a></small>
+    <?php else: ?>
+      <table class="data-table compact">
+        <thead><tr><th>Status</th><th>Scheduled</th><th>Completed</th><th>Signal</th><th></th></tr></thead>
+        <tbody>
+          <?php foreach ($install_jobs as $j):
+            $col = match ($j['status']) {
+                'pending'     => '#08e',
+                'in_progress' => '#e8a814',
+                'completed'   => '#4ade80',
+                'cancelled'   => '#6b7480',
+                default       => '#888',
+            };
+          ?>
+            <tr>
+              <td><span class="lv-pill" style="background:<?= $col ?>;color:#001218;"><?= lv_h(str_replace('_',' ', $j['status'])) ?></span></td>
+              <td><small><?= lv_h(lv_fmt_dt($j['scheduled_at'])) ?></small></td>
+              <td><small><?= lv_h(lv_fmt_dt($j['completed_at'])) ?></small></td>
+              <td><small>
+                <?= $j['signal_dbm'] !== null ? (int)$j['signal_dbm'] . ' dBm' : '—' ?>
+                <?= $j['snr_db']     !== null ? ' · ' . (int)$j['snr_db'] . ' dB' : '' ?>
+              </small></td>
+              <td><a class="btn btn-ghost btn-sm" href="/admin/install-view.php?id=<?= (int)$j['id'] ?>">Open ↗</a></td>
+            </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    <?php endif; ?>
+  </div>
 </div>
 
 <?php elseif ($tab === 'billing'): ?>
