@@ -1,0 +1,134 @@
+/* Antenna alignment meter — mobile-first dark UI for installers on a
+   roof. Big tap targets, large readable numbers in sunlight, no nav
+   chrome that would steal screen real estate. */
+
+:root {
+  --bg:#0a0e1a; --fg:#e7eef7; --muted:#7a8499; --panel:#121a2a;
+  --line:#1c2638; --line2:#2c3850;
+  --good:#4ade80; --warn:#e8a814; --bad:#ff5470;
+}
+
+* { box-sizing: border-box; }
+html, body {
+  margin: 0; padding: 0;
+  background: var(--bg); color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  -webkit-text-size-adjust: 100%;
+  min-height: 100vh; min-height: 100dvh;
+  overscroll-behavior: none;
+}
+
+.al-bar {
+  display: flex; align-items: center; gap: 12px;
+  padding: calc(env(safe-area-inset-top, 0px) + 10px) 14px 10px;
+  background: var(--panel);
+  border-bottom: 1px solid var(--line);
+  position: sticky; top: 0; z-index: 5;
+}
+.al-titles { flex: 1; min-width: 0; }
+.al-titles h1 {
+  margin: 0; font-size: 16px; font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.al-titles small { color: var(--muted); font-size: 11px; }
+.al-back {
+  font-size: 26px; line-height: 1; color: var(--fg);
+  text-decoration: none; padding: 4px 10px;
+}
+.al-btn-ghost {
+  background: transparent; border: 1px solid var(--line2); color: var(--fg);
+  font-size: 18px; padding: 6px 10px; border-radius: 8px;
+  min-width: 44px; min-height: 36px;
+}
+
+.al-main {
+  padding: 14px;
+  display: flex; flex-direction: column; gap: 14px;
+  max-width: 640px; margin: 0 auto;
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+}
+
+.al-stat {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 14px; padding: 18px 16px 14px;
+  text-align: center;
+}
+.al-label {
+  font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase;
+  color: var(--muted);
+}
+.al-big {
+  font-size: 88px; font-weight: 700; line-height: 1;
+  margin: 4px 0 0; font-variant-numeric: tabular-nums;
+  letter-spacing: -2px;
+}
+.al-unit { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.al-bar {
+  background: #060912; height: 12px; border-radius: 6px;
+  overflow: hidden; margin-top: 12px; border: 1px solid var(--line);
+}
+.al-bar-fill {
+  height: 100%; width: 0%; background: var(--good);
+  transition: width .25s ease, background .25s ease;
+}
+.al-peak { font-size: 12px; color: var(--muted); margin-top: 8px; }
+
+.al-meta {
+  background: var(--panel); border: 1px solid var(--line);
+  border-radius: 14px; padding: 14px;
+  display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px;
+  font-size: 14px;
+}
+.al-meta > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.al-meta-k {
+  font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+  color: var(--muted);
+}
+.al-meta-v {
+  font-size: 16px; font-variant-numeric: tabular-nums;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.al-meta-v code { font-size: 12px; color: var(--fg); }
+
+.al-status-row {
+  display: flex; align-items: center; gap: 8px;
+  padding: 8px 12px; font-size: 12px; color: var(--muted);
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+}
+.al-status-spacer { flex: 1; }
+.al-muted { color: var(--muted); font-size: 11px; }
+.al-dot { width: 9px; height: 9px; border-radius: 50%; background: #555; }
+.al-dot.al-dot-ok   { background: var(--good); box-shadow: 0 0 8px var(--good); }
+.al-dot.al-dot-warn { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
+.al-dot.al-dot-err  { background: var(--bad);  box-shadow: 0 0 6px var(--bad); }
+.al-dot.al-dot-busy { background: #2c80ff; }
+
+.al-debug {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  padding: 10px 12px; font-size: 12px;
+}
+.al-debug summary { cursor: pointer; color: var(--muted); }
+.al-debug ul { list-style: none; padding: 0; margin: 8px 0 0; }
+.al-debug li {
+  padding: 6px 0; font-family: ui-monospace, SF Mono, Menlo, monospace;
+  border-bottom: 1px solid var(--line);
+}
+.al-debug li.is-target { color: var(--good); }
+.al-debug li:last-child { border-bottom: 0; }
+
+@media (min-width: 700px) {
+  .al-main {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "signal snr"
+      "meta   meta"
+      "status status"
+      "debug  debug";
+  }
+  .al-stat:nth-of-type(1) { grid-area: signal; }
+  .al-stat:nth-of-type(2) { grid-area: snr; }
+  .al-meta { grid-area: meta; }
+  .al-status-row { grid-area: status; }
+  .al-debug { grid-area: debug; }
+}

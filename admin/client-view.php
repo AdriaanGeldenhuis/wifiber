@@ -320,6 +320,9 @@ $service_age_d  = !empty($client['service_start']) ? max(0, (int)((time() - strt
   <?php if ($client_pollable_dev): ?>
     <button type="button" class="btn btn-ghost btn-sm" data-poll-device-now="<?= (int)$client_pollable_dev['id'] ?>" data-poll-device-name="<?= lv_h($client_pollable_dev['name']) ?>" title="Run the vendor adapter against this customer's CPE">Poll CPE now</button>
   <?php endif; ?>
+  <?php if (!empty($client['sector_id']) || $links): ?>
+    <a class="btn btn-ghost btn-sm" href="/admin/align.php?customer_id=<?= (int)$client['id'] ?>" title="Live signal meter — open on a phone while aiming the dish">Align CPE ↗</a>
+  <?php endif; ?>
   <a class="btn btn-ghost btn-sm" href="/admin/diagnostics.php">Polling status ↗</a>
 </div>
 
