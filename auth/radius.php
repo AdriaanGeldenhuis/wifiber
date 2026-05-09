@@ -188,6 +188,35 @@ function radius_get_password(array $user): ?string {
  * their current status. Generates and stores a service password the first
  * time around. Returns true if anything changed.
  */
+/* "Is this customer ready to authenticate against the NAS?" — used as
+   a sign-off gate by /admin/install-view.php. Returns ['ready'=>bool,
+   'reason'=>string]. We require a radcheck password row AND group
+   membership to count as ready. */
+function radius_user_provisioned(int $user_id): array {
+    $u = find_user_by_id($user_id);
+    if (!$u || ($u['role'] ?? '') !== 'client') {
+        return ['ready' => false, 'reason' => 'not a customer record'];
+    }
+    $username = radius_username_for($u);
+    if ($username === '') {
+        return ['ready' => false, 'reason' => 'no RADIUS username'];
+    }
+    try {
+        $pw_stmt = pdo()->prepare("SELECT COUNT(*) FROM radcheck WHERE username = ?");
+        $pw_stmt->execute([$username]);
+        $has_pw = (int)$pw_stmt->fetchColumn() > 0;
+
+        $grp_stmt = pdo()->prepare("SELECT COUNT(*) FROM radusergroup WHERE username = ?");
+        $grp_stmt->execute([$username]);
+        $has_grp = (int)$grp_stmt->fetchColumn() > 0;
+    } catch (Throwable $e) {
+        return ['ready' => false, 'reason' => 'RADIUS tables not reachable: ' . $e->getMessage()];
+    }
+    if (!$has_pw)  return ['ready' => false, 'reason' => 'no radcheck password row'];
+    if (!$has_grp) return ['ready' => false, 'reason' => 'no radusergroup row'];
+    return ['ready' => true, 'reason' => 'ok'];
+}
+
 function radius_provision_user(int $user_id): bool {
     $u = find_user_by_id($user_id);
     if (!$u || ($u['role'] ?? '') !== 'client') return false;

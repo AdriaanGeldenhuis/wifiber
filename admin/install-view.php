@@ -24,6 +24,9 @@ require_once __DIR__ . '/../auth/installs.php';
 require_once __DIR__ . '/../auth/wireless.php';
 require_once __DIR__ . '/../auth/sectors.php';
 require_once __DIR__ . '/../auth/sites.php';
+if (is_file(__DIR__ . '/../auth/radius.php')) {
+    require_once __DIR__ . '/../auth/radius.php';
+}
 
 $id  = (int)($_GET['id'] ?? 0);
 $job = $id ? install_job_find($id) : null;
@@ -357,6 +360,19 @@ $gmaps   = ($job['customer_lat'] !== null && $job['customer_lng'] !== null)
             'bad'  => '<span class="lv-pill" style="background:#ff5470;color:#001218;">below threshold</span>',
             default => '',
         };
+        $radius = function_exists('radius_user_provisioned')
+            ? radius_user_provisioned($customer_id)
+            : ['ready' => true, 'reason' => 'RADIUS module not loaded — skipping check'];
+        $radius_pill = $radius['ready']
+            ? '<span class="lv-pill" style="background:#4ade80;color:#001218;">RADIUS ready</span>'
+            : '<span class="lv-pill" style="background:#ff5470;color:#001218;" title="' . iv_h($radius['reason']) . '">RADIUS not ready</span>';
+      ?>
+      <div class="lv-row"><span><b>RADIUS</b></span>
+        <span><?= $radius_pill ?>
+          <?php if (!$radius['ready']): ?>
+            <small class="muted" style="margin-left:6px;"><?= iv_h($radius['reason']) ?></small>
+          <?php endif; ?>
+        </span></div>
         $thresholds_text = sprintf(
             'Targets: signal ≥ %d dBm, SNR ≥ %d dB. Marginal at signal %d / SNR %d.',
             INSTALL_SIGNAL_DBM_OK, INSTALL_SNR_DB_OK,
@@ -364,10 +380,15 @@ $gmaps   = ($job['customer_lat'] !== null && $job['customer_lng'] !== null)
         );
       ?>
       <details <?= $live_grade === 'bad' ? 'open' : '' ?>>
-        <summary><strong>Sign off</strong> — record as-installed signal and complete the job <?= $grade_pill ?></summary>
+        <summary><strong>Sign off</strong> — record as-installed signal and complete the job <?= $grade_pill ?> <?= $radius_pill ?></summary>
         <form method="post" class="form" enctype="multipart/form-data"
               style="display:flex;flex-direction:column;gap:8px;margin-top:8px;"
               onsubmit="return iv_confirm_signoff(this);">
+          <?php if (!$radius['ready']): ?>
+            <p style="background:#220a14;border-left:3px solid #ff5470;padding:8px 10px;border-radius:4px;font-size:13px;">
+              <strong>Heads-up:</strong> this customer's RADIUS attributes are not provisioned (<?= iv_h($radius['reason']) ?>). Sign-off will still record, but the customer won't be able to authenticate until <code>bin/radius-sync.php</code> runs or you visit <a href="/admin/client-edit.php?id=<?= $customer_id ?>">client-edit</a>.
+            </p>
+          <?php endif; ?>
           <?= csrf_input() ?>
           <input type="hidden" name="action" value="complete">
           <small class="muted"><?= iv_h($thresholds_text) ?></small>
@@ -437,5 +458,56 @@ $gmaps   = ($job['customer_lat'] !== null && $job['customer_lng'] !== null)
     <?php endif; ?>
   </div>
 </div>
+
+<?php
+/* Reschedule + state-change history. Pulled from audit_log so we don't
+   need a separate table — every install_job_save / start / complete /
+   cancel / alignment-sample helper already writes one row. */
+try {
+    $hstmt = pdo()->prepare(
+        "SELECT a.created_at, a.action, a.username, a.meta
+           FROM audit_log a
+          WHERE a.target_type = 'install_job' AND a.target_id = ?
+          ORDER BY a.id DESC
+          LIMIT 50"
+    );
+    $hstmt->execute([$id]);
+    $history = $hstmt->fetchAll();
+} catch (Throwable $e) {
+    $history = [];
+}
+?>
+<?php if ($history): ?>
+<div class="portal-card" style="margin-top:14px;">
+  <h3 class="lv-label" style="font-size:11px;">Timeline</h3>
+  <table class="data-table compact">
+    <thead><tr><th>When</th><th>Action</th><th>By</th><th>Details</th></tr></thead>
+    <tbody>
+      <?php foreach ($history as $h):
+        $action = (string)$h['action'];
+        $col = match (true) {
+            str_ends_with($action, '.complete') => '#4ade80',
+            str_ends_with($action, '.cancel')   => '#ff5470',
+            str_ends_with($action, '.start')    => '#e8a814',
+            str_ends_with($action, '.create')   => '#08e',
+            default                             => '#6b7480',
+        };
+        $meta = $h['meta'] ? json_decode($h['meta'], true) : null;
+        $meta_text = is_array($meta)
+            ? implode(' · ', array_map(fn($k, $v) => $k . '=' . (is_scalar($v) ? $v : json_encode($v)),
+                                       array_keys($meta), $meta))
+            : '';
+      ?>
+        <tr>
+          <td><small><?= iv_h(iv_dt($h['created_at'])) ?></small></td>
+          <td><span class="lv-pill" style="background:<?= $col ?>;color:#001218;"><?= iv_h(str_replace('install_job.', '', $action)) ?></span></td>
+          <td><small><?= iv_h($h['username']) ?: '—' ?></small></td>
+          <td><small class="muted"><?= iv_h(mb_substr($meta_text, 0, 120)) ?></small></td>
+        </tr>
+      <?php endforeach; ?>
+    </tbody>
+  </table>
+</div>
+<?php endif; ?>
 
 <?php require __DIR__ . '/../auth/portal-footer.php'; ?>

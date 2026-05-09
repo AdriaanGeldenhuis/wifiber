@@ -266,6 +266,24 @@ function install_job_save(array $data, ?int $id = null): int {
         'target_type' => 'install_job', 'target_id' => $new_id,
         'meta' => ['customer_id' => $customer_id],
     ]);
+
+    /* Notify the customer if a date has been picked. We deliberately
+       skip notification on the auto-created shell jobs (no scheduled_at
+       yet) so customers don't get an SMS the moment they sign up. */
+    if (!empty($args['scheduled_at']) && is_file(__DIR__ . '/notifications.php')) {
+        require_once __DIR__ . '/notifications.php';
+        try {
+            $u = find_user_by_id($customer_id);
+            if ($u) {
+                notify_send($u, 'install.scheduled', [
+                    'scheduled_at' => $args['scheduled_at'],
+                ]);
+            }
+        } catch (Throwable $e) {
+            error_log('install.scheduled notify failed: ' . $e->getMessage());
+        }
+    }
+
     return $new_id;
 }
 
@@ -332,6 +350,23 @@ function install_job_complete(int $id, array $extra = []): void {
             'grade'      => $grade,
         ], fn($v) => $v !== null && $v !== ''),
     ]);
+
+    /* Welcome-aboard SMS / email. Reuses the notifications fan-out, so
+       the customer gets it on whichever channels they accept. */
+    if (is_file(__DIR__ . '/notifications.php')) {
+        require_once __DIR__ . '/notifications.php';
+        try {
+            $cstmt = pdo()->prepare("SELECT customer_id FROM install_jobs WHERE id = ?");
+            $cstmt->execute([$id]);
+            $cid = (int)$cstmt->fetchColumn();
+            if ($cid > 0) {
+                $u = find_user_by_id($cid);
+                if ($u) notify_send($u, 'install.completed', []);
+            }
+        } catch (Throwable $e) {
+            error_log('install.completed notify failed: ' . $e->getMessage());
+        }
+    }
 }
 
 /* Live-alignment sample writer. Called from /admin/align.php on every

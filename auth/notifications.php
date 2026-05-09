@@ -92,6 +92,24 @@ function notify_template(string $template, array $data, string $channel): array 
                   . "Reason: " . ($data['reason'] ?? 'routine')
                   . "\n\n— {$site_name}";
             break;
+        case 'install.scheduled':
+            $subject = "{$site_name} install scheduled";
+            $body = "Hi " . ($data['name'] ?? '') . ",\n\n"
+                  . "Your {$site_name} install is booked for "
+                  . ($data['scheduled_at'] ?? 'a date to be confirmed') . ".\n\n"
+                  . "Our technician will call before they arrive. "
+                  . "Please make sure someone over 18 is on-site with access to where the equipment will be mounted.\n\n"
+                  . "Reply to this message if the date doesn't work — we'll reschedule.\n\n"
+                  . "— {$site_name}";
+            break;
+        case 'install.completed':
+            $subject = "Welcome to {$site_name} — you're online";
+            $body = "Hi " . ($data['name'] ?? '') . ",\n\n"
+                  . "Your {$site_name} install is done and the link is up. "
+                  . "If something doesn't look right in the next 24 hours, "
+                  . "reply to this message and we'll send a tech back out.\n\n"
+                  . "Welcome aboard.\n\n— {$site_name}";
+            break;
         default:
             $subject = $data['subject'] ?? "Notification from {$site_name}";
             $body    = $data['body']    ?? '';
@@ -118,15 +136,18 @@ function notify_user_wants(array $user, string $channel, string $template): bool
     if (!is_array($prefs)) $prefs = [];
     $key = $channel . '_' . _notify_template_group($template);
     if (array_key_exists($key, $prefs)) return (bool)$prefs[$key];
-    // Default policy: reach customers on all channels for outages,
-    // email-only for everything else.
-    return _notify_template_group($template) === 'outage'
+    // Default policy: reach customers on all channels for outage and
+    // install events (those are direct, time-sensitive customer
+    // touchpoints), email-only for everything else.
+    $group = _notify_template_group($template);
+    return in_array($group, ['outage', 'install'], true)
         || $channel === 'email';
 }
 
 function _notify_template_group(string $template): string {
     if (str_starts_with($template, 'outage.'))      return 'outage';
     if (str_starts_with($template, 'maintenance.')) return 'maintenance';
+    if (str_starts_with($template, 'install.'))     return 'install';
     if (str_starts_with($template, 'link.'))        return 'link';
     if (str_starts_with($template, 'cable.'))       return 'noc';
     if (str_starts_with($template, 'cred.'))        return 'noc';
