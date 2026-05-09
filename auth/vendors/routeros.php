@@ -137,6 +137,20 @@ function routeros_poll_device(array $device, array $cred): array {
     ];
 }
 
+/**
+ * Reboot a MikroTik via the REST API. Same caveat as AirOS — the
+ * device closes the connection as it reboots, so we accept that as
+ * success.
+ */
+function routeros_reboot_device(array $device, array $cred): array {
+    $url = _ros_base($device, $cred) . '/system/reboot';
+    $r = _ros_curl($url, 'POST', null, $cred);
+    if (in_array((int)$r['http'], [401, 403], true)) {
+        return ['ok' => false, 'error' => 'reboot rejected: http ' . $r['http']];
+    }
+    return ['ok' => true, 'error' => ''];
+}
+
 function routeros_snapshot_config(array $device, array $cred): array {
     $w = _ros_get($device, $cred, '/interface/wireless');
     if ($w === null) return ['ok' => false, 'error' => 'snapshot: /interface/wireless failed'];

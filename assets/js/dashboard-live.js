@@ -187,15 +187,62 @@
     });
   }
 
+  /**
+   * Inline "Reboot" button. Wired by markup like
+   *   <button data-reboot-device="42" data-reboot-name="Foo-AP">Reboot</button>
+   * Prompts for a TOTP code, POSTs to /admin/devices.php?action=reboot_now,
+   * shows a toast on the response. Audited server-side regardless of
+   * outcome; the device drops the connection during reboot which we
+   * accept as success.
+   */
+  function startRebootButtons() {
+    document.addEventListener('click', async function (e) {
+      var btn = e.target.closest('[data-reboot-device]');
+      if (!btn) return;
+      e.preventDefault();
+      var id   = btn.getAttribute('data-reboot-device');
+      var name = btn.getAttribute('data-reboot-name') || ('device #' + id);
+      if (!confirm('Issue a remote reboot of ' + name + '?\n\nThe radio will drop offline for ~60 seconds. Make sure no install or alignment is in progress.')) return;
+      var totp = prompt('Enter your two-factor code to confirm reboot of ' + name + ':');
+      if (totp == null || totp === '') return;
+      var token = (document.querySelector('meta[name="csrf-token"]') || {}).content;
+      btn.disabled = true;
+      var orig = btn.textContent;
+      btn.textContent = 'Rebooting…';
+      var fd = new FormData();
+      fd.append('action',     'reboot_now');
+      fd.append('id',         id);
+      fd.append('totp_code',  totp);
+      fd.append('ajax',       '1');
+      fd.append('_csrf',      token || '');
+      try {
+        var res = await fetch('/admin/devices.php', { method: 'POST', body: fd, credentials: 'same-origin' });
+        var j   = await res.json().catch(function () { return { ok: false, message: 'Bad response' }; });
+        btn.disabled = false;
+        btn.textContent = orig;
+        if (window.toast) {
+          window.toast(j.message || (j.ok ? 'Reboot issued' : 'Reboot failed'),
+                       j.ok ? 'success' : 'error', 7000);
+        }
+      } catch (err) {
+        btn.disabled = false;
+        btn.textContent = orig;
+        if (window.toast) window.toast('Network error', 'error');
+      }
+    });
+  }
+
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', function () {
       startTicker();
       startAutoRefresh();
       startPollNowButtons();
+      startRebootButtons();
     });
   } else {
     startTicker();
     startAutoRefresh();
     startPollNowButtons();
+    startRebootButtons();
   }
 })();

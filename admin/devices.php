@@ -276,6 +276,67 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         exit;
     }
 
+    if ($action === 'reboot_now') {
+        /* High-risk op — requires step-up TOTP (matching the freq /
+           sector bulk-apply pattern). Audited regardless of outcome. */
+        require_once __DIR__ . '/../auth/totp.php';
+        $is_ajax = !empty($_POST['ajax']);
+        $reply = function (bool $ok, string $msg) use ($is_ajax, $self) {
+            if ($is_ajax) {
+                while (ob_get_level() > 0) ob_end_clean();
+                header('Content-Type: application/json');
+                echo json_encode(['ok' => $ok, 'message' => $msg]);
+                exit;
+            }
+            flash($ok ? 'success' : 'error', $msg);
+            header('Location: ' . $self);
+            exit;
+        };
+        $id = (int)($_POST['id'] ?? 0);
+        $d  = $id ? device_find($id) : null;
+        if (!$d) $reply(false, 'Device not found.');
+        if (!totp_require_step_up($user, (string)($_POST['totp_code'] ?? ''))) {
+            audit_log('device.reboot_denied', [
+                'target_type' => 'device', 'target_id' => $id,
+                'meta' => ['reason' => 'no_totp'],
+            ]);
+            $reply(false, 'Two-factor code required for remote reboot.');
+        }
+        if (trim((string)$d['mgmt_ip']) === '') $reply(false, 'No management IP set on this device.');
+        if (device_secret_key() === null) $reply(false, 'No device_key configured — cannot decrypt credentials.');
+        $cred_rows = device_credentials_for((int)$d['id']);
+        if (!$cred_rows) $reply(false, 'No saved credentials for this device.');
+        $cred = device_credentials_unlock($cred_rows[0]);
+        if (!$cred) $reply(false, 'Could not decrypt credentials.');
+
+        $vendor_map = [
+            'ubiquiti' => ['airos_reboot_device',    __DIR__ . '/../auth/vendors/airos.php'],
+            'mikrotik' => ['routeros_reboot_device', __DIR__ . '/../auth/vendors/routeros.php'],
+        ];
+        $entry = $vendor_map[$d['vendor']] ?? null;
+        if (!$entry) {
+            audit_log('device.reboot_denied', [
+                'target_type' => 'device', 'target_id' => $id,
+                'meta' => ['reason' => 'unsupported_vendor', 'vendor' => $d['vendor']],
+            ]);
+            $reply(false, 'Vendor "' . $d['vendor'] . '" reboot is not supported yet.');
+        }
+        [$fn, $file] = $entry;
+        if (!function_exists($fn) && is_file($file)) require_once $file;
+        if (!function_exists($fn))                    $reply(false, 'Adapter file missing.');
+
+        try { $r = $fn($d, $cred); }
+        catch (Throwable $e) { $r = ['ok' => false, 'error' => $e->getMessage()]; }
+        $ok = !empty($r['ok']);
+        audit_log('device.reboot', [
+            'target_type' => 'device', 'target_id' => $id,
+            'meta' => ['ok' => $ok, 'error' => mb_substr((string)($r['error'] ?? ''), 0, 200)],
+        ]);
+        $reply($ok, $ok
+            ? sprintf('%s reboot issued — telemetry will pause for ~60 s.', $d['name'])
+            : sprintf('Reboot FAILED on %s — %s', $d['name'], $r['error'] ?? 'unknown error'));
+    }
+
     if ($action === 'ping_now') {
         $id = (int)($_POST['id'] ?? 0);
         $d  = $id ? device_find($id) : null;

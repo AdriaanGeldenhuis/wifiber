@@ -97,6 +97,39 @@ function airos_logout(string $jar): void {
 }
 
 /**
+ * Reboot an AirOS radio. Returns ['ok'=>bool, 'error'=>string]. Note
+ * the radio drops the HTTP connection mid-response when it reboots —
+ * that's expected, so we accept any 2xx (or even an empty body) as
+ * success and only surface curl errors that fired before the reboot
+ * was issued (e.g. auth failure).
+ */
+function airos_reboot_device(array $device, array $cred): array {
+    $login = airos_login($device, $cred);
+    if (!$login['ok']) return ['ok' => false, 'error' => $login['error']];
+    $jar  = $login['jar'];
+    $base = airos_base_url($device, $cred['port'] ?? null);
+    $verify = !empty($cred['verify_tls']);
+
+    /* AirOS exposes reboot at /system.cgi?action=Reboot — POST so the
+       UI's CSRF token isn't needed (this is a server-side request). */
+    $r = _airos_curl($base . '/system.cgi', [
+        CURLOPT_POST       => true,
+        CURLOPT_POSTFIELDS => http_build_query(['action' => 'Reboot']),
+        // Short timeout — radio drops the connection on reboot.
+        CURLOPT_TIMEOUT    => 6,
+    ], $jar, $verify);
+    airos_logout($jar);
+
+    /* http=0 typically means "connection closed" which is what we
+       *want* on a reboot — only treat known auth/config errors as
+       failures. */
+    if (in_array((int)$r['http'], [401, 403, 404, 405], true)) {
+        return ['ok' => false, 'error' => 'reboot rejected: http ' . $r['http']];
+    }
+    return ['ok' => true, 'error' => ''];
+}
+
+/**
  * Poll one AirOS radio. Returns:
  *   ['ok'=>bool, 'error'=>string, 'device'=>device_health row,
  *    'links'=>[link sample row, …], 'rf_env'=>[freq/rssi rows],
