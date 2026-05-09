@@ -853,6 +853,9 @@ $detail_card = function (
 <div style="margin-top:20px;display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;">
   <div style="display:flex;gap:8px;flex-wrap:wrap;">
     <a class="btn btn-ghost btn-sm" href="/admin/links.php#backbone">← All backbone links</a>
+    <?php if (in_array($sl['type'] ?? 'ptp', ['ptp','ptmp','backhaul'], true)): ?>
+      <a class="btn btn-primary btn-sm" href="/admin/site-link-align.php?id=<?= (int)$sl['id'] ?>" title="Two-ended live signal meter for aiming this PTP link">Align link ↗</a>
+    <?php endif; ?>
     <a class="btn btn-ghost btn-sm" href="/admin/site-view.php?id=<?= (int)$from['id'] ?>">Open <?= lv_h($from['name']) ?></a>
     <a class="btn btn-ghost btn-sm" href="/admin/site-view.php?id=<?= (int)$to['id']   ?>">Open <?= lv_h($to['name']) ?></a>
     <a class="btn btn-ghost btn-sm" href="/admin/map.php?focus=site_link&amp;id=<?= (int)$sl['id'] ?>">Show on map</a>
