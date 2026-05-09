@@ -261,11 +261,55 @@ foreach ($rows as $row) {
             ]);
             $cpe_id = (int)$pdo->lastInsertId();
         }
-        $link_id = wireless_link_upsert((int)$row['id'], (int)$cpe_id, [
+        /* Resolve a customer_id for the new wireless_link row so the
+           operator doesn't have to bind it manually after every fresh
+           CPE association. Two sources, in order of confidence:
+             1. devices.customer_id on the matched CPE device row
+                (admin already linked it).
+             2. users.equipment_mac matching this station MAC (sales
+                captured it on the lead form).
+           If neither hits, customer_id stays null and the operator can
+           bind it on /admin/devices.php as before. */
+        $auto_customer_id = null;
+        $cstmt = $pdo->prepare("SELECT customer_id FROM devices WHERE id = ? LIMIT 1");
+        $cstmt->execute([(int)$cpe_id]);
+        $cv = $cstmt->fetchColumn();
+        if ($cv !== false && $cv !== null) $auto_customer_id = (int)$cv;
+        if ($auto_customer_id === null && $sta_mac !== '') {
+            $ustmt = $pdo->prepare(
+                "SELECT id FROM users
+                  WHERE role = 'client'
+                    AND UPPER(REPLACE(REPLACE(equipment_mac, ':', ''), '-', '')) = UPPER(REPLACE(REPLACE(?, ':', ''), '-', ''))
+                  LIMIT 1"
+            );
+            $ustmt->execute([$sta_mac]);
+            $uv = $ustmt->fetchColumn();
+            if ($uv !== false && $uv !== null) {
+                $auto_customer_id = (int)$uv;
+                // Mirror it onto the device row so subsequent polls
+                // resolve via path 1 (cheaper) and other UIs see the
+                // binding immediately.
+                $pdo->prepare("UPDATE devices SET customer_id = ? WHERE id = ? AND customer_id IS NULL")
+                    ->execute([$auto_customer_id, (int)$cpe_id]);
+            }
+        }
+
+        $link_extra = [
             'ssid'        => $link['ssid']        ?? '',
             'ap_mac'      => $link['ap_mac']      ?? '',
             'station_mac' => $link['station_mac'] ?? '',
-        ]);
+        ];
+        if ($auto_customer_id !== null) $link_extra['customer_id'] = $auto_customer_id;
+        $link_id = wireless_link_upsert((int)$row['id'], (int)$cpe_id, $link_extra);
+        /* upsert only sets customer_id on INSERT; for an existing row
+           we backfill it conservatively (only when currently NULL) so
+           we never overwrite a manual binding. */
+        if ($auto_customer_id !== null) {
+            $pdo->prepare(
+                "UPDATE wireless_links SET customer_id = ?
+                  WHERE id = ? AND customer_id IS NULL"
+            )->execute([$auto_customer_id, (int)$link_id]);
+        }
         // Backfill distance from site lat/lng pair if unset.
         if (empty($link['distance_km'])) {
             $link['distance_km'] = distance_between_devices_km((int)$row['id'], (int)$cpe_id);

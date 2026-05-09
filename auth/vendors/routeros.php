@@ -64,11 +64,32 @@ function routeros_poll_device(array $device, array $cred): array {
     $wifaces  = _ros_get($device, $cred, '/interface/wireless') ?? [];
     $regtable = _ros_get($device, $cred, '/interface/wireless/registration-table') ?? [];
     $eth      = _ros_get($device, $cred, '/interface/ethernet') ?? [];
+    /* PPPoE concentrators / RADIUS NASes need live session visibility
+       so the operator can see who's actually online without waiting
+       for the next radacct sample. /ppp/active is cheap. Returns null
+       when the box isn't a PPPoE NAS; we coalesce to []. */
+    $pppoe    = _ros_get($device, $cred, '/ppp/active') ?? [];
 
     if ($sysres === null) {
-        return ['ok' => false, 'error' => 'GET /system/resource failed (auth or REST disabled)'];
+        /* Distinguish "REST is missing" (RouterOS v6, REST off, or wrong
+           cert) from generic auth failure so the operator knows what to
+           fix. RouterOS v6 has no REST API at all — they need v7+ or
+           an SSH-based adapter (not yet implemented). */
+        return ['ok'    => false,
+                'error' => 'GET /system/resource failed — RouterOS v7+ with /rest enabled required (v6 has no REST; switch the device to v7 or add SSH credentials).'];
     }
     $sysres = $sysres[0] ?? $sysres;
+
+    /* Surface a v6/v7 hint based on the version string so subsequent
+       writes can fail fast with a useful message instead of silently. */
+    $fw = (string)($sysres['version'] ?? '');
+    if ($fw !== '' && (int)$fw === 6) {
+        // We got here, so /rest is reachable on this v6 box (rare —
+        // some v6.49+ have a backport). Don't error, just note it.
+        $sysres['_routeros_major'] = 6;
+    } else {
+        $sysres['_routeros_major'] = (int)$fw ?: null;
+    }
 
     $cpu = isset($sysres['cpu-load']) ? (float)$sysres['cpu-load'] : null;
     $mem_total = (int)($sysres['total-memory'] ?? 0);
@@ -113,6 +134,24 @@ function routeros_poll_device(array $device, array $cred): array {
         break;
     }
 
+    /* Build a small summary of active PPPoE sessions so the operator
+       sees "who's online" on a NAS at a glance. Full session list is
+       returned alongside in case the caller wants per-user detail. */
+    $pppoe_summary = [
+        'active_count' => count($pppoe),
+        'top_users'    => [],
+    ];
+    foreach (array_slice($pppoe, 0, 25) as $s) {
+        if (!is_array($s)) continue;
+        $pppoe_summary['top_users'][] = [
+            'name'        => (string)($s['name']     ?? ''),
+            'address'     => (string)($s['address']  ?? ''),
+            'caller_id'   => (string)($s['caller-id'] ?? ''),
+            'service'     => (string)($s['service']  ?? 'pppoe'),
+            'uptime'      => (string)($s['uptime']   ?? ''),
+        ];
+    }
+
     return [
         'ok'       => true,
         'error'    => '',
@@ -126,6 +165,7 @@ function routeros_poll_device(array $device, array $cred): array {
             'tx_rate_mbps'   => null,
             'rx_rate_mbps'   => null,
             'firmware'       => (string)($sysres['version'] ?? ''),
+            'pppoe_active'   => $pppoe_summary['active_count'],
         ],
         'links'    => $links,
         'rf_env'   => [], // RouterOS has /interface/wireless/scan but it's disruptive — skip
@@ -134,6 +174,7 @@ function routeros_poll_device(array $device, array $cred): array {
         'mac'      => strtoupper((string)($wif['mac-address'] ?? '')),
         'serial'   => (string)($sysres['serial-number'] ?? ''),
         'model'    => (string)($sysres['board-name']    ?? ''),
+        'pppoe'    => $pppoe_summary,
     ];
 }
 

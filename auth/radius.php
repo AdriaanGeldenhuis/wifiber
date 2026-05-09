@@ -172,6 +172,11 @@ function radius_set_password(int $user_id, string $cleartext): bool {
 
     $username = radius_username_for($u);
     radius_replace_check($username, 'Cleartext-Password', ':=', $cleartext);
+    /* Disconnect the live session (if any) so the customer reconnects
+       with the new password instead of riding the old session until
+       its idle/session timeout. Without this they auth fine on next
+       reconnect but in-flight traffic stays on the cached creds. */
+    radius_send_pod($username);
     audit_log('radius.password_set', ['target_type' => 'user', 'target_id' => $user_id]);
     return true;
 }
