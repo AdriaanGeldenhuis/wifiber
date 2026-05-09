@@ -784,7 +784,7 @@ $speedtests = link_speedtests_recent($id, 12);
       </a></span></div>
   <?php endif; ?>
   <div class="lv-row"><span><b>MTU</b></span><span><?= $link['mtu_bytes'] !== null ? (int)$link['mtu_bytes'] . ' bytes' : '—' ?></span></div>
-  <div class="lv-row"><span><b>Last evaluated</b></span><span><?= $h($fmt_dt($link['last_evaluated_at'] ?? null)) ?></span></div>
+  <div class="lv-row"><span><b>Last evaluated</b></span><span><?= lv_freshness_html($link['last_evaluated_at'] ?? null) ?></span></div>
 </div>
 
 <div style="margin-top:20px;display:flex;gap:8px;align-items:center;justify-content:space-between;flex-wrap:wrap;">

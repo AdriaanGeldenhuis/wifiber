@@ -17,6 +17,27 @@ require_once __DIR__ . '/helpers.php';
 
 const INSTALL_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled'];
 
+/* Sign-off acceptance thresholds. Values worse than these surface a
+   warning on the install workflow page so admins don't rubber-stamp a
+   bad install — they can still override. Calibrated for typical PtMP
+   5 GHz: -75 dBm / 15 dB SNR is the boundary between "good" and
+   "marginal", -80 / 10 is "definitely going to drop in rain". */
+const INSTALL_SIGNAL_DBM_OK   = -75;
+const INSTALL_SIGNAL_DBM_WARN = -80;
+const INSTALL_SNR_DB_OK       = 15;
+const INSTALL_SNR_DB_WARN     = 10;
+
+/* Install photo storage. Same pattern as ticket attachments. */
+const INSTALL_PHOTO_DIR   = DATA_DIR . '/install-photos';
+const INSTALL_PHOTO_MAX   = 8 * 1024 * 1024; // 8 MB — phones produce big JPEGs
+const INSTALL_PHOTO_TYPES = [
+    'jpg'  => 'image/jpeg',
+    'jpeg' => 'image/jpeg',
+    'png'  => 'image/png',
+    'webp' => 'image/webp',
+    'heic' => 'image/heic',
+];
+
 function install_job_normalise(array $r): array {
     foreach (['id', 'customer_id', 'assigned_to', 'completed_by', 'priority', 'signal_dbm', 'snr_db'] as $k) {
         if (array_key_exists($k, $r)) {
@@ -24,6 +45,57 @@ function install_job_normalise(array $r): array {
         }
     }
     return $r;
+}
+
+/* Classify a candidate sign-off reading. Returns 'ok' / 'warn' / 'bad'
+   so the UI can colour the form field and the server can audit the
+   override decision. */
+function install_signal_grade(?int $signal_dbm, ?int $snr_db): string {
+    $sigBad  = $signal_dbm !== null && $signal_dbm < INSTALL_SIGNAL_DBM_WARN;
+    $snrBad  = $snr_db     !== null && $snr_db     < INSTALL_SNR_DB_WARN;
+    $sigWarn = $signal_dbm !== null && $signal_dbm < INSTALL_SIGNAL_DBM_OK;
+    $snrWarn = $snr_db     !== null && $snr_db     < INSTALL_SNR_DB_OK;
+    if ($sigBad || $snrBad)   return 'bad';
+    if ($sigWarn || $snrWarn) return 'warn';
+    return 'ok';
+}
+
+/* Save an uploaded install photo and return the on-disk path (relative
+   to DATA_DIR), empty string on no upload, or throws on failure. */
+function install_photo_save(?array $f): string {
+    if (!$f || !is_array($f)) return '';
+    $err = (int)($f['error'] ?? UPLOAD_ERR_NO_FILE);
+    if ($err === UPLOAD_ERR_NO_FILE) return '';
+    if ($err !== UPLOAD_ERR_OK) {
+        throw new RuntimeException('Photo upload failed (error code ' . $err . ').');
+    }
+    $size = (int)($f['size'] ?? 0);
+    if ($size <= 0) return '';
+    if ($size > INSTALL_PHOTO_MAX) {
+        throw new RuntimeException('Photo is too big (max ' . (INSTALL_PHOTO_MAX / 1024 / 1024) . ' MB).');
+    }
+    $orig = (string)($f['name'] ?? 'photo');
+    $ext  = strtolower((string)pathinfo($orig, PATHINFO_EXTENSION));
+    if (!isset(INSTALL_PHOTO_TYPES[$ext])) {
+        throw new RuntimeException(
+            'Photo type ".' . $ext . '" not allowed. Allowed: ' . implode(', ', array_keys(INSTALL_PHOTO_TYPES))
+        );
+    }
+    if (!is_dir(INSTALL_PHOTO_DIR)) @mkdir(INSTALL_PHOTO_DIR, 0755, true);
+    if (!is_dir(INSTALL_PHOTO_DIR) || !is_writable(INSTALL_PHOTO_DIR)) {
+        throw new RuntimeException('Photo directory is not writable: ' . INSTALL_PHOTO_DIR);
+    }
+    $rand = bin2hex(random_bytes(8));
+    $base = date('Ymd-His') . '-' . $rand . '.' . $ext;
+    $dest = INSTALL_PHOTO_DIR . '/' . $base;
+    $tmp  = (string)($f['tmp_name'] ?? '');
+    $ok   = is_uploaded_file($tmp) ? @move_uploaded_file($tmp, $dest) : @rename($tmp, $dest);
+    if (!$ok) {
+        throw new RuntimeException('Could not save photo to ' . $dest);
+    }
+    // Stored as a path relative to DATA_DIR so deployments that move
+    // the data root don't break links.
+    return 'install-photos/' . $base;
 }
 
 /* List install jobs joined with the customer record so the list page
@@ -215,11 +287,26 @@ function install_job_start(int $id): void {
    deliberately don't touch users.status here; reactivation /
    provisioning is a separate concern. */
 function install_job_complete(int $id, array $extra = []): void {
-    $sig = isset($extra['signal_dbm']) && $extra['signal_dbm'] !== '' ? (int)$extra['signal_dbm'] : null;
-    $snr = isset($extra['snr_db'])     && $extra['snr_db']     !== '' ? (int)$extra['snr_db']     : null;
-    $mac = isset($extra['cpe_mac'])    ? strtoupper(trim((string)$extra['cpe_mac']))    : null;
-    $ser = isset($extra['cpe_serial']) ? trim((string)$extra['cpe_serial'])             : null;
-    $by  = (int)($_SESSION['user_id'] ?? 0) ?: null;
+    $sig    = isset($extra['signal_dbm']) && $extra['signal_dbm'] !== '' ? (int)$extra['signal_dbm'] : null;
+    $snr    = isset($extra['snr_db'])     && $extra['snr_db']     !== '' ? (int)$extra['snr_db']     : null;
+    $mac    = isset($extra['cpe_mac'])    ? strtoupper(trim((string)$extra['cpe_mac']))    : null;
+    $ser    = isset($extra['cpe_serial']) ? trim((string)$extra['cpe_serial'])             : null;
+    $photo  = isset($extra['photo_path']) ? (string)$extra['photo_path']                   : null;
+    $by     = (int)($_SESSION['user_id'] ?? 0) ?: null;
+
+    /* Pull the most recent live readings if the form left them blank.
+       The alignment endpoint stamps signal_dbm/snr_db on every poll, so
+       this catches the common case of "tech signed off without retyping". */
+    if ($sig === null || $snr === null) {
+        $row = pdo()->prepare("SELECT signal_dbm, snr_db FROM install_jobs WHERE id = ?");
+        $row->execute([$id]);
+        $live = $row->fetch();
+        if ($live) {
+            if ($sig === null && $live['signal_dbm'] !== null) $sig = (int)$live['signal_dbm'];
+            if ($snr === null && $live['snr_db']     !== null) $snr = (int)$live['snr_db'];
+        }
+    }
+    $grade = install_signal_grade($sig, $snr);
 
     $stmt = pdo()->prepare(
         "UPDATE install_jobs
@@ -229,10 +316,11 @@ function install_job_complete(int $id, array $extra = []): void {
                 signal_dbm   = COALESCE(?, signal_dbm),
                 snr_db       = COALESCE(?, snr_db),
                 cpe_mac      = COALESCE(NULLIF(?, ''), cpe_mac),
-                cpe_serial   = COALESCE(NULLIF(?, ''), cpe_serial)
+                cpe_serial   = COALESCE(NULLIF(?, ''), cpe_serial),
+                photo_path   = COALESCE(NULLIF(?, ''), photo_path)
           WHERE id = ?"
     );
-    $stmt->execute([$by, $sig, $snr, $mac, $ser, $id]);
+    $stmt->execute([$by, $sig, $snr, $mac, $ser, $photo, $id]);
     audit_log('install_job.complete', [
         'target_type' => 'install_job', 'target_id' => $id,
         'meta' => array_filter([
@@ -240,6 +328,8 @@ function install_job_complete(int $id, array $extra = []): void {
             'snr_db'     => $snr,
             'cpe_mac'    => $mac,
             'cpe_serial' => $ser,
+            'photo'      => $photo,
+            'grade'      => $grade,
         ], fn($v) => $v !== null && $v !== ''),
     ]);
 }

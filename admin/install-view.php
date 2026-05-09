@@ -36,6 +36,28 @@ if (!$job) {
 $self = $_SERVER['REQUEST_URI'];
 $back = '/admin/install-view.php?id=' . $id;
 
+/* Serve the install photo through PHP so the file lives outside the
+   web root. Path is stored relative to DATA_DIR; we sanitise it before
+   touching the filesystem. */
+if (($_GET['photo'] ?? '') === '1' && !empty($job['photo_path'])) {
+    $rel = (string)$job['photo_path'];
+    if (preg_match('#^install-photos/[A-Za-z0-9._-]+$#', $rel)) {
+        $abs = DATA_DIR . '/' . $rel;
+        if (is_file($abs)) {
+            $ext = strtolower((string)pathinfo($abs, PATHINFO_EXTENSION));
+            $mime = INSTALL_PHOTO_TYPES[$ext] ?? 'application/octet-stream';
+            while (ob_get_level() > 0) ob_end_clean();
+            header('Content-Type: ' . $mime);
+            header('Content-Length: ' . filesize($abs));
+            header('Cache-Control: private, max-age=300');
+            readfile($abs);
+            exit;
+        }
+    }
+    http_response_code(404);
+    exit;
+}
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_csrf();
     require_admin_write();
@@ -72,13 +94,27 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         flash('success', 'Install marked in-progress.');
     }
     elseif ($action === 'complete') {
+        try {
+            $photo_path = install_photo_save($_FILES['photo'] ?? null);
+        } catch (Throwable $e) {
+            flash('error', $e->getMessage());
+            header('Location: ' . $back);
+            exit;
+        }
         install_job_complete($id, [
             'signal_dbm' => $_POST['signal_dbm'] ?? null,
             'snr_db'     => $_POST['snr_db']     ?? null,
             'cpe_mac'    => $_POST['cpe_mac']    ?? null,
             'cpe_serial' => $_POST['cpe_serial'] ?? null,
+            'photo_path' => $photo_path !== '' ? $photo_path : null,
         ]);
-        flash('success', 'Install signed off — audit log entry written.');
+        $grade = install_signal_grade(
+            isset($_POST['signal_dbm']) && $_POST['signal_dbm'] !== '' ? (int)$_POST['signal_dbm'] : null,
+            isset($_POST['snr_db'])     && $_POST['snr_db']     !== '' ? (int)$_POST['snr_db']     : null,
+        );
+        $note = $grade === 'bad'  ? ' (signal/SNR is below the warn threshold — flagged in audit log)'
+              : ($grade === 'warn' ? ' (signal/SNR is marginal — flagged in audit log)' : '');
+        flash('success', 'Install signed off — audit log entry written.' . $note);
     }
     elseif ($action === 'cancel') {
         $reason = trim((string)($_POST['reason'] ?? ''));
@@ -288,6 +324,13 @@ $gmaps   = ($job['customer_lat'] !== null && $job['customer_lng'] !== null)
           <?php if ($job['snr_db'] !== null): ?>· SNR <?= (int)$job['snr_db'] ?> dB<?php endif; ?>
         </span></div>
     <?php endif; ?>
+    <?php if (!empty($job['photo_path'])): ?>
+      <div class="lv-row"><span><b>Site photo</b></span>
+        <span><a href="?id=<?= (int)$job['id'] ?>&amp;photo=1" target="_blank" rel="noopener">view ↗</a></span></div>
+      <a href="?id=<?= (int)$job['id'] ?>&amp;photo=1" target="_blank" rel="noopener" style="display:block;margin-top:8px;">
+        <img src="?id=<?= (int)$job['id'] ?>&amp;photo=1" alt="Install photo" style="max-width:100%;max-height:240px;border-radius:8px;border:1px solid #1c2638;">
+      </a>
+    <?php endif; ?>
 
     <?php if ($is_open): ?>
       <hr style="border:0;border-top:1px solid #1c2638;margin:12px 0;">
@@ -303,29 +346,80 @@ $gmaps   = ($job['customer_lat'] !== null && $job['customer_lng'] !== null)
       </div>
 
       <hr style="border:0;border-top:1px solid #1c2638;margin:12px 0;">
-      <details>
-        <summary><strong>Sign off</strong> — record as-installed signal and complete the job</summary>
-        <form method="post" class="form" style="display:flex;flex-direction:column;gap:8px;margin-top:8px;">
+      <?php
+        $live_grade = install_signal_grade(
+            $job['signal_dbm'] !== null ? (int)$job['signal_dbm'] : null,
+            $job['snr_db']     !== null ? (int)$job['snr_db']     : null,
+        );
+        $grade_pill = match ($live_grade) {
+            'ok'   => '<span class="lv-pill" style="background:#4ade80;color:#001218;">acceptable</span>',
+            'warn' => '<span class="lv-pill" style="background:#e8a814;color:#001218;">marginal</span>',
+            'bad'  => '<span class="lv-pill" style="background:#ff5470;color:#001218;">below threshold</span>',
+            default => '',
+        };
+        $thresholds_text = sprintf(
+            'Targets: signal ≥ %d dBm, SNR ≥ %d dB. Marginal at signal %d / SNR %d.',
+            INSTALL_SIGNAL_DBM_OK, INSTALL_SNR_DB_OK,
+            INSTALL_SIGNAL_DBM_WARN, INSTALL_SNR_DB_WARN,
+        );
+      ?>
+      <details <?= $live_grade === 'bad' ? 'open' : '' ?>>
+        <summary><strong>Sign off</strong> — record as-installed signal and complete the job <?= $grade_pill ?></summary>
+        <form method="post" class="form" enctype="multipart/form-data"
+              style="display:flex;flex-direction:column;gap:8px;margin-top:8px;"
+              onsubmit="return iv_confirm_signoff(this);">
           <?= csrf_input() ?>
           <input type="hidden" name="action" value="complete">
+          <small class="muted"><?= iv_h($thresholds_text) ?></small>
           <div class="row" style="display:flex;gap:8px;">
             <label style="flex:1;">Signal (dBm)
-              <input type="number" name="signal_dbm" placeholder="-60" min="-110" max="0">
+              <input type="number" name="signal_dbm" placeholder="<?= $job['signal_dbm'] !== null ? (int)$job['signal_dbm'] : -60 ?>" min="-110" max="0"
+                     data-warn="<?= INSTALL_SIGNAL_DBM_OK ?>" data-bad="<?= INSTALL_SIGNAL_DBM_WARN ?>">
             </label>
             <label style="flex:1;">SNR (dB)
-              <input type="number" name="snr_db" placeholder="28" min="0" max="80">
+              <input type="number" name="snr_db" placeholder="<?= $job['snr_db'] !== null ? (int)$job['snr_db'] : 28 ?>" min="0" max="80"
+                     data-warn="<?= INSTALL_SNR_DB_OK ?>" data-bad="<?= INSTALL_SNR_DB_WARN ?>">
             </label>
           </div>
+          <small class="muted">Leave blank to lock in the live alignment reading <?php if ($job['signal_dbm'] !== null): ?>(<?= (int)$job['signal_dbm'] ?> dBm<?= $job['snr_db'] !== null ? ' / ' . (int)$job['snr_db'] . ' dB' : '' ?>)<?php endif; ?>.</small>
           <label>CPE MAC (confirm)
             <input type="text" name="cpe_mac" value="<?= iv_h($job['cpe_mac']) ?>" placeholder="AA:BB:CC:11:22:33">
           </label>
           <label>CPE serial (confirm)
             <input type="text" name="cpe_serial" value="<?= iv_h($job['cpe_serial']) ?>">
           </label>
+          <label>Site photo (mounted dish, alignment, customer sign-off)
+            <input type="file" name="photo" accept="image/*" capture="environment">
+          </label>
           <button type="submit" class="btn btn-primary btn-sm">Mark installed</button>
-          <small class="muted">Writes an <code>install_job.complete</code> audit log entry. Does not flip the user's billing status — handle that in the customer record.</small>
+          <small class="muted">Writes an <code>install_job.complete</code> audit log entry with the signal grade. Does not flip the user's billing status — handle that in the customer record.</small>
         </form>
       </details>
+      <script>
+        // Confirm before submitting a sub-threshold sign-off so admins
+        // know they're about to record a marginal install.
+        function iv_confirm_signoff(form) {
+          function check(name) {
+            var el = form.querySelector('[name="' + name + '"]');
+            if (!el || el.value === '') return 'unknown';
+            var v = parseFloat(el.value);
+            if (isNaN(v)) return 'unknown';
+            var bad  = parseFloat(el.dataset.bad);
+            var warn = parseFloat(el.dataset.warn);
+            // Signal: bad/warn are negative, "below" means smaller. SNR:
+            // positive, "below" means smaller. Same comparison either way.
+            if (v < bad)  return 'bad';
+            if (v < warn) return 'warn';
+            return 'ok';
+          }
+          var sig = check('signal_dbm');
+          var snr = check('snr_db');
+          if (sig === 'bad' || snr === 'bad') {
+            return confirm('Signal/SNR is below the install threshold. Sign off anyway?');
+          }
+          return true;
+        }
+      </script>
 
       <hr style="border:0;border-top:1px solid #1c2638;margin:12px 0;">
       <details>

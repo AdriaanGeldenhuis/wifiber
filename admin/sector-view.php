@@ -465,7 +465,7 @@ $freq_ghz_val = $freq_mhz !== null ? $freq_mhz / 1000.0 : null;
               <?php else: ?><small class="muted">—</small><?php endif; ?>
             </td>
             <td><?= $st['distance_km'] !== null ? '<small>' . number_format((float)$st['distance_km'], 2) . ' km</small>' : '<small class="muted">—</small>' ?></td>
-            <td><small class="muted"><?= lv_h($st['last_evaluated_at'] ?? 'never') ?></small></td>
+            <td><small><?= $st['last_evaluated_at'] ? lv_freshness_html($st['last_evaluated_at']) : '<span class="muted">never</span>' ?></small></td>
             <td><a class="btn btn-ghost btn-sm" href="/admin/link-view.php?id=<?= (int)$st['id'] ?>">Open</a></td>
           </tr>
         <?php endforeach; ?>
