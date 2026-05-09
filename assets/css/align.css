@@ -27,10 +27,13 @@ html, body {
 }
 .al-titles { flex: 1; min-width: 0; }
 .al-titles h1 {
-  margin: 0; font-size: 16px; font-weight: 600;
+  margin: 0; font-size: 16px; font-weight: 600; line-height: 1.3;
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
-.al-titles small { color: var(--muted); font-size: 11px; }
+.al-titles small {
+  display: block; color: var(--muted); font-size: 11px; line-height: 1.4;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
 .al-back {
   font-size: 26px; line-height: 1; color: var(--fg);
   text-decoration: none; padding: 4px 10px;
@@ -43,14 +46,14 @@ html, body {
 
 .al-main {
   padding: 14px;
-  display: flex; flex-direction: column; gap: 14px;
+  display: flex; flex-direction: column; gap: 10px;
   max-width: 640px; margin: 0 auto;
   padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
 }
 
 .al-stat {
   background: var(--panel); border: 1px solid var(--line);
-  border-radius: 14px; padding: 18px 16px 14px;
+  border-radius: 14px; padding: 14px 16px 12px;
   text-align: center;
 }
 .al-label {
@@ -58,9 +61,25 @@ html, body {
   color: var(--muted);
 }
 .al-big {
-  font-size: 88px; font-weight: 700; line-height: 1;
+  /* Scales down on narrow viewports so the giant em-dash placeholder
+     doesn't dominate the empty state — clamps between 48px (snug
+     phones) and 88px (tablets/desktop). */
+  font-size: clamp(48px, 14vw, 88px);
+  font-weight: 700; line-height: 1.05;
   margin: 4px 0 0; font-variant-numeric: tabular-nums;
   letter-spacing: -2px;
+  min-height: 1.05em;
+}
+/* Empty / no-data state — when JS has nothing to paint, the textContent
+   is left blank and CSS draws a small muted placeholder. Stops the
+   88px em-dash looking like a rendering glitch when the AP is offline
+   or hasn't been polled yet. */
+.al-big:empty::before {
+  content: "—";
+  color: var(--muted);
+  font-size: 0.4em;
+  letter-spacing: 0;
+  font-weight: 500;
 }
 .al-unit { font-size: 13px; color: var(--muted); margin-top: 2px; }
 .al-bar {
@@ -94,10 +113,23 @@ html, body {
   display: flex; align-items: center; gap: 8px;
   padding: 8px 12px; font-size: 12px; color: var(--muted);
   background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  transition: border-color .2s ease, background .2s ease;
+}
+/* Lift the error state out of the muted-grey row — when the dot turns
+   red, the whole card gets a red tint so a tech glancing at a phone in
+   sunlight catches it without reading the dot. */
+.al-status-row:has(.al-dot-err) {
+  border-color: var(--bad);
+  background: linear-gradient(180deg, rgba(255,84,112,.08), var(--panel));
+  color: var(--fg);
+}
+.al-status-row:has(.al-dot-warn) {
+  border-color: var(--warn);
+  color: var(--fg);
 }
 .al-status-spacer { flex: 1; }
 .al-muted { color: var(--muted); font-size: 11px; }
-.al-dot { width: 9px; height: 9px; border-radius: 50%; background: #555; }
+.al-dot { width: 9px; height: 9px; border-radius: 50%; background: #555; flex: none; }
 .al-dot.al-dot-ok   { background: var(--good); box-shadow: 0 0 8px var(--good); }
 .al-dot.al-dot-warn { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
 .al-dot.al-dot-err  { background: var(--bad);  box-shadow: 0 0 6px var(--bad); }

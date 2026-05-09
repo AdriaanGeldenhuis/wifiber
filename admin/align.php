@@ -215,7 +215,7 @@ $ap_label = $ap ? $ap['name'] . ' · ' . ucfirst($ap['vendor']) : 'No AP linked'
   <main class="al-main">
     <section class="al-stat">
       <div class="al-label">Signal</div>
-      <div class="al-big" id="al-signal">—</div>
+      <div class="al-big" id="al-signal"></div>
       <div class="al-unit">dBm</div>
       <div class="al-bar"><div class="al-bar-fill" id="al-signal-fill"></div></div>
       <div class="al-peak">peak <span id="al-signal-peak">—</span> dBm</div>
@@ -223,7 +223,7 @@ $ap_label = $ap ? $ap['name'] . ' · ' . ucfirst($ap['vendor']) : 'No AP linked'
 
     <section class="al-stat">
       <div class="al-label">SNR</div>
-      <div class="al-big" id="al-snr">—</div>
+      <div class="al-big" id="al-snr"></div>
       <div class="al-unit">dB</div>
       <div class="al-bar"><div class="al-bar-fill" id="al-snr-fill"></div></div>
       <div class="al-peak">peak <span id="al-snr-peak">—</span> dB</div>

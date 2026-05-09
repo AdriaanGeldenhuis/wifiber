@@ -52,7 +52,9 @@
       // Pitched beep — stronger signal → higher pitch.
       tone(440 + (s + 100) * 18, 0.07);
     } else {
-      $('al-signal').textContent = '—';
+      // Leave empty — CSS .al-big:empty::before paints a small muted
+      // placeholder. Avoids the 88px em-dash looking like a glitch.
+      $('al-signal').textContent = '';
     }
 
     var n = (typeof d.snr_db === 'number') ? d.snr_db : null;
@@ -67,7 +69,7 @@
         $('al-snr-peak').textContent = n;
       }
     } else {
-      $('al-snr').textContent = '—';
+      $('al-snr').textContent = '';
     }
 
     $('al-ccq').textContent  = d.ccq_pct  != null ? Math.round(d.ccq_pct) + ' %' : '—';
