@@ -35,8 +35,6 @@ $nav = [
         ['key' => 'outages',     'label' => 'Outages',            'href' => '/admin/outages.php'],
         ['key' => 'maintenance', 'label' => 'Maintenance windows','href' => '/admin/maintenance.php'],
         ['key' => 'tickets',     'label' => 'Support tickets',    'href' => '/admin/tickets.php'],
-        ['key' => 'installs',    'label' => 'Installs',           'href' => '/admin/installs.php',
-         'badge' => $nav_open_installs > 0 ? (int)$nav_open_installs : null],
     ]],
     ['group' => 'Network', 'items' => [
         ['key' => 'coverage',     'label' => 'Coverage',         'href' => '/admin/coverage.php'],
@@ -50,6 +48,8 @@ $nav = [
     ]],
     ['group' => 'Customers & Billing', 'items' => [
         ['key' => 'clients',          'label' => 'Clients',            'href' => '/admin/clients.php'],
+        ['key' => 'installs',         'label' => 'Installs',           'href' => '/admin/installs.php',
+         'badge' => $nav_open_installs > 0 ? (int)$nav_open_installs : null],
         ['key' => 'invoices',         'label' => 'Invoices',           'href' => '/admin/invoices.php'],
         ['key' => 'payments',         'label' => 'Payments',           'href' => '/admin/payments.php'],
         ['key' => 'payments_import',  'label' => 'Bank CSV import',    'href' => '/admin/payments-import.php'],

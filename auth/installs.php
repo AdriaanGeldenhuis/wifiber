@@ -244,6 +244,34 @@ function install_job_complete(int $id, array $extra = []): void {
     ]);
 }
 
+/* Live-alignment sample writer. Called from /admin/align.php on every
+   poll so an admin watching /admin/install-view.php sees the dish
+   improving in real time. We only stamp the open job (pending or
+   in_progress) — completed / cancelled jobs are immutable. Failures
+   here must never break the alignment endpoint, so the caller wraps
+   this in try/catch. */
+function install_job_record_alignment_sample(int $customer_id, ?int $signal_dbm, ?int $snr_db): ?int {
+    if ($customer_id <= 0) return null;
+    $stmt = pdo()->prepare(
+        "SELECT id FROM install_jobs
+          WHERE customer_id = ? AND status IN ('pending','in_progress')
+          ORDER BY id DESC LIMIT 1"
+    );
+    $stmt->execute([$customer_id]);
+    $job_id = (int)$stmt->fetchColumn();
+    if ($job_id <= 0) return null;
+
+    pdo()->prepare(
+        "UPDATE install_jobs
+            SET last_alignment_at = NOW(),
+                signal_dbm        = COALESCE(?, signal_dbm),
+                snr_db            = COALESCE(?, snr_db)
+          WHERE id = ?"
+    )->execute([$signal_dbm, $snr_db, $job_id]);
+
+    return $job_id;
+}
+
 function install_job_cancel(int $id, string $reason): void {
     $stmt = pdo()->prepare(
         "UPDATE install_jobs

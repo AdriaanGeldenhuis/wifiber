@@ -87,6 +87,30 @@ $lead_customers = pdo()->query(
       LIMIT 500"
 )->fetchAll();
 
+/* "Leads needing install" panel — every client whose status is 'lead'
+   AND who doesn't already have an open install_job. This is the
+   admin's working list when they sit down to schedule the day's
+   installs. Cap at 50 so the page stays snappy. */
+$leads_to_schedule = pdo()->query(
+    "SELECT u.id, u.account_no, u.username, u.name, u.surname,
+            u.address, u.phone, u.created_at
+       FROM users u
+       LEFT JOIN install_jobs j
+              ON j.customer_id = u.id
+             AND j.status IN ('pending','in_progress')
+      WHERE u.role = 'client'
+        AND u.status = 'lead'
+        AND j.id IS NULL
+      ORDER BY u.id DESC
+      LIMIT 50"
+)->fetchAll();
+
+/* If the page was opened with ?prefill_customer_id=X (from the
+   client-view "Schedule install" CTA, or from a leads-row "Schedule"
+   button) we pre-select that customer in the form and scroll the form
+   into view. */
+$prefill_customer_id = (int)($_GET['prefill_customer_id'] ?? 0);
+
 function inst_h(?string $s): string { return htmlspecialchars((string)$s, ENT_QUOTES); }
 
 function inst_status_pill(string $s): string {
@@ -216,8 +240,39 @@ function inst_fmt_dt(?string $dt): string {
   <?php endif; ?>
 </div>
 
-<div class="portal-card">
+<?php if ($leads_to_schedule): ?>
+<div class="portal-card" style="margin-bottom:14px;">
+  <h2>Leads needing install <span class="muted">(<?= count($leads_to_schedule) ?>)</span></h2>
+  <p class="muted" style="margin-top:0;">Customers signed up but with no scheduled install yet. Click <strong>Schedule</strong> to load one for the techs.</p>
+  <div class="table-scroll">
+    <table class="data-table compact">
+      <thead><tr><th>Customer</th><th>Account</th><th>Address</th><th>Phone</th><th>Signed up</th><th></th></tr></thead>
+      <tbody>
+        <?php foreach ($leads_to_schedule as $c):
+          $label = trim(($c['name'] ?? '') . ' ' . ($c['surname'] ?? '')) ?: ($c['username'] ?? ('client #' . $c['id']));
+        ?>
+          <tr>
+            <td><a href="/admin/client-view.php?id=<?= (int)$c['id'] ?>"><strong><?= inst_h($label) ?></strong></a></td>
+            <td><small><?= inst_h($c['account_no']) ?: '—' ?></small></td>
+            <td><small><?= inst_h(mb_substr((string)$c['address'], 0, 60)) ?: '—' ?></small></td>
+            <td><small><?php if (!empty($c['phone'])): ?><a href="tel:<?= inst_h($c['phone']) ?>"><?= inst_h($c['phone']) ?></a><?php else: ?>—<?php endif; ?></small></td>
+            <td><small><?= inst_h(inst_fmt_dt($c['created_at'])) ?></small></td>
+            <td><a class="btn btn-primary btn-sm" href="?prefill_customer_id=<?= (int)$c['id'] ?>#schedule-install">Schedule ↓</a></td>
+          </tr>
+        <?php endforeach; ?>
+      </tbody>
+    </table>
+  </div>
+</div>
+<?php endif; ?>
+
+<div class="portal-card" id="schedule-install">
   <h2>Schedule a new install</h2>
+  <?php if ($prefill_customer_id): ?>
+    <p style="background:#0a1f33;border-left:3px solid #05DAFD;padding:8px 10px;border-radius:4px;">
+      Pre-selecting customer #<?= (int)$prefill_customer_id ?>. Add the tech and date below, then save.
+    </p>
+  <?php endif; ?>
   <form method="post" class="form form-grid">
     <?= csrf_input() ?>
     <input type="hidden" name="action" value="create">
@@ -228,8 +283,9 @@ function inst_fmt_dt(?string $dt): string {
         <?php foreach ($lead_customers as $c):
           $label = trim(($c['name'] ?? '') . ' ' . ($c['surname'] ?? '')) ?: $c['username'];
           $tag   = $c['status'] === 'lead' ? ' · LEAD' : '';
+          $sel   = $prefill_customer_id === (int)$c['id'] ? ' selected' : '';
         ?>
-          <option value="<?= (int)$c['id'] ?>">
+          <option value="<?= (int)$c['id'] ?>"<?= $sel ?>>
             <?= inst_h($label) ?>
             <?php if (!empty($c['account_no'])): ?> · <?= inst_h($c['account_no']) ?><?php endif; ?>
             <?php if (!empty($c['address'])): ?> · <?= inst_h(mb_substr($c['address'], 0, 60)) ?><?php endif; ?>

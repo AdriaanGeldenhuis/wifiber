@@ -323,6 +323,20 @@ $service_age_d  = !empty($client['service_start']) ? max(0, (int)((time() - strt
   <?php if (!empty($client['sector_id']) || $links): ?>
     <a class="btn btn-ghost btn-sm" href="/admin/align.php?customer_id=<?= (int)$client['id'] ?>" title="Live signal meter — open on a phone while aiming the dish">Align CPE ↗</a>
   <?php endif; ?>
+  <?php
+    // Surface a quick-schedule CTA when this customer has no currently-
+    // open install_job. Otherwise jump them to the existing one.
+    $client_install_jobs = install_jobs_for_customer((int)$client['id']);
+    $client_open_install = null;
+    foreach ($client_install_jobs as $_j) {
+        if (in_array($_j['status'], ['pending','in_progress'], true)) { $client_open_install = $_j; break; }
+    }
+  ?>
+  <?php if ($client_open_install): ?>
+    <a class="btn btn-primary btn-sm" href="/admin/install-view.php?id=<?= (int)$client_open_install['id'] ?>" title="Open the in-flight install for this customer">Open install ↗</a>
+  <?php else: ?>
+    <a class="btn btn-primary btn-sm" href="/admin/installs.php?prefill_customer_id=<?= (int)$client['id'] ?>#schedule-install" title="Load an install for the techs on /admin/installs.php">Schedule install ↗</a>
+  <?php endif; ?>
   <a class="btn btn-ghost btn-sm" href="/admin/diagnostics.php">Polling status ↗</a>
 </div>
 

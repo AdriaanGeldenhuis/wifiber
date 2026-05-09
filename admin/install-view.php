@@ -16,6 +16,9 @@
  */
 $page_title = 'Install';
 $active_key = 'installs';
+// While an install is open, refresh the page periodically so an admin
+// watching the workflow sees live alignment readings update.
+$auto_refresh_seconds = 8;
 require __DIR__ . '/_layout.php';
 require_once __DIR__ . '/../auth/installs.php';
 require_once __DIR__ . '/../auth/wireless.php';
@@ -246,6 +249,32 @@ $gmaps   = ($job['customer_lat'] !== null && $job['customer_lng'] !== null)
   <!-- Workflow / sign-off -->
   <div class="portal-card">
     <h3 class="lv-label" style="font-size:11px;">Workflow</h3>
+
+    <?php
+      // "Live alignment" badge — the alignment endpoint stamps
+      // last_alignment_at every time it polls, so a recent timestamp
+      // means the tech is on the roof aiming right now. Refresh the
+      // page to see updated signal/SNR (auto-refresh below kicks in
+      // every 8s while the job is in progress).
+      $align_age = $job['last_alignment_at'] ? max(0, time() - strtotime($job['last_alignment_at'])) : null;
+      $align_live = ($align_age !== null && $align_age <= 30);
+    ?>
+    <?php if ($align_live): ?>
+      <div class="lv-row" style="background:#0a1f12;border-left:3px solid #4ade80;padding-left:8px;">
+        <span><b>Live alignment</b></span>
+        <span style="color:#4ade80;font-weight:600;">
+          <?= $job['signal_dbm'] !== null ? (int)$job['signal_dbm'] . ' dBm' : '—' ?>
+          <?= $job['snr_db']     !== null ? ' · SNR ' . (int)$job['snr_db'] . ' dB' : '' ?>
+          <small class="muted" style="margin-left:6px;"><?= (int)$align_age ?>s ago</small>
+        </span>
+      </div>
+    <?php elseif ($job['last_alignment_at']): ?>
+      <div class="lv-row"><span><b>Last alignment</b></span>
+        <span><?= iv_h(iv_dt($job['last_alignment_at'])) ?>
+          <?= $job['signal_dbm'] !== null ? '· ' . (int)$job['signal_dbm'] . ' dBm' : '' ?>
+          <?= $job['snr_db']     !== null ? '· SNR ' . (int)$job['snr_db'] . ' dB' : '' ?>
+        </span></div>
+    <?php endif; ?>
 
     <div class="lv-row"><span><b>Created</b></span>   <span><?= iv_h(iv_dt($job['created_at'])) ?></span></div>
     <div class="lv-row"><span><b>Started</b></span>   <span><?= iv_h(iv_dt($job['started_at'])) ?></span></div>

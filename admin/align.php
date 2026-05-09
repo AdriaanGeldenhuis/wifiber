@@ -19,6 +19,7 @@ require_once __DIR__ . '/../auth/acl.php';
 require_once __DIR__ . '/../auth/wireless.php';
 require_once __DIR__ . '/../auth/devices.php';
 require_once __DIR__ . '/../auth/sectors.php';
+require_once __DIR__ . '/../auth/installs.php';
 
 require_admin_ip();
 $user = require_role(acl_staff_roles(), '/admin/login.php');
@@ -149,6 +150,22 @@ if (($_GET['action'] ?? '') === 'poll') {
         ];
     }, $stations);
 
+    /* Stamp the open install_job (if any) so an admin watching
+       /admin/install-view.php sees the dish improve in real time.
+       Wrapped — this is best-effort and must not break the response. */
+    $live_job_id = null;
+    if ($hit) {
+        try {
+            $live_job_id = install_job_record_alignment_sample(
+                $customer_id,
+                isset($hit['signal_local_dbm']) ? (int)$hit['signal_local_dbm'] : null,
+                isset($hit['snr_local_db'])     ? (int)$hit['snr_local_db']     : null
+            );
+        } catch (Throwable $e) {
+            error_log('align: install_job_record_alignment_sample: ' . $e->getMessage());
+        }
+    }
+
     $reply([
         'ok'             => true,
         'station_found'  => $hit !== null,
@@ -166,6 +183,7 @@ if (($_GET['action'] ?? '') === 'poll') {
         'targets'        => $target_macs,
         'ap_name'        => $ap['name'],
         'ms'             => $elapsed_ms,
+        'install_job_id' => $live_job_id,
     ]);
 }
 
