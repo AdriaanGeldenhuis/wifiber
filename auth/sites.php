@@ -477,9 +477,55 @@ function geocode_address(string $address): ?array {
  * the address autocomplete on the client editor — same rate-limit dance
  * as geocode_address.
  */
+/* Cache TTLs. Searches change occasionally as OSM gets new points; a
+   30-day window covers most repeats from a bulk import. Reverse
+   lookups are far more stable (lat/lng → name barely shifts) so they
+   live for 180 days. */
+const NOMINATIM_TTL_SEARCH_SEC  = 30 * 86400;
+const NOMINATIM_TTL_REVERSE_SEC = 180 * 86400;
+
+function _nominatim_cache_get(string $kind, string $key): ?string {
+    try {
+        $stmt = pdo()->prepare(
+            "SELECT response, created_at
+               FROM nominatim_cache
+              WHERE cache_key = ? AND kind = ? LIMIT 1"
+        );
+        $stmt->execute([$key, $kind]);
+        $row = $stmt->fetch();
+        if (!$row) return null;
+        $ttl = $kind === 'reverse' ? NOMINATIM_TTL_REVERSE_SEC : NOMINATIM_TTL_SEARCH_SEC;
+        $age = time() - strtotime((string)$row['created_at']);
+        if ($age > $ttl) return null;
+        return (string)$row['response'];
+    } catch (Throwable $e) {
+        // Table missing on a fresh dev box — caller falls through to network.
+        return null;
+    }
+}
+
+function _nominatim_cache_put(string $kind, string $key, string $response): void {
+    try {
+        pdo()->prepare(
+            "REPLACE INTO nominatim_cache (cache_key, kind, response, created_at)
+             VALUES (?, ?, ?, NOW())"
+        )->execute([$key, $kind, $response]);
+    } catch (Throwable $e) {
+        // Cache write failures must never break the geocode call itself.
+    }
+}
+
 function nominatim_search(string $address, int $limit = 5): array {
     $address = trim($address);
     if ($address === '' || !function_exists('curl_init')) return [];
+
+    /* Cache hit short-circuits the whole network + rate-limit dance. */
+    $cache_key = hash('sha256', 'search|' . mb_strtolower($address) . '|' . $limit);
+    $cached = _nominatim_cache_get('search', $cache_key);
+    if ($cached !== null) {
+        $data = json_decode($cached, true);
+        return is_array($data) ? $data : [];
+    }
 
     if (!rate_limit_check('nominatim', 1, 1)) {
         usleep(1100000);
@@ -518,6 +564,7 @@ function nominatim_search(string $address, int $limit = 5): array {
             'display_name' => (string)($row['display_name'] ?? ''),
         ];
     }
+    _nominatim_cache_put('search', $cache_key, json_encode($out));
     return $out;
 }
 
@@ -527,6 +574,16 @@ function nominatim_search(string $address, int $limit = 5): array {
  */
 function nominatim_reverse(float $lat, float $lng): ?string {
     if (!function_exists('curl_init')) return null;
+
+    /* Round to ~10m precision so two clicks on the same pin hit the
+       same cache row instead of generating a fresh request. */
+    $cache_key = hash('sha256', sprintf('reverse|%.5f|%.5f', $lat, $lng));
+    $cached = _nominatim_cache_get('reverse', $cache_key);
+    if ($cached !== null) {
+        // Stored as JSON-wrapped string so a future change of shape is easy.
+        $unwrapped = json_decode($cached, true);
+        if (is_string($unwrapped)) return $unwrapped;
+    }
 
     if (!rate_limit_check('nominatim', 1, 1)) {
         usleep(1100000);
@@ -555,5 +612,7 @@ function nominatim_reverse(float $lat, float $lng): ?string {
     $data = json_decode($resp, true);
     if (!is_array($data) || empty($data['display_name'])) return null;
 
-    return (string)$data['display_name'];
+    $name = (string)$data['display_name'];
+    _nominatim_cache_put('reverse', $cache_key, json_encode($name));
+    return $name;
 }

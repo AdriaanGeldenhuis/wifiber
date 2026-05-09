@@ -76,12 +76,24 @@ function coverage_normalise(string $s): string {
 }
 
 /**
- * Returns ['matched' => bool, 'area' => ?array, 'matched_term' => ?string].
+ * Returns ['matched' => bool, 'area' => ?array, 'matched_term' => ?string,
+ *          'tower' => ?array, 'distance_km' => ?float].
+ *
+ * Coverage is the union of two sources:
+ *   1. Curated suburb / town names in data/coverage.json (admin-editable;
+ *      lets ops list "we serve here" before a tower is up).
+ *   2. Live tower coverage radii from the sites table (auto-derived as
+ *      towers are added / moved / have their coverage_radius_m updated —
+ *      no JSON edit needed). Activated when the address geocodes to a
+ *      lat/lng inside any tower's circle.
  */
 function coverage_check(string $address): array {
     $needle = coverage_normalise($address);
-    if ($needle === '') return ['matched' => false, 'area' => null, 'matched_term' => null];
+    $miss = ['matched' => false, 'area' => null, 'matched_term' => null,
+             'tower'   => null,  'distance_km' => null];
+    if ($needle === '') return $miss;
 
+    /* (1) Curated text match — fastest, run first. */
     foreach (coverage_load()['areas'] as $area) {
         $candidates = array_merge(
             [(string)$area['name']],
@@ -95,11 +107,63 @@ function coverage_check(string $address): array {
             // anywhere it appears as a substring (e.g. "rivers east" -> "...rseast").
             if (strlen($norm) < 3) continue;
             if (strpos($needle, $norm) !== false) {
-                return ['matched' => true, 'area' => $area, 'matched_term' => (string)$term];
+                return ['matched' => true, 'area' => $area, 'matched_term' => (string)$term,
+                        'tower'   => null,  'distance_km' => null];
             }
         }
     }
-    return ['matched' => false, 'area' => null, 'matched_term' => null];
+
+    /* (2) Live tower-radius match — geocode the address, then haversine
+       it against every tower's coverage circle. */
+    $hit = coverage_check_live_towers($address);
+    if ($hit) return $hit;
+
+    return $miss;
+}
+
+/* GPS-based coverage check. Returns the same shape as coverage_check
+   on a hit, or null if no tower covers the geocoded address (or
+   geocoding fails). Pulled out so it can be called directly when the
+   caller already has lat/lng. */
+function coverage_check_live_towers(string $address): ?array {
+    if (!is_file(__DIR__ . '/sites.php')) return null;
+    require_once __DIR__ . '/sites.php';
+
+    $hits = nominatim_search($address, 1);
+    if (!$hits || !isset($hits[0]['lat'], $hits[0]['lng'])) return null;
+    return coverage_check_by_gps((float)$hits[0]['lat'], (float)$hits[0]['lng']);
+}
+
+function coverage_check_by_gps(float $lat, float $lng): ?array {
+    require_once __DIR__ . '/sites.php';
+    /* Only towers carry meaningful coverage radii; APs / PoPs / other
+       sites are infrastructure pins. */
+    $towers = array_values(array_filter(
+        sites_all(true),
+        fn ($s) => ($s['type'] ?? '') === 'tower'
+                && ($s['coverage_radius_m'] ?? 0) > 0
+                && $s['lat'] !== null && $s['lng'] !== null
+    ));
+    if (!$towers) return null;
+
+    $best = null;
+    foreach ($towers as $t) {
+        $km = haversine_km((float)$t['lat'], (float)$t['lng'], $lat, $lng);
+        $reach_km = ((float)$t['coverage_radius_m']) / 1000.0;
+        if ($km <= $reach_km) {
+            if ($best === null || $km < $best['distance_km']) {
+                $best = ['tower' => $t, 'distance_km' => $km];
+            }
+        }
+    }
+    if (!$best) return null;
+    return [
+        'matched'      => true,
+        'area'         => null,
+        'matched_term' => null,
+        'tower'        => $best['tower'],
+        'distance_km'  => round($best['distance_km'], 2),
+    ];
 }
 
 /* ------------------------------------------------------------ waitlist */
