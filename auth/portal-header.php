@@ -100,9 +100,15 @@ if ($_brand_colour && preg_match('/^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/',
         <div class="portal-nav-group">
           <div class="portal-nav-group-label"><?= htmlspecialchars($entry['group']) ?></div>
           <?php foreach ($entry['items'] as $item):
-            $cls = $item['key'] === $active_key ? ' is-active' : '';
+            $cls   = $item['key'] === $active_key ? ' is-active' : '';
+            $badge = isset($item['badge']) ? (int)$item['badge'] : null;
           ?>
-            <a href="<?= htmlspecialchars($item['href']) ?>" class="portal-nav-item<?= $cls ?>"><?= htmlspecialchars($item['label']) ?></a>
+            <a href="<?= htmlspecialchars($item['href']) ?>" class="portal-nav-item<?= $cls ?>">
+              <?= htmlspecialchars($item['label']) ?>
+              <?php if ($badge !== null && $badge > 0): ?>
+                <span class="portal-nav-badge"><?= $badge > 99 ? '99+' : $badge ?></span>
+              <?php endif; ?>
+            </a>
           <?php endforeach; ?>
         </div>
       <?php else:

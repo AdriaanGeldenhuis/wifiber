@@ -64,6 +64,46 @@ if (!function_exists('lv_fmt_dt')) {
     }
 }
 
+// Categorises a sample timestamp so the UI can flag stale telemetry.
+// Returns 'fresh' (<5 min), 'aging' (<15 min), 'stale' (older), or
+// 'missing' if there's no timestamp at all. The poller runs every minute,
+// so anything older than a few cycles probably means the radio went silent.
+if (!function_exists('lv_sample_freshness')) {
+    function lv_sample_freshness($dt): string {
+        if (!$dt) return 'missing';
+        $t = strtotime((string)$dt);
+        if (!$t) return 'missing';
+        $age = time() - $t;
+        if ($age < 300)  return 'fresh';
+        if ($age < 900)  return 'aging';
+        return 'stale';
+    }
+}
+
+/* Render a timestamp + freshness pill in one shot. Used wherever we
+   show a "last sample" row so a silent radio is obvious without doing
+   date math in your head. Returns an HTML fragment. */
+if (!function_exists('lv_freshness_html')) {
+    function lv_freshness_html($dt): string {
+        $f = lv_sample_freshness($dt);
+        $tone = match ($f) {
+            'fresh'  => '#4ade80',
+            'aging'  => '#e8a814',
+            'stale'  => '#ff5470',
+            default  => '#6b7480',
+        };
+        $label = match ($f) {
+            'fresh'  => 'live',
+            'aging'  => 'aging',
+            'stale'  => 'stale',
+            default  => 'no data',
+        };
+        return htmlspecialchars(lv_fmt_dt($dt), ENT_QUOTES)
+             . ' <span class="lv-pill" style="background:' . $tone
+             . ';color:#001218;margin-left:6px;">' . $label . '</span>';
+    }
+}
+
 /* "-48 (-51 / -52) Δ1 dBm" main-signal + per-chain breakdown card. */
 if (!function_exists('lv_chain_label')) {
     function lv_chain_label(?int $main, ?int $c0, ?int $c1): string {

@@ -65,6 +65,32 @@ function _mimosa_get_json(string $base, string $path, string $jar, bool $verify)
     return is_array($j) ? $j : null;
 }
 
+/**
+ * Reboot a Mimosa box via the LuCI admin endpoint. The firmware is
+ * OpenWrt-derived, so /cgi-bin/luci/admin/system/reboot is the
+ * standard reboot path. Same connection-drop-as-success convention as
+ * the other adapters.
+ */
+function mimosa_reboot_device(array $device, array $cred): array {
+    $login = _mimosa_login($device, $cred);
+    if (!$login['ok']) return ['ok' => false, 'error' => $login['error']];
+    $jar    = $login['jar'];
+    $base   = 'https://' . (string)$device['mgmt_ip'];
+    $verify = !empty($cred['verify_tls']);
+
+    $r = _mimosa_curl($base . '/cgi-bin/luci/admin/system/reboot', [
+        CURLOPT_POST       => true,
+        CURLOPT_POSTFIELDS => 'reboot=1',
+        CURLOPT_TIMEOUT    => 6,
+    ], $jar, $verify);
+    @unlink($jar);
+
+    if (in_array((int)$r['http'], [401, 403, 404, 405], true)) {
+        return ['ok' => false, 'error' => 'reboot rejected: http ' . $r['http']];
+    }
+    return ['ok' => true, 'error' => ''];
+}
+
 function mimosa_poll_device(array $device, array $cred): array {
     $login = _mimosa_login($device, $cred);
     if (!$login['ok']) return ['ok' => false, 'error' => $login['error']];

@@ -9,8 +9,11 @@
  * apply-wireless-changes worker handles the coordinated AP↔CPE move
  * and rollback if something goes wrong.
  *
- * Channel grid is the standard 5 GHz 20 MHz subset; widen it once we
- * support 6 GHz or 80 MHz blocks (TODO Phase 5 polish).
+ * Channel grids cover 2.4 / 5 / 6 / 60 GHz. The "Plan width" selector
+ * lets the operator try recommendations as if every sector was running
+ * 20 / 40 / 80 / 160 MHz without having to edit each sector first —
+ * the override only affects the recommendation maths, not the stored
+ * width of the sector itself.
  */
 $page_title = 'Frequency planner';
 $active_key = 'freq-planner';
@@ -54,6 +57,14 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 $sectors = sectors_all(null);
 
 $band = $_GET['band'] ?? '5GHz';
+/* "Plan width" override — empty string means "use each sector's stored
+   width", a positive integer (in MHz) overrides every recommendation
+   call below. Sane values per band: 2.4 GHz {20, 40}; 5 GHz {20, 40, 80,
+   160}; 6 GHz {20, 40, 80, 160}; 60 GHz {2160}. */
+$plan_width_raw = $_GET['plan_width'] ?? '';
+$plan_width = ($plan_width_raw !== '' && is_numeric($plan_width_raw))
+    ? max(20, min(160, (int)$plan_width_raw))
+    : null;
 $channels = [];
 switch ($band) {
     case '2.4GHz':
@@ -222,12 +233,43 @@ if ($stale_sectors || $never_scanned > 0): ?>
 
 <div class="portal-card">
   <h2>Band</h2>
-  <form method="get" class="form" style="display:flex;gap:6px;align-items:center;">
-    <?php foreach (['2.4GHz','5GHz','6GHz','60GHz'] as $b): ?>
-      <a href="?band=<?= urlencode($b) ?>"
+  <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+    <?php foreach (['2.4GHz','5GHz','6GHz','60GHz'] as $b):
+      $qs = array_merge($_GET, ['band' => $b]);
+    ?>
+      <a href="?<?= htmlspecialchars(http_build_query($qs)) ?>"
          class="btn btn-<?= $band === $b ? 'primary' : 'ghost' ?> btn-sm"><?= htmlspecialchars($b) ?></a>
     <?php endforeach; ?>
-  </form>
+  </div>
+</div>
+
+<div class="portal-card">
+  <h2>Plan width</h2>
+  <p class="muted" style="margin-top:0;">
+    Override the channel width used for the recommendation maths. Useful
+    for "what if we ran 80 MHz here?" without editing every sector.
+    Leave on <em>per-sector</em> to honour each sector's stored width.
+  </p>
+  <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+    <?php
+      $width_options = match ($band) {
+          '2.4GHz' => [20, 40],
+          '6GHz'   => [20, 40, 80, 160],
+          '60GHz'  => [],   // 802.11ad/ay channels are 2160 MHz fixed-width
+          default  => [20, 40, 80, 160],
+      };
+      $base_qs = $_GET;
+      unset($base_qs['plan_width']);
+    ?>
+    <a href="?<?= htmlspecialchars(http_build_query($base_qs)) ?>"
+       class="btn btn-<?= $plan_width === null ? 'primary' : 'ghost' ?> btn-sm">per-sector</a>
+    <?php foreach ($width_options as $w):
+      $qs = array_merge($_GET, ['plan_width' => $w]);
+    ?>
+      <a href="?<?= htmlspecialchars(http_build_query($qs)) ?>"
+         class="btn btn-<?= $plan_width === $w ? 'primary' : 'ghost' ?> btn-sm"><?= $w ?> MHz</a>
+    <?php endforeach; ?>
+  </div>
 </div>
 
 <div class="portal-card">
@@ -265,7 +307,10 @@ if ($stale_sectors || $never_scanned > 0): ?>
       <?php foreach ($sectors as $s):
         $row = $grid[$s['id']];
         $cur = $s['frequency_mhz'] ? (int)$s['frequency_mhz'] : null;
-        $width = (int)($s['channel_width_mhz'] ?: 20);
+        $stored_width = (int)($s['channel_width_mhz'] ?: 20);
+        // Apply the page-level Plan width override, if any. Otherwise
+        // fall back to whatever the sector is currently running.
+        $width = $plan_width ?? $stored_width;
         $rec = $best_for($row, (int)$s['id'], $band, $width);
         $neighbour_conflicts = $rec !== null ? freq_planner_neighbour_conflicts((int)$s['id'], $band, $rec, $width) : [];
         $current_snr = freq_planner_sector_snr((int)$s['id']);
@@ -329,8 +374,11 @@ if ($stale_sectors || $never_scanned > 0): ?>
                 <input type="hidden" name="frequency_mhz" value="<?= $rec ?>">
                 <input type="hidden" name="channel_width_mhz" value="<?= $width ?>">
                 <input type="hidden" name="totp_code" value="">
-                <button class="btn btn-primary btn-sm" type="submit"><?= $rec ?> MHz</button>
+                <button class="btn btn-primary btn-sm" type="submit"><?= $rec ?> MHz<?php if ($width !== $stored_width): ?> @ <?= $width ?> MHz<?php endif; ?></button>
               </form>
+              <?php if ($width !== $stored_width): ?>
+                <br><small style="color:#fa0;" title="The Plan width selector overrides this sector's stored channel width. Applying this recommendation will widen the radio.">⚠ widens from <?= $stored_width ?> → <?= $width ?> MHz</small>
+              <?php endif; ?>
               <?php if ($neighbour_conflicts): ?>
                 <br><small style="color:#f97316;">⚠ overlaps <?= count($neighbour_conflicts) ?> neighbour<?= count($neighbour_conflicts) === 1 ? '' : 's' ?></small>
                 <details style="display:inline-block;">

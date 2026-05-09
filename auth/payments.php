@@ -182,9 +182,88 @@ function payment_settle_invoice(int $invoice_id): void {
     if ($paid_sum + 0.005 >= $total && $inv['status'] !== 'paid') {
         pdo()->prepare("UPDATE invoices SET status='paid', paid_at=CURRENT_TIMESTAMP WHERE id=?")
              ->execute([$invoice_id]);
+        // Mirror of bin/invoices-cron.php's auto-suspend flow: when the
+        // last unpaid overdue invoice is settled, lift the suspension
+        // and re-enable the customer's RADIUS attributes so they can
+        // authenticate again without manual intervention.
+        if (!empty($inv['user_id'])) {
+            payment_maybe_reactivate((int)$inv['user_id']);
+        }
     } elseif ($paid_sum + 0.005 < $total && $inv['status'] === 'paid') {
         pdo()->prepare("UPDATE invoices SET status='unpaid', paid_at=NULL WHERE id=?")
              ->execute([$invoice_id]);
+    }
+}
+
+/* When a customer pays the invoice that put them in dunning, lift the
+   suspension and re-enable RADIUS automatically. We deliberately only
+   reverse OUR OWN auto-suspend (action='billing.auto_suspend') — a
+   later manual suspend (abuse, fraud, ops decision) blocks
+   auto-reactivation, so the admin still has to flip them back
+   themselves. */
+function payment_maybe_reactivate(int $user_id): void {
+    if ($user_id <= 0) return;
+    $u = find_user_by_id($user_id);
+    if (!$u || ($u['status'] ?? '') !== 'suspended') return;
+
+    /* Look at the most recent status-affecting audit_log entry. If the
+       last touch wasn't billing's auto-suspend, somebody overrode it
+       and we shouldn't fight the override. */
+    try {
+        $stmt = pdo()->prepare(
+            "SELECT action FROM audit_log
+              WHERE target_type = 'user' AND target_id = ?
+                AND action IN (
+                    'billing.auto_suspend',
+                    'billing.auto_reactivate',
+                    'user.update',
+                    'user.suspend',
+                    'user.reactivate'
+                )
+              ORDER BY id DESC LIMIT 1"
+        );
+        $stmt->execute([$user_id]);
+        $last = (string)$stmt->fetchColumn();
+    } catch (Throwable $e) {
+        return;
+    }
+    if ($last !== 'billing.auto_suspend') return;
+
+    /* Are there still other unpaid overdue invoices for this customer?
+       If so, paying this one isn't enough — keep them suspended until
+       they're fully caught up. */
+    try {
+        $stmt = pdo()->prepare(
+            "SELECT COUNT(*)
+               FROM invoices
+              WHERE user_id = ?
+                AND status = 'unpaid'
+                AND due_date IS NOT NULL
+                AND due_date < CURRENT_DATE()"
+        );
+        $stmt->execute([$user_id]);
+        if ((int)$stmt->fetchColumn() > 0) return;
+    } catch (Throwable $e) {
+        return;
+    }
+
+    try {
+        update_user($user_id, function (array $u) {
+            $u['status'] = 'active';
+            return $u;
+        });
+        if (is_file(__DIR__ . '/radius.php')) {
+            require_once __DIR__ . '/radius.php';
+            if (function_exists('radius_reactivate')) {
+                @radius_reactivate($user_id);
+            }
+        }
+        audit_log('billing.auto_reactivate', [
+            'target_type' => 'user', 'target_id' => $user_id,
+            'meta' => ['trigger' => 'invoice_paid'],
+        ]);
+    } catch (Throwable $e) {
+        error_log('payment_maybe_reactivate failed for user ' . $user_id . ': ' . $e->getMessage());
     }
 }
 

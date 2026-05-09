@@ -76,6 +76,24 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
                             try { radius_provision_user((int)$created['id']); }
                             catch (Throwable $e) { error_log('radius provision failed: ' . $e->getMessage()); }
                         }
+                        // Auto-spawn a pending install_job for every new
+                        // client so the install queue stays in lock-step
+                        // with new sign-ups — admin doesn't have to
+                        // remember to schedule one. Best-effort: a missing
+                        // install_jobs table on a fresh dev box must not
+                        // block client creation.
+                        if ($role === 'client' && is_file(__DIR__ . '/../auth/installs.php')) {
+                            require_once __DIR__ . '/../auth/installs.php';
+                            try {
+                                install_job_save([
+                                    'customer_id' => (int)$created['id'],
+                                    'priority'    => 3,
+                                    'notes'       => 'Auto-created on customer sign-up. Admin to assign tech and schedule.',
+                                ]);
+                            } catch (Throwable $e) {
+                                error_log('install_job auto-create failed: ' . $e->getMessage());
+                            }
+                        }
                     }
                     $msg = ucfirst($role) . " '{$username}' created";
                     if (!empty($created['account_no'])) {

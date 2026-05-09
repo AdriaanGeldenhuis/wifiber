@@ -161,8 +161,111 @@ function _cambium_poll_cnmaestro(array $device, array $cred): array {
     ];
 }
 
+/**
+ * Capture the current radio config so cambium_revert_config() can put
+ * it back if a push goes wrong. cnMaestro returns the full device
+ * config at GET /api/v2/devices/{mac}/config; we extract just the
+ * fields cambium_apply_config can actually write so revert is a true
+ * inverse. SNMP-only deployments (no api_token) get a marker snapshot
+ * with snmp_settable=false so the worker knows there's nothing to roll
+ * back to.
+ */
 function cambium_snapshot_config(array $device, array $cred): array {
-    return ['ok' => true, 'error' => '', 'snmp_settable' => false];
+    if (empty($cred['api_token'])) {
+        return [
+            'ok' => true, 'error' => '',
+            'snmp_settable' => false,
+            'radio' => [],
+            'note'  => 'no cnMaestro api_token — config rollback unavailable for this device',
+        ];
+    }
+    $base = trim((string)($cred['notes'] ?? 'https://cloud.cambiumnetworks.com'), " /");
+    $mac  = strtoupper(str_replace(':', '', (string)$device['mac']));
+    if ($mac === '') return ['ok' => false, 'error' => 'device.mac is required for cnMaestro snapshot'];
+
+    $ch = curl_init($base . '/api/v2/devices/' . urlencode($mac) . '/config');
+    curl_setopt_array($ch, [
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER     => [
+            'Authorization: Bearer ' . $cred['api_token'],
+            'Accept: application/json',
+        ],
+        CURLOPT_TIMEOUT        => 10,
+    ]);
+    $body = curl_exec($ch);
+    $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    if ($http !== 200) {
+        return ['ok' => false, 'error' => 'cnMaestro GET /config http ' . $http];
+    }
+    $j = json_decode((string)$body, true);
+    $d = $j['data'] ?? $j ?? [];
+
+    /* Translate the cnMaestro field names back to the keys
+       cambium_apply_config writes, so revert produces a symmetric PATCH. */
+    $radio = [];
+    if (isset($d['radio_frequency']))  $radio['frequency_mhz']     = (int)$d['radio_frequency'];
+    if (isset($d['radio_chan_width'])) $radio['channel_width_mhz'] = (int)$d['radio_chan_width'];
+    if (isset($d['radio_tx_power']))   $radio['tx_power_dbm']      = (int)$d['radio_tx_power'];
+    if (isset($d['ssid']))             $radio['ssid']              = (string)$d['ssid'];
+
+    return [
+        'ok'            => true,
+        'error'         => '',
+        'snmp_settable' => true,
+        'radio'         => $radio,
+        'captured_at'   => gmdate('c'),
+    ];
+}
+
+/**
+ * Reboot a Cambium device via the cnMaestro cloud REST API. SNMP-write
+ * reboot requires snmpset + a writable community + the right OID per
+ * model — too brittle to rely on, so we require an api_token and fall
+ * through to an error otherwise.
+ *
+ * Same convention as the AirOS / RouterOS reboots: a connection drop
+ * during reboot is success, only known auth/config error codes are
+ * surfaced as failures.
+ */
+function cambium_reboot_device(array $device, array $cred): array {
+    if (empty($cred['api_token'])) {
+        return ['ok' => false, 'error' => 'cnMaestro api_token required for Cambium reboot (SNMP-write reboot not supported).'];
+    }
+    $base  = trim((string)($cred['notes'] ?? 'https://cloud.cambiumnetworks.com'), " /");
+    $token = (string)$cred['api_token'];
+    $mac   = strtoupper(str_replace(':', '', (string)$device['mac']));
+    if ($mac === '') {
+        return ['ok' => false, 'error' => 'device.mac is required for cnMaestro reboot'];
+    }
+
+    $ch = curl_init($base . '/api/v2/devices/' . urlencode($mac) . '/reboot');
+    curl_setopt_array($ch, [
+        CURLOPT_POST           => true,
+        CURLOPT_POSTFIELDS     => '{}',
+        CURLOPT_RETURNTRANSFER => true,
+        CURLOPT_HTTPHEADER     => [
+            'Authorization: Bearer ' . $token,
+            'Accept: application/json',
+            'Content-Type: application/json',
+        ],
+        CURLOPT_TIMEOUT        => 10,
+    ]);
+    curl_exec($ch);
+    $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_error($ch);
+    curl_close($ch);
+
+    if (in_array($http, [401, 403], true)) {
+        return ['ok' => false, 'error' => 'cnMaestro auth failed (http ' . $http . ')'];
+    }
+    if ($http === 404) {
+        return ['ok' => false, 'error' => 'device not found in cnMaestro (mac ' . $mac . ')'];
+    }
+    if ($http >= 500) {
+        return ['ok' => false, 'error' => 'cnMaestro http ' . $http . ($err ? ': ' . $err : '')];
+    }
+    return ['ok' => true, 'error' => ''];
 }
 
 function cambium_apply_config(array $device, array $cred, array $payload): array {

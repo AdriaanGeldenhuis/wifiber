@@ -274,6 +274,7 @@ $freq_ghz_val = $freq_mhz !== null ? $freq_mhz / 1000.0 : null;
   <?= poll_badge_html($sector_freshness, 'Newest sample across stations on this sector') ?>
   <?php if ($sector_pollable): ?>
     <button type="button" class="btn btn-ghost btn-sm" data-poll-device-now="<?= (int)$ap['id'] ?>" data-poll-device-name="<?= lv_h($ap['name']) ?>" title="Run the vendor adapter against the AP for this sector">Poll AP now</button>
+    <a class="btn btn-primary btn-sm" href="/admin/sector-commission.php?id=<?= (int)$sector['id'] ?>" title="Mobile-first live AP dashboard for commissioning a fresh install">Commission ↗</a>
   <?php endif; ?>
   <a class="btn btn-ghost btn-sm" href="/admin/diagnostics.php">Polling status ↗</a>
 </div>
@@ -465,7 +466,7 @@ $freq_ghz_val = $freq_mhz !== null ? $freq_mhz / 1000.0 : null;
               <?php else: ?><small class="muted">—</small><?php endif; ?>
             </td>
             <td><?= $st['distance_km'] !== null ? '<small>' . number_format((float)$st['distance_km'], 2) . ' km</small>' : '<small class="muted">—</small>' ?></td>
-            <td><small class="muted"><?= lv_h($st['last_evaluated_at'] ?? 'never') ?></small></td>
+            <td><small><?= $st['last_evaluated_at'] ? lv_freshness_html($st['last_evaluated_at']) : '<span class="muted">never</span>' ?></small></td>
             <td><a class="btn btn-ghost btn-sm" href="/admin/link-view.php?id=<?= (int)$st['id'] ?>">Open</a></td>
           </tr>
         <?php endforeach; ?>

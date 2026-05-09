@@ -13,9 +13,14 @@
  */
 require_once __DIR__ . '/../auth/helpers.php';
 require_once __DIR__ . '/../auth/acl.php';
+require_once __DIR__ . '/../auth/installs.php';
 
 require_admin_ip();
 $user = require_role(acl_staff_roles(), '/admin/login.php');
+
+// Open install jobs — used by the nav item to show a queue badge so an
+// installer doesn't have to click through to know there's work waiting.
+$nav_open_installs = install_jobs_count_open();
 
 $portal = 'admin';
 $nav = [
@@ -43,6 +48,8 @@ $nav = [
     ]],
     ['group' => 'Customers & Billing', 'items' => [
         ['key' => 'clients',          'label' => 'Clients',            'href' => '/admin/clients.php'],
+        ['key' => 'installs',         'label' => 'Installs',           'href' => '/admin/installs.php',
+         'badge' => $nav_open_installs > 0 ? (int)$nav_open_installs : null],
         ['key' => 'invoices',         'label' => 'Invoices',           'href' => '/admin/invoices.php'],
         ['key' => 'payments',         'label' => 'Payments',           'href' => '/admin/payments.php'],
         ['key' => 'payments_import',  'label' => 'Bank CSV import',    'href' => '/admin/payments-import.php'],

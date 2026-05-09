@@ -83,11 +83,17 @@ require __DIR__ . '/includes/header.php';
           </span>
           <div class="coverage-result-body">
             <strong>You're in coverage!</strong>
-            <p>We serve <em><?= htmlspecialchars($check['area']['name']) ?></em>
-            <?php if ($check['matched_term'] !== $check['area']['name']): ?>
-              (matched on <em><?= htmlspecialchars($check['matched_term']) ?></em>)
-            <?php endif; ?>.
-            Final hookup depends on line-of-sight to our nearest tower &mdash; book a free site survey below.</p>
+            <?php if (!empty($check['tower'])): ?>
+              <p>You're <?= number_format((float)$check['distance_km'], 2) ?> km from
+              our <em><?= htmlspecialchars($check['tower']['name']) ?></em> tower &mdash;
+              well inside its broadcast range. Final hookup depends on line-of-sight; book a free site survey below.</p>
+            <?php elseif (!empty($check['area'])): ?>
+              <p>We serve <em><?= htmlspecialchars($check['area']['name']) ?></em>
+              <?php if ($check['matched_term'] !== $check['area']['name']): ?>
+                (matched on <em><?= htmlspecialchars($check['matched_term']) ?></em>)
+              <?php endif; ?>.
+              Final hookup depends on line-of-sight to our nearest tower &mdash; book a free site survey below.</p>
+            <?php endif; ?>
             <div class="coverage-result-cta">
               <a href="/pricing" class="btn btn-primary">See plans &amp; pricing</a>
               <a href="/#contact" class="btn btn-ghost">Book a site survey</a>

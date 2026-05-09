@@ -320,6 +320,23 @@ $service_age_d  = !empty($client['service_start']) ? max(0, (int)((time() - strt
   <?php if ($client_pollable_dev): ?>
     <button type="button" class="btn btn-ghost btn-sm" data-poll-device-now="<?= (int)$client_pollable_dev['id'] ?>" data-poll-device-name="<?= lv_h($client_pollable_dev['name']) ?>" title="Run the vendor adapter against this customer's CPE">Poll CPE now</button>
   <?php endif; ?>
+  <?php if (!empty($client['sector_id']) || $links): ?>
+    <a class="btn btn-ghost btn-sm" href="/admin/align.php?customer_id=<?= (int)$client['id'] ?>" title="Live signal meter — open on a phone while aiming the dish">Align CPE ↗</a>
+  <?php endif; ?>
+  <?php
+    // Surface a quick-schedule CTA when this customer has no currently-
+    // open install_job. Otherwise jump them to the existing one.
+    $client_install_jobs = install_jobs_for_customer((int)$client['id']);
+    $client_open_install = null;
+    foreach ($client_install_jobs as $_j) {
+        if (in_array($_j['status'], ['pending','in_progress'], true)) { $client_open_install = $_j; break; }
+    }
+  ?>
+  <?php if ($client_open_install): ?>
+    <a class="btn btn-primary btn-sm" href="/admin/install-view.php?id=<?= (int)$client_open_install['id'] ?>" title="Open the in-flight install for this customer">Open install ↗</a>
+  <?php else: ?>
+    <a class="btn btn-primary btn-sm" href="/admin/installs.php?prefill_customer_id=<?= (int)$client['id'] ?>#schedule-install" title="Load an install for the techs on /admin/installs.php">Schedule install ↗</a>
+  <?php endif; ?>
   <a class="btn btn-ghost btn-sm" href="/admin/diagnostics.php">Polling status ↗</a>
 </div>
 
@@ -345,7 +362,25 @@ $service_age_d  = !empty($client['service_start']) ? max(0, (int)((time() - strt
     </div>
     <?php if (!$links): ?>
       <small class="muted">No wireless link records yet. Once the polling worker sees the customer's CPE associate to an AP, a link auto-registers and live RF data fills in.</small>
-    <?php else: foreach ($links as $l): ?>
+    <?php else: foreach ($links as $l):
+      $freshness = lv_sample_freshness($l['last_evaluated_at'] ?? null);
+      $freshTone = match ($freshness) {
+          'fresh'   => '#4ade80',
+          'aging'   => '#e8a814',
+          'stale'   => '#ff5470',
+          default   => '#6b7480',
+      };
+      $freshLabel = match ($freshness) {
+          'fresh'   => 'live',
+          'aging'   => 'aging',
+          'stale'   => 'stale',
+          default   => 'no data',
+      };
+      $freq_parts = [];
+      if (!empty($l['sector_freq']))  $freq_parts[] = (int)$l['sector_freq'] . ' MHz';
+      if (!empty($l['sector_width'])) $freq_parts[] = (int)$l['sector_width'] . ' MHz wide';
+      if (!empty($l['sector_band']))  $freq_parts[] = (string)$l['sector_band'];
+    ?>
       <div class="lv-mini-section" style="border-top:0;padding-top:0;">
         <div class="lv-grid-hdr">
           <h4 style="margin:0;">
@@ -354,6 +389,8 @@ $service_age_d  = !empty($client['service_start']) ? max(0, (int)((time() - strt
           </h4>
           <a class="btn btn-ghost btn-sm" href="/admin/link-view.php?id=<?= (int)$l['id'] ?>">Open ↗</a>
         </div>
+        <div class="lv-row"><span><b>Frequency</b></span>
+          <span><?= $freq_parts ? lv_h(implode(' · ', $freq_parts)) : '—' ?></span></div>
         <div class="lv-row"><span><b>Signal · noise</b></span>
           <span><?= $l['signal_dbm'] !== null ? (int)$l['signal_dbm'] . ' dBm' : '—' ?>
             <span class="muted"><?= $l['noise_dbm'] !== null ? '/ ' . (int)$l['noise_dbm'] . ' dBm' : '' ?></span>
@@ -372,7 +409,9 @@ $service_age_d  = !empty($client['service_start']) ? max(0, (int)((time() - strt
               ? number_format((float)$l['distance_km'], 2) . ' km · ' . lv_fmt_ft((float)$l['distance_km'])
               : '—' ?></span></div>
         <div class="lv-row"><span><b>Last sample</b></span>
-          <span><?= lv_h(lv_fmt_dt($l['last_evaluated_at'] ?? null)) ?></span></div>
+          <span><?= lv_h(lv_fmt_dt($l['last_evaluated_at'] ?? null)) ?>
+            <span class="lv-pill" style="background:<?= $freshTone ?>;color:#001218;margin-left:6px;"><?= $freshLabel ?></span>
+          </span></div>
       </div>
     <?php endforeach; endif; ?>
   </div>
@@ -408,6 +447,44 @@ $service_age_d  = !empty($client['service_start']) ? max(0, (int)((time() - strt
           </a>
         <?php endforeach; ?>
       </div>
+    <?php endif; ?>
+  </div>
+
+  <!-- Install jobs — newest first; covers re-installs and equipment swaps. -->
+  <?php $install_jobs = install_jobs_for_customer((int)$client['id']); ?>
+  <div class="portal-card">
+    <div class="lv-grid-hdr">
+      <h3 class="lv-label" style="font-size:11px;">Install history</h3>
+      <a class="btn btn-ghost btn-sm" href="/admin/installs.php?search=<?= urlencode($client['username'] ?? '') ?>">All ↗</a>
+    </div>
+    <?php if (!$install_jobs): ?>
+      <small class="muted">No install jobs scheduled. <a href="/admin/installs.php">Schedule one ↗</a></small>
+    <?php else: ?>
+      <table class="data-table compact">
+        <thead><tr><th>Status</th><th>Scheduled</th><th>Completed</th><th>Signal</th><th></th></tr></thead>
+        <tbody>
+          <?php foreach ($install_jobs as $j):
+            $col = match ($j['status']) {
+                'pending'     => '#08e',
+                'in_progress' => '#e8a814',
+                'completed'   => '#4ade80',
+                'cancelled'   => '#6b7480',
+                default       => '#888',
+            };
+          ?>
+            <tr>
+              <td><span class="lv-pill" style="background:<?= $col ?>;color:#001218;"><?= lv_h(str_replace('_',' ', $j['status'])) ?></span></td>
+              <td><small><?= lv_h(lv_fmt_dt($j['scheduled_at'])) ?></small></td>
+              <td><small><?= lv_h(lv_fmt_dt($j['completed_at'])) ?></small></td>
+              <td><small>
+                <?= $j['signal_dbm'] !== null ? (int)$j['signal_dbm'] . ' dBm' : '—' ?>
+                <?= $j['snr_db']     !== null ? ' · ' . (int)$j['snr_db'] . ' dB' : '' ?>
+              </small></td>
+              <td><a class="btn btn-ghost btn-sm" href="/admin/install-view.php?id=<?= (int)$j['id'] ?>">Open ↗</a></td>
+            </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
     <?php endif; ?>
   </div>
 </div>
