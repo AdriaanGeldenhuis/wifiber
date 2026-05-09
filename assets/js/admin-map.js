@@ -95,14 +95,22 @@
     if (e && e.name) saveMapState({ tile: e.name });
   });
 
-  const sitesLayer    = L.layerGroup().addTo(map);
-  const linksLayer    = L.layerGroup().addTo(map);
-  const clientsLayer  = L.layerGroup().addTo(map);
-  const sectorsLayer  = L.layerGroup().addTo(map);
-  const coverageLayer = L.layerGroup();
+  // Sectors render in a dedicated pane below the default overlayPane so
+  // PTP / client-sector polylines (and their click targets) stay above
+  // the translucent cone fills — otherwise the cone polygon swallows
+  // clicks meant for the lines crossing it.
+  map.createPane('wf-sectors');
+  map.getPane('wf-sectors').style.zIndex = 350;
+
+  const sitesLayer        = L.layerGroup().addTo(map);
+  const linksLayer        = L.layerGroup().addTo(map);
+  const clientLinksLayer  = L.layerGroup().addTo(map);
+  const clientsLayer      = L.layerGroup().addTo(map);
+  const sectorsLayer      = L.layerGroup().addTo(map);
+  const coverageLayer     = L.layerGroup();
   // Sector preview lives outside sectorsLayer so it can't be hidden by
   // the user's "Sectors" toggle while they're mid-draw.
-  const previewLayer  = L.layerGroup().addTo(map);
+  const previewLayer      = L.layerGroup().addTo(map);
 
   /* ---------- icons ---------- */
   const SITE_COLOR    = { tower: '#08e', ap: '#0c8', ptp_endpoint: '#f80', pop: '#80f', other: '#888' };
@@ -139,11 +147,12 @@
   let mode = 'pan';            // 'pan' | 'add_site' | 'add_link' | 'add_sector'
   let pendingLinkFrom = null;  // first site clicked in add_link
   let sectorDraft = null;      // { tower, stage: 'azimuth' | 'beamwidth', azimuth, beamwidth }
-  const siteIndex     = new Map(); // id -> {data, marker}
-  const linkLines     = new Map(); // id -> {line, data}
-  const sectorIndex   = new Map(); // id -> {data, layer}
-  const devicesBySite = new Map(); // site_id -> [device, ...]
-  const sectorsByTower= new Map(); // tower_id -> Set(sector_id)
+  const siteIndex       = new Map(); // id -> {data, marker}
+  const linkLines       = new Map(); // id -> {line, data}
+  const sectorIndex     = new Map(); // id -> {data, layer}
+  const devicesBySite   = new Map(); // site_id -> [device, ...]
+  const sectorsByTower  = new Map(); // tower_id -> Set(sector_id)
+  const clientLinkLines = new Map(); // client_id -> Leaflet polyline
 
   /* ---------- index seeds ---------- */
   (boot.devices || []).forEach((d) => {
@@ -210,7 +219,13 @@
     e.target.checked ? linksLayer.addTo(map) : map.removeLayer(linksLayer);
   });
   document.getElementById('toggle-clients').addEventListener('change', (e) => {
-    e.target.checked ? clientsLayer.addTo(map) : map.removeLayer(clientsLayer);
+    if (e.target.checked) {
+      clientsLayer.addTo(map);
+      clientLinksLayer.addTo(map);
+    } else {
+      map.removeLayer(clientsLayer);
+      map.removeLayer(clientLinksLayer);
+    }
   });
   document.getElementById('toggle-coverage').addEventListener('change', (e) => {
     e.target.checked ? coverageLayer.addTo(map) : map.removeLayer(coverageLayer);
@@ -412,6 +427,7 @@
         s.lat = ll.lat; s.lng = ll.lng;
         redrawLinksFor(s.id);
         redrawSectorsFor(s.id);
+        redrawClientLinksForTower(s.id);
       }
     });
     marker.on('click', (e) => {
@@ -573,9 +589,98 @@
         marker.setLatLng([c.lat, c.lng]);
       } else {
         c.lat = ll.lat; c.lng = ll.lng;
+        refreshClientLink(c);
       }
     });
     marker.addTo(clientsLayer);
+  }
+
+  /* ---------- render sector → client lines ---------- */
+  // Thin dashed connector between a client's marker and the apex of its
+  // sector's tower. Sits in the default overlay pane (above the
+  // wf-sectors pane) so it stays clickable even when it crosses a cone.
+  function renderClientLink(c) {
+    if (c.lat == null || c.lng == null) return;
+    if (c.sector_id == null) return;
+    const sector = sectorIndex.get(Number(c.sector_id));
+    if (!sector) return;
+    const tower = siteIndex.get(sector.data.tower_id);
+    if (!tower) return;
+
+    const color = STATUS_COLOR[c.status] || '#888';
+    const line = L.polyline(
+      [[tower.data.lat, tower.data.lng], [c.lat, c.lng]],
+      {
+        color: color,
+        weight: 1.5,
+        opacity: 0.7,
+        dashArray: '4 4',
+        interactive: true,
+        className: 'wf-client-link',
+      }
+    );
+    line.bindTooltip(clientLinkTooltipHTML(c, sector.data, tower.data), {
+      sticky: true,
+      direction: 'top',
+      offset: [0, -6],
+      className: 'leaflet-link-tip',
+    });
+    line.bindPopup(clientLinkPopupHTML(c, sector.data, tower.data));
+    line.wfClientLinkId = c.id;
+    line.addTo(clientLinksLayer);
+    clientLinkLines.set(c.id, line);
+  }
+
+  function clientLinkTooltipHTML(c, sector, tower) {
+    const dist = distanceMetres(tower.lat, tower.lng, c.lat, c.lng);
+    const who  = c.account_no || c.username || c.name || ('client ' + c.id);
+    return ''
+      + '<div class="ltip-title">' + escapeHtml(who) + ' ↔ ' + escapeHtml(sector.name) + '</div>'
+      + '<div class="ltip-row"><span>Distance</span><strong>' + fmtDistance(dist) + '</strong></div>'
+      + '<div class="ltip-route">' + escapeHtml(tower.name) + ' → ' + escapeHtml(who) + '</div>';
+  }
+
+  function clientLinkPopupHTML(c, sector, tower) {
+    const dist = distanceMetres(tower.lat, tower.lng, c.lat, c.lng);
+    const who  = c.account_no || c.username || c.name || ('client ' + c.id);
+    return ''
+      + '<div class="map-popup">'
+      +   '<strong>' + escapeHtml(who) + '</strong><br>'
+      +   '<small>' + escapeHtml(sector.name) + ' · ' + escapeHtml(tower.name) + '</small>'
+      +   '<dl class="pp-kv"><dt>Distance</dt><dd>' + fmtDistance(dist) + '</dd></dl>'
+      +   '<div class="pp-actions">'
+      +     '<a class="btn btn-ghost btn-sm" href="/admin/client-edit.php?id=' + c.id + '">Open client</a>'
+      +     '<button type="button" class="btn btn-ghost btn-sm" data-focus-sector="' + sector.id + '">View sector</button>'
+      +   '</div>'
+      + '</div>';
+  }
+
+  function refreshClientLink(c) {
+    const existing = clientLinkLines.get(c.id);
+    if (existing) {
+      clientLinksLayer.removeLayer(existing);
+      clientLinkLines.delete(c.id);
+    }
+    renderClientLink(c);
+  }
+
+  function removeClientLinksForSector(sectorId) {
+    (boot.clients || []).forEach((c) => {
+      if (Number(c.sector_id) !== Number(sectorId)) return;
+      const line = clientLinkLines.get(c.id);
+      if (!line) return;
+      clientLinksLayer.removeLayer(line);
+      clientLinkLines.delete(c.id);
+    });
+  }
+
+  function redrawClientLinksForTower(towerId) {
+    (boot.clients || []).forEach((c) => {
+      if (c.sector_id == null) return;
+      const sector = sectorIndex.get(Number(c.sector_id));
+      if (!sector || Number(sector.data.tower_id) !== Number(towerId)) return;
+      refreshClientLink(c);
+    });
   }
 
   function clientPopupHTML(c) {
@@ -818,6 +923,7 @@
     const poly = L.polygon(
       sectorPolygon(tower.data.lat, tower.data.lng, Number(az), Number(bw), range),
       {
+        pane: 'wf-sectors',
         color: stroke,
         weight: weight,
         fillColor: fill,
@@ -1062,6 +1168,7 @@
       if (!confirm('Delete this sector?')) return;
       const r = await postAction('delete_sector', { id });
       if (!r.ok) { alert(r.error); return; }
+      removeClientLinksForSector(id);
       removeSectorFromIndex(id);
       map.closePopup();
       const cnt = document.getElementById('count-sectors');
@@ -1149,8 +1256,11 @@
   /* ---------- bootstrap ---------- */
   boot.sites.forEach(renderSite);
   boot.site_links.forEach(renderLink);
-  boot.clients.forEach(renderClient);
+  // Sectors must be indexed before client-link lines so the lines can
+  // resolve their sector → tower endpoint.
   (boot.sectors || []).forEach(renderSector);
+  boot.clients.forEach(renderClient);
+  boot.clients.forEach(renderClientLink);
 
   /* ==========================================================
      UISP-style enhancements
