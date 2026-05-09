@@ -312,6 +312,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $vendor_map = [
             'ubiquiti' => ['airos_reboot_device',    __DIR__ . '/../auth/vendors/airos.php'],
             'mikrotik' => ['routeros_reboot_device', __DIR__ . '/../auth/vendors/routeros.php'],
+            'cambium'  => ['cambium_reboot_device',  __DIR__ . '/../auth/vendors/cambium.php'],
+            'mimosa'   => ['mimosa_reboot_device',   __DIR__ . '/../auth/vendors/mimosa.php'],
         ];
         $entry = $vendor_map[$d['vendor']] ?? null;
         if (!$entry) {

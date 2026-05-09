@@ -316,7 +316,7 @@ $rtt_sparkline = function (array $samples) {
         <?php if ($is_pollable): ?>
           <button type="button" class="btn btn-ghost btn-sm" data-poll-device-now="<?= (int)$d['id'] ?>" data-poll-device-name="<?= lv_h($d['name']) ?>" title="Run the vendor adapter against this device right now">Poll now</button>
         <?php endif; ?>
-        <?php if ($is_pollable && in_array($d['vendor'] ?? '', ['ubiquiti','mikrotik'], true)): ?>
+        <?php if ($is_pollable && in_array($d['vendor'] ?? '', ['ubiquiti','mikrotik','cambium','mimosa'], true)): ?>
           <button type="button" class="btn btn-danger btn-sm" data-reboot-device="<?= (int)$d['id'] ?>" data-reboot-name="<?= lv_h($d['name']) ?>" title="Issue a remote reboot — requires 2FA code">Reboot ↻</button>
         <?php endif; ?>
       </div>
