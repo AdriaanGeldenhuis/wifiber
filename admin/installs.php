@@ -37,6 +37,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     'cpe_mac'      => $_POST['cpe_mac']    ?? '',
                     'cpe_serial'   => $_POST['cpe_serial'] ?? '',
                     'cpe_model'    => $_POST['cpe_model']  ?? '',
+                    'cpe_vendor'   => $_POST['cpe_vendor'] ?? '',
                 ]);
                 flash('success', 'Install scheduled.');
                 header('Location: /admin/install-view.php?id=' . $id);
@@ -366,6 +367,16 @@ function inst_fmt_dt(?string $dt): string {
     </div>
     <div class="field"><label>CPE model</label>
       <input type="text" name="cpe_model" placeholder="e.g. NanoStation 5AC Loco">
+    </div>
+    <div class="field"><label>CPE vendor</label>
+      <select name="cpe_vendor">
+        <option value="">— infer from model —</option>
+        <option value="ubiquiti">Ubiquiti</option>
+        <option value="mikrotik">MikroTik</option>
+        <option value="cambium">Cambium</option>
+        <option value="mimosa">Mimosa</option>
+        <option value="other">Other</option>
+      </select>
     </div>
     <div class="field" style="grid-column:1/-1;"><label>Notes</label>
       <textarea name="notes" rows="2" placeholder="access details, gate code, what's expected on site"></textarea>

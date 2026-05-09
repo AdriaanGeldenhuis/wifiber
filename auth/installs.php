@@ -14,6 +14,8 @@
 declare(strict_types=1);
 
 require_once __DIR__ . '/helpers.php';
+require_once __DIR__ . '/devices.php';   // DEVICE_VENDORS, device_save(), mac_canonical()
+require_once __DIR__ . '/wireless.php';  // wireless_link_upsert()
 
 const INSTALL_STATUSES = ['pending', 'in_progress', 'completed', 'cancelled'];
 
@@ -39,12 +41,46 @@ const INSTALL_PHOTO_TYPES = [
 ];
 
 function install_job_normalise(array $r): array {
-    foreach (['id', 'customer_id', 'assigned_to', 'completed_by', 'priority', 'signal_dbm', 'snr_db'] as $k) {
+    foreach (['id', 'customer_id', 'assigned_to', 'completed_by', 'priority', 'signal_dbm', 'snr_db', 'device_id', 'link_id'] as $k) {
         if (array_key_exists($k, $r)) {
             $r[$k] = $r[$k] === null ? null : (int)$r[$k];
         }
     }
     return $r;
+}
+
+/* Map a CPE model string to the vendor that ships it. Only used when the
+   admin didn't pick a vendor on the form — saves them retyping it for
+   the model strings we recognise. Returns '' for unknowns so the caller
+   can fall back to 'other' or prompt. */
+function install_vendor_for_model(string $model): string {
+    $m = strtolower(trim($model));
+    if ($m === '') return '';
+    /* Ubiquiti CPE families. The list is intentionally conservative —
+       we'd rather a tech picks the vendor manually than guess wrong on
+       a fresh model. */
+    foreach (['litebeam', 'powerbeam', 'nanostation', 'nanobeam', 'rocket',
+              'airgrid', 'bullet', 'airfiber', 'isostation', 'airmax',
+              'unifi', 'uap-', 'usw-', 'usg-', 'udm-'] as $needle) {
+        if (str_contains($m, $needle)) return 'ubiquiti';
+    }
+    /* MikroTik families. */
+    foreach (['routerboard', 'rb-', 'rb9', 'rb4', 'rb7', 'rb1', 'rb2',
+              'sxt', 'qrt', 'lhg', 'ldf', 'mantbox', 'wap ', 'cap ',
+              'hap', 'map ', 'map lite', 'cloud router', 'crs', 'ccr',
+              'mikrotik', 'routeros'] as $needle) {
+        if (str_contains($m, $needle)) return 'mikrotik';
+    }
+    /* Cambium / Mimosa kept for completeness — the device.vendor enum
+       supports them even though the install flow only auto-provisions
+       the two majority vendors. */
+    if (str_contains($m, 'cambium') || str_contains($m, 'epmp') || str_contains($m, 'pmp ')) {
+        return 'cambium';
+    }
+    if (str_contains($m, 'mimosa') || str_starts_with($m, 'b5') || str_starts_with($m, 'c5')) {
+        return 'mimosa';
+    }
+    return '';
 }
 
 /* Classify a candidate sign-off reading. Returns 'ok' / 'warn' / 'bad'
@@ -283,18 +319,19 @@ function install_job_save(array $data, ?int $id = null): int {
         'cpe_mac'      => strtoupper(trim((string)($data['cpe_mac']    ?? ''))),
         'cpe_serial'   => trim((string)($data['cpe_serial'] ?? '')),
         'cpe_model'    => trim((string)($data['cpe_model']  ?? '')),
+        'cpe_vendor'   => in_array($data['cpe_vendor'] ?? '', DEVICE_VENDORS, true) ? (string)$data['cpe_vendor'] : '',
     ];
 
     if ($id) {
         $stmt = pdo()->prepare(
             "UPDATE install_jobs
                 SET assigned_to=?, scheduled_at=?, priority=?, notes=?,
-                    cpe_mac=?, cpe_serial=?, cpe_model=?
+                    cpe_mac=?, cpe_serial=?, cpe_model=?, cpe_vendor=?
               WHERE id=?"
         );
         $stmt->execute([
             $args['assigned_to'], $args['scheduled_at'], $args['priority'], $args['notes'],
-            $args['cpe_mac'], $args['cpe_serial'], $args['cpe_model'],
+            $args['cpe_mac'], $args['cpe_serial'], $args['cpe_model'], $args['cpe_vendor'],
             $id,
         ]);
         audit_log('install_job.update', [
@@ -307,13 +344,13 @@ function install_job_save(array $data, ?int $id = null): int {
     $stmt = pdo()->prepare(
         "INSERT INTO install_jobs
             (customer_id, assigned_to, scheduled_at, priority, notes,
-             cpe_mac, cpe_serial, cpe_model, status)
-         VALUES (?,?,?,?,?,?,?,?, 'pending')"
+             cpe_mac, cpe_serial, cpe_model, cpe_vendor, status)
+         VALUES (?,?,?,?,?,?,?,?,?, 'pending')"
     );
     $stmt->execute([
         $args['customer_id'], $args['assigned_to'], $args['scheduled_at'],
         $args['priority'], $args['notes'],
-        $args['cpe_mac'], $args['cpe_serial'], $args['cpe_model'],
+        $args['cpe_mac'], $args['cpe_serial'], $args['cpe_model'], $args['cpe_vendor'],
     ]);
     $new_id = (int)pdo()->lastInsertId();
     audit_log('install_job.create', [
@@ -405,6 +442,18 @@ function install_job_complete(int $id, array $extra = []): void {
         ], fn($v) => $v !== null && $v !== ''),
     ]);
 
+    /* Provision the CPE: create the device row, wire up the wireless link
+       to the customer's sector AP, and flip the user from 'lead' to
+       'active'. Failures here are logged but never block the sign-off —
+       the audit row above is the canonical "install completed" event;
+       provisioning is a side effect that an admin can re-trigger from
+       the install-view page if it fails. */
+    try {
+        install_job_provision_cpe($id);
+    } catch (Throwable $e) {
+        error_log('install provision failed for job ' . $id . ': ' . $e->getMessage());
+    }
+
     /* Welcome-aboard SMS / email. Reuses the notifications fan-out, so
        the customer gets it on whichever channels they accept. */
     if (is_file(__DIR__ . '/notifications.php')) {
@@ -421,6 +470,166 @@ function install_job_complete(int $id, array $extra = []): void {
             error_log('install.completed notify failed: ' . $e->getMessage());
         }
     }
+}
+
+/* Provision the install: build a devices row for the CPE, attach it to
+   the customer's sector via wireless_links, set users.status = 'active',
+   and stamp the legacy users.equipment_* fields so existing readers keep
+   working. Idempotent — re-running on a job that's already provisioned
+   reuses the device + link rows we wrote last time.
+
+   Vendor selection order:
+     1. install_jobs.cpe_vendor   (admin's explicit choice on the form)
+     2. install_vendor_for_model() (heuristic on the cpe_model string)
+     3. 'other'                    (lets the row save; admin can edit later)
+
+   What we DON'T do here:
+     - push wireless config to the CPE (sector-commission / apply-wireless-changes
+       cron handles that once credentials exist)
+     - save device_credentials (no password to capture from a sign-off form;
+       admin sets them on /admin/device-view.php after first poll)
+     - call vendor adapters (poll-wireless cron picks up the new link on its
+       next pass and starts populating telemetry)
+
+   Returns ['device_id' => int, 'link_id' => ?int] for callers that want
+   to redirect to the freshly-created rows. */
+function install_job_provision_cpe(int $job_id): array {
+    if ($job_id <= 0) throw new InvalidArgumentException('job_id required');
+
+    $job = install_job_find($job_id);
+    if (!$job) throw new RuntimeException('install job not found');
+
+    $cid = (int)$job['customer_id'];
+    if ($cid <= 0) throw new RuntimeException('install job has no customer_id');
+
+    $customer = find_user_by_id($cid);
+    if (!$customer) throw new RuntimeException('install job customer not found');
+
+    $mac    = mac_canonical((string)$job['cpe_mac']);
+    $serial = trim((string)$job['cpe_serial']);
+    $model  = trim((string)$job['cpe_model']);
+
+    $vendor = (string)($job['cpe_vendor'] ?? '');
+    if ($vendor === '' || !in_array($vendor, DEVICE_VENDORS, true)) {
+        $vendor = install_vendor_for_model($model);
+    }
+    if (!in_array($vendor, DEVICE_VENDORS, true) || $vendor === '') {
+        $vendor = 'other';
+    }
+
+    /* Step 1: device row. Reuse if the install_job already pinned one
+       (re-completing a job), or if a CPE with this MAC already exists in
+       inventory (admin pre-staged it). Otherwise create a new row. */
+    $device_id = (int)($job['device_id'] ?? 0);
+    if ($device_id <= 0 && $mac !== '') {
+        $clash = device_mac_conflict($mac);
+        if ($clash) $device_id = (int)$clash['id'];
+    }
+
+    $name = trim(($customer['name'] ?? '') . ' ' . ($customer['surname'] ?? ''));
+    if ($name === '') $name = (string)($customer['username'] ?? ('client #' . $cid));
+    $name = 'CPE · ' . $name;
+
+    $site_id = !empty($customer['site_id']) ? (int)$customer['site_id'] : null;
+
+    $device_patch = [
+        'name'        => $name,
+        'vendor'      => $vendor,
+        'model'       => $model,
+        'role'        => 'cpe',
+        'serial'      => $serial,
+        'mac'         => $mac,
+        'site_id'     => $site_id,
+        'customer_id' => $cid,
+        'status'      => 'unknown',  // first poll flips this to online/offline
+    ];
+    if ($device_id > 0) {
+        $existing = device_find($device_id);
+        if ($existing) {
+            /* Don't blow away fields the admin filled in by hand
+               (firmware, mgmt_ip, notes). Only refresh what the install
+               actually proved. */
+            device_save(array_merge($existing, [
+                'vendor'      => $existing['vendor'] === 'other' ? $vendor : $existing['vendor'],
+                'model'       => $existing['model']  ?: $model,
+                'serial'      => $existing['serial'] ?: $serial,
+                'mac'         => $existing['mac']    ?: $mac,
+                'role'        => $existing['role']   ?: 'cpe',
+                'customer_id' => $cid,
+                'site_id'     => $existing['site_id'] ?? $site_id,
+            ]), $device_id);
+        } else {
+            $device_id = device_save($device_patch);
+        }
+    } else {
+        $device_id = device_save($device_patch);
+    }
+
+    /* Step 2: wireless_links row. Only viable when the customer's sector
+       has an AP device pinned — otherwise the polling worker will create
+       the link the first time the CPE shows up on an AP. */
+    $link_id = (int)($job['link_id'] ?? 0);
+    $sector_id = !empty($customer['sector_id']) ? (int)$customer['sector_id'] : null;
+    $ap_device_id = null;
+    $ssid = '';
+    if ($sector_id) {
+        $row = pdo()->prepare("SELECT ap_device_id, ssid FROM sectors WHERE id = ? LIMIT 1");
+        $row->execute([$sector_id]);
+        $sec = $row->fetch();
+        if ($sec) {
+            $ap_device_id = !empty($sec['ap_device_id']) ? (int)$sec['ap_device_id'] : null;
+            $ssid = (string)($sec['ssid'] ?? '');
+        }
+    }
+    if ($ap_device_id && $device_id > 0 && $ap_device_id !== $device_id) {
+        $link_id = wireless_link_upsert($ap_device_id, $device_id, [
+            'sector_id'   => $sector_id,
+            'customer_id' => $cid,
+            'ssid'        => $ssid,
+            'station_mac' => $mac,
+        ]);
+    }
+
+    /* Step 3: stamp the audit-trail columns so install-view can link
+       straight to the device + link, and re-running this function reuses
+       the same rows. */
+    pdo()->prepare(
+        "UPDATE install_jobs SET device_id = ?, link_id = ? WHERE id = ?"
+    )->execute([$device_id ?: null, $link_id ?: null, $job_id]);
+
+    /* Step 4: activate the customer. Don't touch service_start if the
+       admin already set one (rare — usually it's blank until install
+       day). Also stamp the legacy equipment_* fields so the older client
+       portal/invoice readers that haven't migrated to devices_for_customer
+       keep displaying the right CPE. */
+    $patch = [];
+    if (($customer['status'] ?? '') !== 'active') {
+        $patch['status'] = 'active';
+    }
+    if (empty($customer['service_start'])) {
+        $patch['service_start'] = date('Y-m-d');
+    }
+    if ($mac    !== '' && empty($customer['equipment_mac']))    $patch['equipment_mac']    = $mac;
+    if ($serial !== '' && empty($customer['equipment_serial'])) $patch['equipment_serial'] = $serial;
+    if ($model  !== '' && empty($customer['equipment_model']))  $patch['equipment_model']  = $model;
+    if ($patch) {
+        update_user($cid, fn(array $u) => array_merge($u, $patch));
+        audit_log('install_job.activate', [
+            'target_type' => 'install_job', 'target_id' => $job_id,
+            'meta' => array_merge(['customer_id' => $cid, 'device_id' => $device_id], $patch),
+        ]);
+    }
+
+    /* Step 5: keep RADIUS in lockstep with the activation so the customer
+       can authenticate the moment they log into their CPE. Failure here
+       is non-fatal; the bin/radius-sync.php cron reconciles. */
+    if (is_file(__DIR__ . '/radius.php')) {
+        require_once __DIR__ . '/radius.php';
+        try { radius_provision_user($cid); }
+        catch (Throwable $e) { error_log('radius provision after install failed: ' . $e->getMessage()); }
+    }
+
+    return ['device_id' => $device_id, 'link_id' => $link_id ?: null];
 }
 
 /* Live-alignment sample writer. Called from /admin/align.php on every
