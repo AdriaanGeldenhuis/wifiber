@@ -76,6 +76,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'cpe_mac'      => $_POST['cpe_mac']    ?? '',
             'cpe_serial'   => $_POST['cpe_serial'] ?? '',
             'cpe_model'    => $_POST['cpe_model']  ?? '',
+            'cpe_vendor'   => $_POST['cpe_vendor'] ?? '',
         ], $id);
         flash('success', 'Equipment saved.');
     }
@@ -89,6 +90,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             'cpe_mac'      => (string)$job['cpe_mac'],
             'cpe_serial'   => (string)$job['cpe_serial'],
             'cpe_model'    => (string)$job['cpe_model'],
+            'cpe_vendor'   => (string)($job['cpe_vendor'] ?? ''),
         ], $id);
         flash('success', 'Job updated.');
     }
@@ -104,6 +106,13 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             header('Location: ' . $back);
             exit;
         }
+        /* If the sign-off form supplied a vendor pick, persist it before
+           we complete — the orchestrator reads cpe_vendor off the job
+           row to decide which adapter family the new device belongs to. */
+        if (!empty($_POST['cpe_vendor']) && in_array($_POST['cpe_vendor'], DEVICE_VENDORS, true)) {
+            pdo()->prepare("UPDATE install_jobs SET cpe_vendor = ? WHERE id = ?")
+                ->execute([$_POST['cpe_vendor'], $id]);
+        }
         install_job_complete($id, [
             'signal_dbm' => $_POST['signal_dbm'] ?? null,
             'snr_db'     => $_POST['snr_db']     ?? null,
@@ -117,6 +126,12 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         );
         $note = $grade === 'bad'  ? ' (signal/SNR is below the warn threshold — flagged in audit log)'
               : ($grade === 'warn' ? ' (signal/SNR is marginal — flagged in audit log)' : '');
+        $job_after = install_job_find($id);
+        if ($job_after && !empty($job_after['device_id'])) {
+            $note .= ' Device #' . (int)$job_after['device_id'] . ' provisioned';
+            if (!empty($job_after['link_id'])) $note .= ', link #' . (int)$job_after['link_id'] . ' wired';
+            $note .= ', customer set active.';
+        }
         flash('success', 'Install signed off — audit log entry written.' . $note);
     }
     elseif ($action === 'cancel') {
@@ -273,6 +288,21 @@ $gmaps   = ($job['customer_lat'] !== null && $job['customer_lng'] !== null)
       <label>CPE model
         <input type="text" name="cpe_model" value="<?= iv_h($job['cpe_model']) ?>" placeholder="e.g. NanoStation 5AC Loco" <?= $is_open ? '' : 'disabled' ?>>
       </label>
+      <?php
+        /* Vendor pick: blank lets install_job_provision_cpe() infer it
+           from the model string. We render the inferred guess as a hint
+           so the tech sees what'll be used if they don't override. */
+        $cpe_vendor_now = (string)($job['cpe_vendor'] ?? '');
+        $cpe_vendor_inf = $cpe_vendor_now === '' ? install_vendor_for_model((string)$job['cpe_model']) : '';
+      ?>
+      <label>CPE vendor
+        <select name="cpe_vendor" <?= $is_open ? '' : 'disabled' ?>>
+          <option value="">— infer from model<?= $cpe_vendor_inf !== '' ? ' (' . iv_h($cpe_vendor_inf) . ')' : '' ?> —</option>
+          <?php foreach (['ubiquiti'=>'Ubiquiti','mikrotik'=>'MikroTik','cambium'=>'Cambium','mimosa'=>'Mimosa','other'=>'Other'] as $v=>$lab): ?>
+            <option value="<?= iv_h($v) ?>" <?= $cpe_vendor_now === $v ? 'selected' : '' ?>><?= iv_h($lab) ?></option>
+          <?php endforeach; ?>
+        </select>
+      </label>
       <label>CPE MAC
         <input type="text" name="cpe_mac" value="<?= iv_h($job['cpe_mac']) ?>" placeholder="AA:BB:CC:11:22:33" <?= $is_open ? '' : 'disabled' ?>>
       </label>
@@ -335,6 +365,19 @@ $gmaps   = ($job['customer_lat'] !== null && $job['customer_lng'] !== null)
       </a>
     <?php endif; ?>
 
+    <?php if (!empty($job['device_id']) || !empty($job['link_id'])): ?>
+      <hr style="border:0;border-top:1px solid #1c2638;margin:12px 0;">
+      <div class="lv-label" style="font-size:11px;margin-bottom:4px;">Provisioned by sign-off</div>
+      <?php if (!empty($job['device_id'])): ?>
+        <div class="lv-row"><span><b>CPE device</b></span>
+          <span><a href="/admin/device-view.php?id=<?= (int)$job['device_id'] ?>">device #<?= (int)$job['device_id'] ?> ↗</a></span></div>
+      <?php endif; ?>
+      <?php if (!empty($job['link_id'])): ?>
+        <div class="lv-row"><span><b>Wireless link</b></span>
+          <span><a href="/admin/link-view.php?id=<?= (int)$job['link_id'] ?>">link #<?= (int)$job['link_id'] ?> ↗</a></span></div>
+      <?php endif; ?>
+    <?php endif; ?>
+
     <?php if ($is_open): ?>
       <hr style="border:0;border-top:1px solid #1c2638;margin:12px 0;">
       <div style="display:flex;flex-wrap:wrap;gap:8px;">
@@ -373,6 +416,7 @@ $gmaps   = ($job['customer_lat'] !== null && $job['customer_lng'] !== null)
             <small class="muted" style="margin-left:6px;"><?= iv_h($radius['reason']) ?></small>
           <?php endif; ?>
         </span></div>
+      <?php
         $thresholds_text = sprintf(
             'Targets: signal ≥ %d dBm, SNR ≥ %d dB. Marginal at signal %d / SNR %d.',
             INSTALL_SIGNAL_DBM_OK, INSTALL_SNR_DB_OK,

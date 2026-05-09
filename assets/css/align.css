@@ -1,134 +1,388 @@
-/* Antenna alignment meter — mobile-first dark UI for installers on a
-   roof. Big tap targets, large readable numbers in sunlight, no nav
-   chrome that would steal screen real estate. */
+/* Antenna alignment meter — dark, dense, glance-friendly UI for an
+   installer on a roof. Mobile-first but sized so it works on a laptop
+   too: numbers stay readable from arm's length, cards never grow taller
+   than they need to be, and the no-data / error states are visually
+   distinct from real readings.
 
+   Element naming preserved (al-bar, al-stat, al-big, …) so admin/align.php
+   and assets/js/align.js don't need to change. */
+
+/* ---------------------------------------------------------- tokens */
 :root {
-  --bg:#0a0e1a; --fg:#e7eef7; --muted:#7a8499; --panel:#121a2a;
-  --line:#1c2638; --line2:#2c3850;
-  --good:#4ade80; --warn:#e8a814; --bad:#ff5470;
+  --bg:        #0a0e1a;
+  --panel:     #121a2a;
+  --panel-2:   #0e1524;
+  --line:      #1c2638;
+  --line-2:    #2c3850;
+  --fg:        #e7eef7;
+  --fg-dim:    #a8b3c7;
+  --muted:     #6e7a91;
+  --good:      #4ade80;
+  --warn:      #e8a814;
+  --bad:       #ff5470;
+  --busy:      #2c80ff;
+
+  --radius:    14px;
+  --radius-sm: 10px;
+  --gap:       12px;
 }
 
 * { box-sizing: border-box; }
+
 html, body {
-  margin: 0; padding: 0;
-  background: var(--bg); color: var(--fg);
-  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto,
+               "Helvetica Neue", Arial, sans-serif;
+  font-size: 16px;
+  line-height: 1.45;
   -webkit-text-size-adjust: 100%;
-  min-height: 100vh; min-height: 100dvh;
+  min-height: 100vh;
+  min-height: 100dvh;
   overscroll-behavior: none;
 }
 
+/* ---------------------------------------------------------- header */
+/* Sticky bar at the top: back link · customer/AP titles · sound toggle.
+   Min-height keeps the bar tall enough that h1 + subtitle never visually
+   clip — even when the browser strips the safe-area inset on desktop. */
 .al-bar {
-  display: flex; align-items: center; gap: 12px;
-  padding: calc(env(safe-area-inset-top, 0px) + 10px) 14px 10px;
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 56px;
+  padding: 8px 14px;
+  padding-top: max(8px, env(safe-area-inset-top, 0px));
   background: var(--panel);
   border-bottom: 1px solid var(--line);
-  position: sticky; top: 0; z-index: 5;
 }
-.al-titles { flex: 1; min-width: 0; }
-.al-titles h1 {
-  margin: 0; font-size: 16px; font-weight: 600;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
-}
-.al-titles small { color: var(--muted); font-size: 11px; }
+
 .al-back {
-  font-size: 26px; line-height: 1; color: var(--fg);
-  text-decoration: none; padding: 4px 10px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  font-size: 22px;
+  line-height: 1;
+  color: var(--fg);
+  text-decoration: none;
+  border-radius: 8px;
 }
+.al-back:hover { background: var(--line); }
+
+.al-titles {
+  flex: 1 1 auto;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+}
+.al-titles h1 {
+  margin: 0;
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.al-titles small {
+  display: block;
+  font-size: 12px;
+  line-height: 1.25;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
 .al-btn-ghost {
-  background: transparent; border: 1px solid var(--line2); color: var(--fg);
-  font-size: 18px; padding: 6px 10px; border-radius: 8px;
-  min-width: 44px; min-height: 36px;
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 40px;
+  min-height: 36px;
+  padding: 6px 10px;
+  font-size: 18px;
+  background: transparent;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  color: var(--fg);
+  cursor: pointer;
 }
+.al-btn-ghost:hover  { background: var(--line); }
+.al-btn-ghost:active { transform: scale(.98); }
 
+/* ---------------------------------------------------------- layout */
+/* Two-up cards from the start when there's any room (>= 540px). On
+   phones we stack. The top metric grid uses CSS grid so SIGNAL and SNR
+   are always equal width; the meta row below uses its own grid so it
+   stays readable on narrow screens. */
 .al-main {
+  max-width: 760px;
+  margin: 0 auto;
   padding: 14px;
-  display: flex; flex-direction: column; gap: 14px;
-  max-width: 640px; margin: 0 auto;
   padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 24px);
+  display: grid;
+  gap: var(--gap);
+  grid-template-columns: 1fr;
 }
 
-.al-stat {
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: 14px; padding: 18px 16px 14px;
-  text-align: center;
+@media (min-width: 540px) {
+  .al-main {
+    grid-template-columns: 1fr 1fr;
+  }
+  .al-meta,
+  .al-status-row,
+  .al-debug { grid-column: 1 / -1; }
 }
-.al-label {
-  font-size: 11px; letter-spacing: 1.5px; text-transform: uppercase;
+
+/* ---------------------------------------------------- metric card */
+.al-stat {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 14px 16px 12px;
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-height: 0;
+}
+.al-stat .al-label {
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 1.5px;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin: 0;
+}
+
+/* The big number. clamp() keeps it readable on desktop without going
+   absurd (the 88px-on-a-laptop em-dash issue from the old stylesheet).
+   tabular-nums + min-height stops the card from jumping when "—"
+   becomes "-65". */
+.al-big {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -1.5px;
+  font-size: clamp(44px, 9vw, 64px);
+  line-height: 1.05;
+  min-height: 1.1em;
+  margin: 2px 0 0;
+  color: var(--fg);
+}
+/* Empty state: JS leaves textContent blank when there's no reading.
+   Pseudo-element paints a small muted dash so the card looks
+   intentional, not broken. */
+.al-big:empty::before {
+  content: "—";
+  font-size: 0.45em;
+  font-weight: 400;
+  letter-spacing: 0;
   color: var(--muted);
 }
-.al-big {
-  font-size: 88px; font-weight: 700; line-height: 1;
-  margin: 4px 0 0; font-variant-numeric: tabular-nums;
-  letter-spacing: -2px;
+.al-stat .al-unit {
+  font-size: 12px;
+  color: var(--muted);
+  margin-top: -2px;
+  letter-spacing: 0.5px;
 }
-.al-unit { font-size: 13px; color: var(--muted); margin-top: 2px; }
-.al-bar {
-  background: #060912; height: 12px; border-radius: 6px;
-  overflow: hidden; margin-top: 12px; border: 1px solid var(--line);
+
+/* The thin progress bar under each big number. Clear borders so it's
+   obviously a meter even when it's at 0%. The fill colour is set
+   inline by the JS based on signal/SNR thresholds. */
+.al-stat .al-bar {
+  position: static;
+  display: block;
+  height: 10px;
+  margin: 8px 0 0;
+  padding: 0;
+  background: var(--panel-2);
+  border: 1px solid var(--line-2);
+  border-radius: 6px;
+  overflow: hidden;
+  z-index: auto;
 }
 .al-bar-fill {
-  height: 100%; width: 0%; background: var(--good);
-  transition: width .25s ease, background .25s ease;
+  display: block;
+  height: 100%;
+  width: 0%;
+  background: var(--good);
+  border-radius: inherit;
+  transition: width .3s ease, background-color .3s ease;
 }
-.al-peak { font-size: 12px; color: var(--muted); margin-top: 8px; }
 
-.al-meta {
-  background: var(--panel); border: 1px solid var(--line);
-  border-radius: 14px; padding: 14px;
-  display: grid; grid-template-columns: 1fr 1fr; gap: 10px 16px;
-  font-size: 14px;
-}
-.al-meta > div { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
-.al-meta-k {
-  font-size: 10px; letter-spacing: 1px; text-transform: uppercase;
+.al-peak {
+  font-size: 11px;
   color: var(--muted);
+  margin-top: 4px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---------------------------------------------------- meta tiles */
+.al-meta {
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 12px 14px;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 18px;
+}
+@media (min-width: 540px) {
+  .al-meta { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+
+.al-meta > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+.al-meta-k {
+  font-size: 10px;
+  letter-spacing: 1px;
+  text-transform: uppercase;
+  color: var(--muted);
+  font-weight: 600;
 }
 .al-meta-v {
-  font-size: 16px; font-variant-numeric: tabular-nums;
-  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  font-size: 14px;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
-.al-meta-v code { font-size: 12px; color: var(--fg); }
+.al-meta-v code {
+  font-family: ui-monospace, SF Mono, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--fg-dim);
+  background: var(--panel-2);
+  padding: 2px 6px;
+  border-radius: 4px;
+}
 
+/* ---------------------------------------------------- status row */
+/* Live / network-error / warning state. The whole card tints with the
+   state colour so a tech glancing at a phone in sunlight catches the
+   error without reading the dot. */
 .al-status-row {
-  display: flex; align-items: center; gap: 8px;
-  padding: 8px 12px; font-size: 12px; color: var(--muted);
-  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  font-size: 13px;
+  color: var(--fg-dim);
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  transition: border-color .2s ease, background .2s ease, color .2s ease;
 }
+.al-status-row:has(.al-dot-err) {
+  border-color: var(--bad);
+  background: linear-gradient(180deg, rgba(255,84,112,0.10), var(--panel));
+  color: var(--fg);
+}
+.al-status-row:has(.al-dot-warn) {
+  border-color: var(--warn);
+  background: linear-gradient(180deg, rgba(232,168,20,0.10), var(--panel));
+  color: var(--fg);
+}
+.al-status-row:has(.al-dot-ok) {
+  border-color: rgba(74,222,128,0.4);
+}
+
+#al-status-text { font-weight: 500; }
 .al-status-spacer { flex: 1; }
 .al-muted { color: var(--muted); font-size: 11px; }
-.al-dot { width: 9px; height: 9px; border-radius: 50%; background: #555; }
-.al-dot.al-dot-ok   { background: var(--good); box-shadow: 0 0 8px var(--good); }
-.al-dot.al-dot-warn { background: var(--warn); box-shadow: 0 0 6px var(--warn); }
-.al-dot.al-dot-err  { background: var(--bad);  box-shadow: 0 0 6px var(--bad); }
-.al-dot.al-dot-busy { background: #2c80ff; }
 
+.al-dot {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #555;
+}
+.al-dot.al-dot-ok   { background: var(--good); box-shadow: 0 0 8px rgba(74,222,128,.6); }
+.al-dot.al-dot-warn { background: var(--warn); box-shadow: 0 0 6px rgba(232,168,20,.6); }
+.al-dot.al-dot-err  { background: var(--bad);  box-shadow: 0 0 6px rgba(255,84,112,.6); }
+.al-dot.al-dot-busy {
+  background: var(--busy);
+  animation: al-pulse 1.2s ease-in-out infinite;
+}
+@keyframes al-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: .5; transform: scale(.85); }
+}
+
+/* ---------------------------------------------------- stations list */
 .al-debug {
-  background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
-  padding: 10px 12px; font-size: 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: 10px 14px;
+  font-size: 13px;
 }
-.al-debug summary { cursor: pointer; color: var(--muted); }
-.al-debug ul { list-style: none; padding: 0; margin: 8px 0 0; }
-.al-debug li {
-  padding: 6px 0; font-family: ui-monospace, SF Mono, Menlo, monospace;
-  border-bottom: 1px solid var(--line);
+.al-debug summary {
+  cursor: pointer;
+  color: var(--fg-dim);
+  user-select: none;
+  list-style: none;
 }
-.al-debug li.is-target { color: var(--good); }
-.al-debug li:last-child { border-bottom: 0; }
+.al-debug summary::-webkit-details-marker { display: none; }
+.al-debug summary::before {
+  content: "▸";
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--muted);
+  transition: transform .15s ease;
+}
+.al-debug[open] summary::before { transform: rotate(90deg); }
 
-@media (min-width: 700px) {
-  .al-main {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-template-areas:
-      "signal snr"
-      "meta   meta"
-      "status status"
-      "debug  debug";
-  }
-  .al-stat:nth-of-type(1) { grid-area: signal; }
-  .al-stat:nth-of-type(2) { grid-area: snr; }
-  .al-meta { grid-area: meta; }
-  .al-status-row { grid-area: status; }
-  .al-debug { grid-area: debug; }
+.al-debug ul {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0 0;
+}
+.al-debug li {
+  padding: 6px 0;
+  font-family: ui-monospace, SF Mono, Menlo, Consolas, monospace;
+  font-size: 12px;
+  color: var(--fg-dim);
+  border-bottom: 1px solid var(--line);
+  word-break: break-all;
+}
+.al-debug li:last-child  { border-bottom: 0; }
+.al-debug li.is-target {
+  color: var(--good);
+  font-weight: 600;
+}
+
+/* ---------------------------------------------------- a11y / motion */
+@media (prefers-reduced-motion: reduce) {
+  .al-bar-fill,
+  .al-status-row,
+  .al-dot.al-dot-busy { transition: none; animation: none; }
+}
+
+/* Focus ring on interactive elements so keyboard users get a visual cue. */
+.al-back:focus-visible,
+.al-btn-ghost:focus-visible,
+.al-debug summary:focus-visible {
+  outline: 2px solid var(--busy);
+  outline-offset: 2px;
 }
