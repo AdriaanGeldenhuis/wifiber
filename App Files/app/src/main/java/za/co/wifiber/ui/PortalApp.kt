@@ -7,7 +7,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -58,7 +57,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import za.co.wifiber.R
@@ -85,13 +83,6 @@ fun PortalApp(
 
     val activeDestination by remember(webState) {
         derivedStateOf { PortalDestination.fromUrl(webState.currentUrl) ?: PortalDestination.Dashboard }
-    }
-    val pageHeading by remember(webState) {
-        derivedStateOf {
-            val title = webState.pageTitle.trim()
-            if (title.isNotEmpty() && !title.equals("WiFiber", true)) title
-            else activeDestination.title
-        }
     }
 
     LaunchedEffect(deepLinkUrl) {
@@ -137,29 +128,11 @@ fun PortalApp(
                         actionIconContentColor = MaterialTheme.colorScheme.onPrimary
                     ),
                     title = {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Image(
-                                painter = painterResource(id = R.drawable.logo_brand),
-                                contentDescription = "WiFiber",
-                                modifier = Modifier.height(32.dp)
-                            )
-                            Column {
-                                Text(
-                                    pageHeading,
-                                    fontWeight = FontWeight.SemiBold,
-                                    style = MaterialTheme.typography.titleMedium
-                                )
-                                if (webState.isLoading && webState.progress in 1..99) {
-                                    Text(
-                                        "Loading… ${webState.progress}%",
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                }
-                            }
-                        }
+                        Image(
+                            painter = painterResource(id = R.drawable.logo_brand),
+                            contentDescription = "WiFiber",
+                            modifier = Modifier.height(36.dp)
+                        )
                     },
                     navigationIcon = {
                         IconButton(onClick = { scope.launch { drawerState.open() } }) {
