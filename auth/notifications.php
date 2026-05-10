@@ -412,3 +412,145 @@ function device_tokens_count(int $user_id, bool $active_only = true): int {
     $stmt->execute([$user_id]);
     return (int)$stmt->fetchColumn();
 }
+
+/**
+ * Step-by-step trace of the FCM pipeline for the "Debug push" admin
+ * surface. Mints (or reuses) an OAuth access token, then fires one real
+ * test message to every active device token belonging to $user_id.
+ *
+ * Returns:
+ *   ['ok' => bool, 'reason' => str, 'trace' => [<step rows>],
+ *    'send' => ['ok'=>..., 'http'=>..., 'body'=>..., 'token_id'=>...] | null]
+ *
+ * The trace rows mirror what _fcm_access_token() records; the send block
+ * is added per-token so the operator sees FCM's HTTP code and response
+ * body verbatim instead of a swallowed "all FCM deliveries failed".
+ */
+function notify_push_diag(int $user_id): array {
+    $config = notify_load_config()['push'] ?? [];
+
+    $trace  = [];
+    $access = _fcm_access_token($config, $trace);
+
+    if ($access === null) {
+        return [
+            'ok'     => false,
+            'reason' => _fcm_trace_summary($trace) ?: 'could not mint OAuth access token',
+            'trace'  => $trace,
+            'send'   => null,
+        ];
+    }
+
+    if ($user_id <= 0) {
+        $trace[] = ['step' => 'target_user', 'ok' => false, 'error' => 'no target user selected'];
+        return [
+            'ok'     => false,
+            'reason' => 'no target user selected',
+            'trace'  => $trace,
+            'send'   => null,
+        ];
+    }
+    $tokens = device_tokens_for_user($user_id);
+    $trace[] = [
+        'step'   => 'tokens',
+        'ok'     => !empty($tokens),
+        'detail' => [
+            'user_id' => $user_id,
+            'count'   => count($tokens),
+        ],
+    ];
+    if (!$tokens) {
+        return [
+            'ok'     => false,
+            'reason' => 'target user has no active device tokens — open the app to register one',
+            'trace'  => $trace,
+            'send'   => null,
+        ];
+    }
+
+    $project = (string)($config['project_id'] ?? '');
+    $url     = "https://fcm.googleapis.com/v1/projects/{$project}/messages:send";
+    $sends   = [];
+    $any_ok  = false;
+
+    foreach ($tokens as $row) {
+        $payload = json_encode([
+            'message' => [
+                'token'        => $row['token'],
+                'notification' => [
+                    'title' => 'WiFIBER debug push',
+                    'body'  => 'Pipeline test from /admin/notifications.php at '
+                             . date('Y-m-d H:i:s'),
+                ],
+                'data' => ['template' => 'debug.push', 'user_id' => (string)$user_id],
+            ],
+        ], JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE);
+
+        $ch = curl_init($url);
+        curl_setopt_array($ch, [
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $payload,
+            CURLOPT_HTTPHEADER     => [
+                'Authorization: Bearer ' . $access,
+                'Content-Type: application/json',
+            ],
+            CURLOPT_TIMEOUT        => 10,
+        ]);
+        $resp = curl_exec($ch);
+        $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $err  = curl_error($ch);
+        curl_close($ch);
+
+        $ok = ($http >= 200 && $http < 300);
+        if ($ok) {
+            device_token_touch((int)$row['id']);
+            $any_ok = true;
+        } else {
+            $blob = strtolower((string)$resp);
+            if ($http === 404
+                || str_contains($blob, 'unregistered')
+                || str_contains($blob, 'invalid_argument')) {
+                device_token_revoke((int)$row['id']);
+            }
+        }
+
+        $sends[] = [
+            'token_id'     => (int)$row['id'],
+            'platform'     => (string)($row['platform'] ?? ''),
+            'device_label' => (string)($row['device_label'] ?? ''),
+            'ok'           => $ok,
+            'http'         => $http,
+            'body'         => mb_substr((string)$resp, 0, 800),
+            'curl_error'   => $err,
+        ];
+    }
+
+    $trace[] = [
+        'step'   => 'fcm_send',
+        'ok'     => $any_ok,
+        'detail' => ['attempted' => count($sends), 'succeeded' => array_sum(array_column($sends, 'ok'))],
+    ];
+
+    return [
+        'ok'     => $any_ok,
+        'reason' => $any_ok ? '' : 'FCM rejected all messages — see per-token body below',
+        'trace'  => $trace,
+        'send'   => $sends,
+    ];
+}
+
+/**
+ * Strip the private_key field out of an array before echoing it. Used
+ * by the debug UI so we never render the secret to the browser.
+ */
+function notify_push_redact(array $row): array {
+    foreach ($row as $k => $v) {
+        if ($k === 'private_key' || $k === 'private_key_id') {
+            $row[$k] = '<redacted>';
+        } elseif (is_array($v)) {
+            $row[$k] = notify_push_redact($v);
+        }
+    }
+    return $row;
+}

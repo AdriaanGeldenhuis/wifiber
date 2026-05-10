@@ -41,12 +41,15 @@ function channel_push_send(array $user, string $template, array $tpl, array $con
         ];
     }
 
-    $access = _fcm_access_token($config);
+    $trace = [];
+    $access = _fcm_access_token($config, $trace);
     if ($access === null) {
+        $why = _fcm_trace_summary($trace);
         return [
             'ok'        => false,
             'recipient' => 'fcm',
-            'error'     => 'fcm not configured (missing service account or project id)',
+            'error'     => $why ?: 'fcm not configured (missing service account or project id)',
+            'meta'      => ['trace' => $trace],
         ];
     }
     $project = (string)($config['project_id'] ?? '');
@@ -125,17 +128,87 @@ function channel_push_send(array $user, string $template, array $tpl, array $con
 
 /**
  * Mint (or reuse) an OAuth 2.0 access token for the FCM HTTP v1 API.
- * The token is signed with the service-account private key and cached
- * in the session for its lifetime so we don't re-sign on every call.
+ *
+ * On success: returns the access_token string and (if $trace was passed)
+ *             appends a row per pipeline step describing what happened.
+ * On failure: returns null. $trace's last row carries the reason — the
+ *             "Debug push" UI in /admin/notifications.php?debug=1 reads
+ *             it directly so the operator sees the actual failure (e.g.
+ *             openssl_sign error, Google's "invalid_grant" body) instead
+ *             of a generic "could not mint" message.
+ *
+ * The trace never echoes the private_key bytes — only metadata (length,
+ * header, looks-pkcs8). client_email and project_id are safe to surface.
  */
-function _fcm_access_token(array $config): ?string {
-    $sa = _fcm_load_service_account($config);
+function _fcm_access_token(array $config, ?array &$trace = null): ?string {
+    if ($trace === null) $trace = [];
+
+    $trace[] = [
+        'step'   => 'config',
+        'ok'     => !empty($config['enabled']) && !empty($config['project_id']),
+        'detail' => [
+            'enabled'    => !empty($config['enabled']),
+            'project_id' => (string)($config['project_id'] ?? ''),
+            'has_path'   => !empty($config['service_account']),
+            'has_inline' => !empty($config['service_account_json']),
+        ],
+    ];
+    if (empty($config['enabled'])) {
+        $trace[count($trace) - 1]['error'] = 'push channel disabled in notify_push config';
+        return null;
+    }
+    if (empty($config['project_id'])) {
+        $trace[count($trace) - 1]['error'] = 'project_id missing from notify_push config';
+        return null;
+    }
+
+    $sa_trace = null;
+    $sa = _fcm_load_service_account($config, $sa_trace);
+    $trace[] = $sa_trace;
     if ($sa === null) return null;
-    if (empty($sa['client_email']) || empty($sa['private_key'])) return null;
+
+    if (empty($sa['client_email']) || empty($sa['private_key'])) {
+        $trace[] = [
+            'step'  => 'service_account_fields',
+            'ok'    => false,
+            'error' => 'service account JSON missing client_email or private_key',
+        ];
+        return null;
+    }
+
+    // Most common breakage: the private_key arrives with literal "\n"
+    // (two chars) instead of real newlines because someone pasted the
+    // service-account JSON into a PHP array or env var. openssl_sign()
+    // returns false on that input with no helpful error. Normalize it.
+    $key_raw  = (string)$sa['private_key'];
+    $key_norm = _fcm_normalize_private_key($key_raw);
+    $key_meta = [
+        'length'        => strlen($key_norm),
+        'header'        => _fcm_key_header($key_norm),
+        'normalized'    => ($key_norm !== $key_raw),
+        'has_real_lf'   => str_contains($key_norm, "\n"),
+        'pem_complete'  => str_contains($key_norm, '-----BEGIN') && str_contains($key_norm, '-----END'),
+    ];
+    $trace[] = [
+        'step'   => 'private_key',
+        'ok'     => $key_meta['pem_complete'] && $key_meta['has_real_lf'],
+        'detail' => $key_meta,
+    ];
+    if (!$key_meta['pem_complete'] || !$key_meta['has_real_lf']) {
+        $trace[count($trace) - 1]['error'] =
+            'private_key does not look like a valid PEM block — '
+            . 'check the JSON has real newlines, not literal \\n';
+        return null;
+    }
 
     $cache_key = '_fcm_token_' . md5((string)$sa['client_email']);
     $cached = $_SESSION[$cache_key] ?? null;
     if (is_array($cached) && ($cached['exp'] ?? 0) > time() + 60) {
+        $trace[] = [
+            'step'   => 'cache_hit',
+            'ok'     => true,
+            'detail' => ['expires_in' => (int)$cached['exp'] - time()],
+        ];
         return (string)$cached['access'];
     }
 
@@ -154,13 +227,25 @@ function _fcm_access_token(array $config): ?string {
     ];
     $signing_input = implode('.', $segments);
     $signature = '';
-    $ok = openssl_sign(
-        $signing_input,
-        $signature,
-        (string)$sa['private_key'],
-        OPENSSL_ALGO_SHA256
-    );
-    if (!$ok) return null;
+    // Drain any prior errors from the OpenSSL queue so we report a clean signal.
+    while (openssl_error_string() !== false) { /* drain */ }
+    $ok = openssl_sign($signing_input, $signature, $key_norm, OPENSSL_ALGO_SHA256);
+    if (!$ok) {
+        $errs = [];
+        while (($e = openssl_error_string()) !== false) $errs[] = $e;
+        $trace[] = [
+            'step'   => 'jwt_sign',
+            'ok'     => false,
+            'error'  => 'openssl_sign() failed — private_key cannot be parsed by OpenSSL',
+            'detail' => ['openssl_errors' => $errs],
+        ];
+        return null;
+    }
+    $trace[] = [
+        'step'   => 'jwt_sign',
+        'ok'     => true,
+        'detail' => ['alg' => 'RS256', 'sig_bytes' => strlen($signature)],
+    ];
     $jwt = $signing_input . '.' . _fcm_b64url($signature);
 
     $ch = curl_init('https://oauth2.googleapis.com/token');
@@ -175,30 +260,166 @@ function _fcm_access_token(array $config): ?string {
     ]);
     $resp = curl_exec($ch);
     $http = (int)curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $curl_err = curl_error($ch);
     curl_close($ch);
-    if ($http !== 200) return null;
+
+    if ($resp === false || $http === 0) {
+        $trace[] = [
+            'step'   => 'oauth_post',
+            'ok'     => false,
+            'error'  => 'network error talking to oauth2.googleapis.com: ' . $curl_err,
+            'detail' => ['http' => $http],
+        ];
+        return null;
+    }
+    if ($http !== 200) {
+        $trace[] = [
+            'step'   => 'oauth_post',
+            'ok'     => false,
+            'error'  => 'Google rejected the JWT (HTTP ' . $http . ') — ' . _fcm_oauth_hint($resp),
+            'detail' => [
+                'http' => $http,
+                'body' => mb_substr((string)$resp, 0, 800),
+            ],
+        ];
+        return null;
+    }
     $j = json_decode((string)$resp, true);
-    if (empty($j['access_token'])) return null;
+    if (empty($j['access_token'])) {
+        $trace[] = [
+            'step'   => 'oauth_post',
+            'ok'     => false,
+            'error'  => 'OAuth 200 but no access_token in body',
+            'detail' => ['body' => mb_substr((string)$resp, 0, 800)],
+        ];
+        return null;
+    }
 
     $_SESSION[$cache_key] = [
         'access' => $j['access_token'],
         'exp'    => $now + (int)($j['expires_in'] ?? 3600),
     ];
+    $trace[] = [
+        'step'   => 'oauth_post',
+        'ok'     => true,
+        'detail' => [
+            'http'       => $http,
+            'expires_in' => (int)($j['expires_in'] ?? 3600),
+        ],
+    ];
     return (string)$j['access_token'];
 }
 
-function _fcm_load_service_account(array $config): ?array {
+function _fcm_load_service_account(array $config, ?array &$trace = null): ?array {
     if (!empty($config['service_account_json'])) {
-        $j = json_decode((string)$config['service_account_json'], true);
-        return is_array($j) ? $j : null;
+        $raw = (string)$config['service_account_json'];
+        $j = json_decode($raw, true);
+        $trace = [
+            'step'   => 'service_account',
+            'ok'     => is_array($j),
+            'detail' => [
+                'source'       => 'inline',
+                'bytes'        => strlen($raw),
+                'client_email' => is_array($j) ? (string)($j['client_email'] ?? '') : '',
+                'project_id'   => is_array($j) ? (string)($j['project_id']   ?? '') : '',
+            ],
+        ];
+        if (!is_array($j)) {
+            $trace['error'] = 'service_account_json could not be parsed: '
+                            . json_last_error_msg();
+            return null;
+        }
+        return $j;
     }
     $path = (string)($config['service_account'] ?? '');
-    if ($path === '' || !is_file($path) || !is_readable($path)) return null;
+    $trace = [
+        'step'   => 'service_account',
+        'ok'     => false,
+        'detail' => ['source' => 'path', 'path' => $path],
+    ];
+    if ($path === '') {
+        $trace['error'] = 'no service_account path or service_account_json configured';
+        return null;
+    }
+    if (!is_file($path)) {
+        $trace['error'] = 'service_account file does not exist: ' . $path;
+        return null;
+    }
+    if (!is_readable($path)) {
+        $trace['error'] = 'service_account file is not readable by the web user: ' . $path;
+        return null;
+    }
     $raw = (string)@file_get_contents($path);
     $j = json_decode($raw, true);
-    return is_array($j) ? $j : null;
+    $trace['detail']['bytes'] = strlen($raw);
+    if (!is_array($j)) {
+        $trace['error'] = 'service_account file is not valid JSON: ' . json_last_error_msg();
+        return null;
+    }
+    $trace['ok'] = true;
+    $trace['detail']['client_email'] = (string)($j['client_email'] ?? '');
+    $trace['detail']['project_id']   = (string)($j['project_id']   ?? '');
+    return $j;
 }
 
 function _fcm_b64url(string $s): string {
     return rtrim(strtr(base64_encode($s), '+/', '-_'), '=');
+}
+
+/**
+ * Repair the most common ways a service-account private_key gets mangled
+ * between Firebase Console and the running web server:
+ *   - literal "\n" two-char sequences instead of real newlines (env vars,
+ *     PHP single-quoted strings)
+ *   - Windows CRLF line endings
+ *   - UTF-8 BOM at the start of the file
+ *   - leading / trailing whitespace
+ */
+function _fcm_normalize_private_key(string $key): string {
+    if (str_starts_with($key, "\xEF\xBB\xBF")) $key = substr($key, 3);
+    $key = str_replace(["\r\n", "\r"], "\n", $key);
+    if (!str_contains($key, "\n") && str_contains($key, '\\n')) {
+        $key = str_replace('\\n', "\n", $key);
+    }
+    return trim($key) . "\n";
+}
+
+function _fcm_key_header(string $key): string {
+    foreach (explode("\n", $key) as $line) {
+        $line = trim($line);
+        if ($line !== '') return $line;
+    }
+    return '';
+}
+
+/**
+ * Translate Google's OAuth error JSON into a one-line operator hint.
+ * The full body is also stored in the trace for the curious.
+ */
+function _fcm_oauth_hint(string $body): string {
+    $j = json_decode($body, true);
+    if (!is_array($j)) return 'see body';
+    $code = (string)($j['error'] ?? '');
+    $desc = (string)($j['error_description'] ?? '');
+    return match ($code) {
+        'invalid_grant'  => 'invalid_grant — usually clock skew on this server, or the service-account key was rotated/revoked in Firebase Console',
+        'invalid_client' => 'invalid_client — the service account no longer exists or has been disabled',
+        'invalid_scope'  => 'invalid_scope — JWT scope must be https://www.googleapis.com/auth/firebase.messaging',
+        ''               => $desc ?: 'see body',
+        default          => $code . ($desc ? ' — ' . $desc : ''),
+    };
+}
+
+/**
+ * Pull the human-readable failure reason out of a trace produced by
+ * _fcm_access_token() / channel_push_send(). Used by the notification
+ * log so a single sql query tells the operator why a push failed.
+ */
+function _fcm_trace_summary(array $trace): string {
+    for ($i = count($trace) - 1; $i >= 0; $i--) {
+        $row = $trace[$i];
+        if (!empty($row['ok'])) continue;
+        if (!empty($row['error'])) return (string)$row['error'];
+    }
+    return '';
 }
