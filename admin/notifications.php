@@ -32,6 +32,20 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             flash('success', 'Token revoked. The next app launch on that device will register a fresh one.');
         }
     }
+    elseif ($action === 'push_debug') {
+        require_once __DIR__ . '/../auth/channels/push.php';
+        $target_id = (int)($_POST['target_user_id'] ?? 0);
+        if ($target_id <= 0) $target_id = (int)$user['id'];
+        $debug = push_debug($target_id);
+        $debug['target_user_id'] = $target_id;
+        $_SESSION['_push_debug'] = $debug;
+        audit_log('push.debug', [
+            'target_type' => 'user', 'target_id' => $target_id,
+            'meta' => ['ok' => $debug['ok'], 'sent' => $debug['sent'], 'failed' => $debug['failed']],
+        ]);
+        header('Location: /admin/notifications.php?debug=1#push-debug');
+        exit;
+    }
     header('Location: /admin/notifications.php');
     exit;
 }
@@ -332,6 +346,116 @@ $push_configured = !empty(notify_load_config()['push']['enabled']);
     <code>POST /api/v1/push/register</code> (auth: customer session or API token).
     Stale tokens auto-revoke when FCM returns <code>404 UNREGISTERED</code>.
   </p>
+</div>
+
+<div class="portal-card" id="push-debug">
+  <h2>Debug push</h2>
+  <p class="muted small" style="margin-top:0;">
+    Step-by-step trace of the FCM pipeline plus a real test send to the
+    target user's registered devices. Failures show the FCM HTTP code and
+    raw response so you can read the reason directly.
+  </p>
+  <form method="post" class="form" style="display:flex;gap:12px;align-items:flex-end;flex-wrap:wrap;margin-bottom:0;">
+    <?= csrf_field() ?>
+    <input type="hidden" name="action" value="push_debug">
+    <div class="field" style="flex:1;min-width:240px;">
+      <label>Target user</label>
+      <select name="target_user_id">
+        <option value="<?= (int)$user['id'] ?>">— me (<?= $h($user['username'] ?? '') ?>) —</option>
+        <?php
+          $targets = $pdo->query(
+            "SELECT u.id, u.username, u.name, u.role, COUNT(t.id) AS device_count
+               FROM users u
+               LEFT JOIN device_tokens t ON t.user_id = u.id AND t.is_active = 1
+              GROUP BY u.id
+             HAVING device_count > 0 OR u.role <> 'client'
+              ORDER BY u.role, u.username
+              LIMIT 500"
+          )->fetchAll();
+        ?>
+        <?php foreach ($targets as $t): ?>
+          <option value="<?= (int)$t['id'] ?>">
+            <?= $h($t['username']) ?> &middot; <?= $h($t['role']) ?> &middot; <?= (int)$t['device_count'] ?> device<?= (int)$t['device_count'] === 1 ? '' : 's' ?>
+            <?= $t['name'] ? '— ' . $h($t['name']) : '' ?>
+          </option>
+        <?php endforeach; ?>
+      </select>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Run diagnostic &amp; send test</button>
+    </div>
+  </form>
+
+  <?php
+    $debug = null;
+    if (($_GET['debug'] ?? '') === '1') {
+        $debug = $_SESSION['_push_debug'] ?? null;
+        unset($_SESSION['_push_debug']);
+    }
+  ?>
+  <?php if ($debug): ?>
+    <hr style="border:none;border-top:1px solid var(--border);margin:18px 0;">
+    <h3 style="margin-top:0;">
+      Result:
+      <?php if ($debug['ok']): ?>
+        <span class="status-pill status-paid">delivered to <?= (int)$debug['sent'] ?> device<?= $debug['sent'] === 1 ? '' : 's' ?></span>
+      <?php else: ?>
+        <span class="status-pill status-overdue">failed</span>
+      <?php endif; ?>
+    </h3>
+    <?php if (!empty($debug['error'])): ?>
+      <div class="alert alert-error" style="margin:12px 0;">
+        <strong>Stopped at:</strong> <?= $h($debug['error']) ?>
+      </div>
+    <?php endif; ?>
+
+    <h4 style="margin-bottom:6px;">Pipeline trace</h4>
+    <ol class="kv" style="margin:0 0 14px;padding-left:20px;">
+      <?php foreach ($debug['log'] as $entry): ?>
+        <li>
+          <strong><?= $h($entry['step']) ?></strong>
+          <?php $detail = $entry; unset($detail['step']); ?>
+          <code style="display:block;background:var(--bg-elev);padding:6px 10px;border-radius:6px;margin-top:4px;font-size:.78rem;">
+            <?= $h(json_encode($detail, JSON_UNESCAPED_SLASHES | JSON_PRETTY_PRINT)) ?>
+          </code>
+        </li>
+      <?php endforeach; ?>
+    </ol>
+
+    <?php if (!empty($debug['results'])): ?>
+      <h4 style="margin-bottom:6px;">Per-device results</h4>
+      <div class="table-scroll">
+        <table class="data-table">
+          <thead>
+            <tr>
+              <th>Token</th>
+              <th>Platform</th>
+              <th>Device</th>
+              <th>HTTP</th>
+              <th>Response</th>
+            </tr>
+          </thead>
+          <tbody>
+            <?php foreach ($debug['results'] as $r): ?>
+              <tr>
+                <td><small class="muted">#<?= (int)$r['token_id'] ?> &middot; <?= $h($r['token_preview']) ?></small></td>
+                <td><?= $h($r['platform']) ?></td>
+                <td><small class="muted"><?= $h($r['device_label'] ?: '—') ?></small></td>
+                <td>
+                  <?php if ($r['ok']): ?>
+                    <span class="status-pill status-paid"><?= (int)$r['http'] ?></span>
+                  <?php else: ?>
+                    <span class="status-pill status-overdue"><?= (int)$r['http'] ?: 'ERR' ?></span>
+                  <?php endif; ?>
+                </td>
+                <td><pre style="margin:0;white-space:pre-wrap;font-size:.75rem;max-width:520px;"><?= $h($r['curl_error'] ? 'curl error: '.$r['curl_error'] : ($r['response'] ?: '(empty)')) ?></pre></td>
+              </tr>
+            <?php endforeach; ?>
+          </tbody>
+        </table>
+      </div>
+    <?php endif; ?>
+  <?php endif; ?>
 </div>
 
 <?php require __DIR__ . '/../auth/portal-footer.php'; ?>
