@@ -353,6 +353,7 @@ private fun shortLabel(dest: PortalDestination): String = when (dest) {
     PortalDestination.Profile           -> "Profile"
     PortalDestination.StaffDashboard    -> "Home"
     PortalDestination.StaffInstalls     -> "Installs"
+    PortalDestination.StaffAlignment    -> "Align"
     PortalDestination.StaffTickets      -> "Tickets"
     PortalDestination.StaffMap          -> "Map"
     PortalDestination.StaffNotifications -> "Alerts"

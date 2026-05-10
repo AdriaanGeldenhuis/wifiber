@@ -57,9 +57,10 @@ enum class PortalDestination(
     /* -------- Staff (admin panel) -------- */
     StaffDashboard("staff.dashboard", "Dashboard", "/admin/", Icons.Filled.Dashboard, PortalGroup.Home, Audience.Staff, true),
     StaffInstalls("staff.installs", "Installs", "/admin/installs.php", Icons.Filled.Build, PortalGroup.Operations, Audience.Staff, true),
+    StaffAlignment("staff.alignment", "Alignment", "/admin/align.php", Icons.Filled.NetworkCheck, PortalGroup.Operations, Audience.Staff, true),
     StaffTickets("staff.tickets", "Tickets", "/admin/tickets.php", Icons.Filled.SupportAgent, PortalGroup.Operations, Audience.Staff, true),
     StaffMap("staff.map", "Network map", "/admin/map.php", Icons.Filled.Map, PortalGroup.Network, Audience.Staff, true),
-    StaffNotifications("staff.notifications", "Notifications", "/admin/notifications.php", Icons.Filled.Notifications, PortalGroup.Operations, Audience.Staff, true),
+    StaffNotifications("staff.notifications", "Notifications", "/admin/notifications.php", Icons.Filled.Notifications, PortalGroup.Operations, Audience.Staff),
     StaffClients("staff.clients", "Clients", "/admin/clients.php", Icons.Filled.People, PortalGroup.Operations, Audience.Staff),
     StaffInbox("staff.inbox", "Inbox", "/admin/inbox.php", Icons.Filled.Inbox, PortalGroup.Operations, Audience.Staff),
     StaffOutages("staff.outages", "Outages", "/admin/outages.php", Icons.Filled.Warning, PortalGroup.Network, Audience.Staff),
