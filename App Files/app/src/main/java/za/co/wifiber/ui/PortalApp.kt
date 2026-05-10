@@ -47,6 +47,7 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -60,8 +61,10 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import za.co.wifiber.R
+import za.co.wifiber.nav.Audience
 import za.co.wifiber.nav.PortalDestination
 import za.co.wifiber.nav.PortalGroup
+import za.co.wifiber.notifications.RoleObserver
 import za.co.wifiber.web.PortalWebView
 import za.co.wifiber.web.rememberPortalWebState
 
@@ -81,9 +84,19 @@ fun PortalApp(
     val context = LocalContext.current
     var moreMenuOpen by remember { mutableStateOf(false) }
 
-    val activeDestination by remember(webState) {
-        derivedStateOf { PortalDestination.fromUrl(webState.currentUrl) ?: PortalDestination.Dashboard }
+    // Role drives which nav set we render. RoleObserver pings
+    // /account/api/whoami.php on every page load (see PortalWebView's
+    // onPageFinished) so this stays in sync with the WebView session.
+    val userRole by RoleObserver.role.collectAsState()
+    val isStaff = PortalDestination.audienceFor(userRole) == Audience.Staff
+
+    val activeDestination by remember(webState, userRole) {
+        derivedStateOf {
+            PortalDestination.fromUrl(webState.currentUrl, userRole)
+                ?: PortalDestination.defaultFor(userRole)
+        }
     }
+    val bottomBarItems = remember(userRole) { PortalDestination.bottomBarFor(userRole) }
 
     LaunchedEffect(deepLinkUrl) {
         val target = deepLinkUrl ?: return@LaunchedEffect
@@ -106,6 +119,7 @@ fun PortalApp(
         drawerContent = {
             PortalDrawer(
                 active = activeDestination,
+                isStaff = isStaff,
                 onNavigate = { dest ->
                     scope.launch { drawerState.close() }
                     webState.loadUrl(dest.urlOn(portalHost))
@@ -202,7 +216,7 @@ fun PortalApp(
             },
             bottomBar = {
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                    PortalDestination.bottomBar.forEach { dest ->
+                    bottomBarItems.forEach { dest ->
                         NavigationBarItem(
                             selected = activeDestination == dest ||
                                     (dest == PortalDestination.Invoices && activeDestination == PortalDestination.Payments) ||
@@ -220,13 +234,18 @@ fun PortalApp(
                 }
             },
             floatingActionButton = {
-                ExtendedFloatingActionButton(
-                    onClick = { webState.loadUrl(PortalDestination.Tickets.urlOn(portalHost)) },
-                    containerColor = MaterialTheme.colorScheme.tertiary,
-                    contentColor = MaterialTheme.colorScheme.onTertiary,
-                    icon = { Icon(Icons.Filled.SupportAgent, contentDescription = null) },
-                    text = { Text(stringRes(R.string.action_new_ticket)) }
-                )
+                // The FAB is customer-shaped ("New ticket"). For staff
+                // it'd cover the install/ticket lists they actually
+                // need to see, so we hide it.
+                if (!isStaff) {
+                    ExtendedFloatingActionButton(
+                        onClick = { webState.loadUrl(PortalDestination.Tickets.urlOn(portalHost)) },
+                        containerColor = MaterialTheme.colorScheme.tertiary,
+                        contentColor = MaterialTheme.colorScheme.onTertiary,
+                        icon = { Icon(Icons.Filled.SupportAgent, contentDescription = null) },
+                        text = { Text(stringRes(R.string.action_new_ticket)) }
+                    )
+                }
             }
         ) { padding ->
             Box(
@@ -247,9 +266,11 @@ fun PortalApp(
 @Composable
 private fun PortalDrawer(
     active: PortalDestination,
+    isStaff: Boolean,
     onNavigate: (PortalDestination) -> Unit,
     onSignOut: () -> Unit
 ) {
+    val audience = if (isStaff) Audience.Staff else Audience.Client
     ModalDrawerSheet(
         modifier = Modifier.width(300.dp)
     ) {
@@ -273,7 +294,7 @@ private fun PortalDrawer(
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "Customer portal",
+                        text = if (isStaff) "Staff portal" else "Customer portal",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                     )
@@ -288,7 +309,7 @@ private fun PortalDrawer(
                 .padding(horizontal = 12.dp, vertical = 4.dp)
         ) {
             PortalGroup.entries.forEach { group ->
-                val items = PortalDestination.entries.filter { it.group == group }
+                val items = PortalDestination.entries.filter { it.group == group && it.isFor(audience) }
                 if (items.isEmpty()) return@forEach
                 Text(
                     text = group.title,
@@ -324,11 +345,16 @@ private fun PortalDrawer(
 }
 
 private fun shortLabel(dest: PortalDestination): String = when (dest) {
-    PortalDestination.Dashboard -> "Home"
-    PortalDestination.Service -> "Service"
-    PortalDestination.Invoices -> "Billing"
-    PortalDestination.Tickets -> "Support"
-    PortalDestination.Profile -> "Profile"
+    PortalDestination.Dashboard         -> "Home"
+    PortalDestination.Service           -> "Service"
+    PortalDestination.Invoices          -> "Billing"
+    PortalDestination.Tickets           -> "Support"
+    PortalDestination.Profile           -> "Profile"
+    PortalDestination.StaffDashboard    -> "Home"
+    PortalDestination.StaffInstalls     -> "Installs"
+    PortalDestination.StaffTickets      -> "Tickets"
+    PortalDestination.StaffMap          -> "Map"
+    PortalDestination.StaffNotifications -> "Alerts"
     else -> dest.title
 }
 

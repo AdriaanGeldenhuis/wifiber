@@ -177,6 +177,11 @@ fun PortalWebView(
                                     }
                                 }
                         }
+                        // Sync the signed-in role so the chrome can swap
+                        // between client and staff nav sets without
+                        // waiting for the next app foreground.
+                        za.co.wifiber.notifications.RoleObserver
+                            .refresh(ctx.applicationContext)
                     }
 
                     override fun onReceivedError(

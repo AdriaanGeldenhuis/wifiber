@@ -17,6 +17,7 @@ import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.flow.MutableStateFlow
 import za.co.wifiber.firebase.FirebaseSetup
 import za.co.wifiber.notifications.PushTokenRegistrar
+import za.co.wifiber.notifications.RoleObserver
 import za.co.wifiber.ui.PortalApp
 import za.co.wifiber.ui.theme.WiFiberTheme
 
@@ -73,6 +74,9 @@ class MainActivity : ComponentActivity() {
         // app comes to the front — first call after login is when the
         // session cookie is finally available.
         registerFcmTokenIfPossible()
+        // Re-fetch the signed-in role too, so a tech who logged in on
+        // the web doesn't open the app to a stale client-shaped nav.
+        RoleObserver.refresh(applicationContext)
     }
 
     private fun extractTargetUrl(intent: Intent?): String? {
