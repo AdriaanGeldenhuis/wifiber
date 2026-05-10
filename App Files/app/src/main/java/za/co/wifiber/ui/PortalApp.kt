@@ -47,7 +47,6 @@ import androidx.compose.material3.TopAppBarDefaults
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -64,7 +63,6 @@ import za.co.wifiber.R
 import za.co.wifiber.nav.Audience
 import za.co.wifiber.nav.PortalDestination
 import za.co.wifiber.nav.PortalGroup
-import za.co.wifiber.notifications.RoleObserver
 import za.co.wifiber.web.PortalWebView
 import za.co.wifiber.web.rememberPortalWebState
 
@@ -84,19 +82,22 @@ fun PortalApp(
     val context = LocalContext.current
     var moreMenuOpen by remember { mutableStateOf(false) }
 
-    // Role drives which nav set we render. RoleObserver pings
-    // /account/api/whoami.php on every page load (see PortalWebView's
-    // onPageFinished) so this stays in sync with the WebView session.
-    val userRole by RoleObserver.role.collectAsState()
-    val isStaff = PortalDestination.audienceFor(userRole) == Audience.Staff
+    // The WebView's current URL is the most reliable signal we have for
+    // which nav to render: anything under /admin/ is staff, anything
+    // else is client. We don't wait for /account/api/whoami.php — the
+    // bar should swap the instant the page loads.
+    val audience by remember(webState) {
+        derivedStateOf { PortalDestination.audienceForUrl(webState.currentUrl) }
+    }
+    val isStaff = audience == Audience.Staff
 
-    val activeDestination by remember(webState, userRole) {
+    val activeDestination by remember(webState, audience) {
         derivedStateOf {
-            PortalDestination.fromUrl(webState.currentUrl, userRole)
-                ?: PortalDestination.defaultFor(userRole)
+            PortalDestination.fromUrl(webState.currentUrl, audience)
+                ?: PortalDestination.defaultFor(audience)
         }
     }
-    val bottomBarItems = remember(userRole) { PortalDestination.bottomBarFor(userRole) }
+    val bottomBarItems = remember(audience) { PortalDestination.bottomBarFor(audience) }
 
     LaunchedEffect(deepLinkUrl) {
         val target = deepLinkUrl ?: return@LaunchedEffect

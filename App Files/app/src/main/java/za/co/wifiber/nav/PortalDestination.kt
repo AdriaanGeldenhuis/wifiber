@@ -80,18 +80,26 @@ enum class PortalDestination(
         fun audienceFor(role: String): Audience =
             if (role.isBlank() || role == "client") Audience.Client else Audience.Staff
 
-        /** Bottom bar items for the given role (left-to-right, in declaration order). */
-        fun bottomBarFor(role: String): List<PortalDestination> {
-            val audience = audienceFor(role)
-            return entries.filter { it.showInBottomBar && it.isFor(audience) }
+        /** URL-based audience — the WebView's current path is the most
+         *  reliable signal we have: anything under /admin/ is staff,
+         *  anything else is client. Used in preference to the server role
+         *  fetch so the bar swaps the moment the page loads, with no
+         *  dependency on /account/api/whoami.php being reachable. */
+        fun audienceForUrl(url: String): Audience {
+            val path = runCatching { android.net.Uri.parse(url).path ?: "" }.getOrDefault("")
+            return if (path.startsWith("/admin/") || path == "/admin") Audience.Staff
+                   else Audience.Client
         }
 
-        /** Resolve the active destination, scoped to the role's audience so
-         *  the shared Profile/Password entries don't get mis-attributed. */
-        fun fromUrl(url: String, role: String = ""): PortalDestination? {
+        /** Bottom bar items for the given audience (left-to-right). */
+        fun bottomBarFor(audience: Audience): List<PortalDestination> =
+            entries.filter { it.showInBottomBar && it.isFor(audience) }
+
+        /** Resolve the active destination, scoped to the audience so the
+         *  shared Profile/Password entries don't get mis-attributed. */
+        fun fromUrl(url: String, audience: Audience): PortalDestination? {
             val rawPath = runCatching { android.net.Uri.parse(url).path ?: "" }.getOrDefault("")
             val path = if (rawPath == "/account") "/account/" else rawPath
-            val audience = audienceFor(role)
             return entries
                 .filter { it.isFor(audience) }
                 .sortedByDescending { it.path.length }
@@ -104,9 +112,9 @@ enum class PortalDestination(
                 }
         }
 
-        /** Default destination for the role — used when fromUrl returns null. */
-        fun defaultFor(role: String): PortalDestination =
-            if (audienceFor(role) == Audience.Staff) StaffDashboard else Dashboard
+        /** Default destination for the audience — used when fromUrl returns null. */
+        fun defaultFor(audience: Audience): PortalDestination =
+            if (audience == Audience.Staff) StaffDashboard else Dashboard
     }
 }
 
