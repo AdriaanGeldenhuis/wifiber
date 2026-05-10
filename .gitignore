@@ -20,6 +20,7 @@ node_modules/
 includes/secrets.php
 data/db.local.php
 data/backup-config.php
+data/fcm-service-account.json
 
 # Runtime data (created in production / local dev, never committed)
 data/users.json
