@@ -21,9 +21,9 @@ const LOCKOUT_SECS    = 900;   // 15 min
 const PW_RESET_TTL    = 3600;  // 1 hour
 const SESSION_NAME    = 'wfsess';
 
-const POST_RATE_LIMIT_MAX    = 30;   // POSTs per IP
-const POST_RATE_LIMIT_WINDOW = 60;   // seconds
-const SESSION_IDLE_TIMEOUT   = 3600; // 1 hour idle -> auto-logout
+const POST_RATE_LIMIT_MAX    = 30;       // POSTs per IP
+const POST_RATE_LIMIT_WINDOW = 60;       // seconds
+const SESSION_LIFETIME       = 2592000;  // 30 days — applies to every user
 
 /* --------------------------------------------------------------- session */
 
@@ -31,8 +31,11 @@ function start_session(): void {
     if (session_status() === PHP_SESSION_ACTIVE) return;
     $secure = !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
     session_name(SESSION_NAME);
+    // Keep the server-side session file alive at least as long as the cookie,
+    // otherwise PHP's GC reaps it within minutes and the cookie becomes useless.
+    @ini_set('session.gc_maxlifetime', (string)SESSION_LIFETIME);
     session_set_cookie_params([
-        'lifetime' => 0,
+        'lifetime' => SESSION_LIFETIME,
         'path'     => '/',
         'domain'   => '',
         'secure'   => $secure,
@@ -456,7 +459,6 @@ function attempt_login(string $username, string $password, string $required_role
     $_SESSION['user_role']      = $user['role'];
     $_SESSION['user_name']      = $user['name'];
     $_SESSION['logged_in_at']   = time();
-    $_SESSION['last_activity']  = time();
 
     update_user((int)$user['id'], function (array $u) {
         $u['last_login'] = date('c');
@@ -484,13 +486,6 @@ function logout(): void {
 
 function current_user(): ?array {
     if (empty($_SESSION['user_id'])) return null;
-    // Idle session timeout — kick the user out if they haven't done anything in an hour.
-    $last = (int)($_SESSION['last_activity'] ?? 0);
-    if ($last > 0 && time() - $last > SESSION_IDLE_TIMEOUT) {
-        logout();
-        return null;
-    }
-    $_SESSION['last_activity'] = time();
     return find_user_by_id((int)$_SESSION['user_id']);
 }
 
