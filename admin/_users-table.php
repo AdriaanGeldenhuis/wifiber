@@ -432,7 +432,7 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
       <?php if (empty($users)): ?>
         <div class="empty-state">
           <div class="empty-icon">+</div>
-          <h3>No <?= htmlspecialchars($role) ?>s yet</h3>
+          <h3>No <?= htmlspecialchars($is_client_view ? 'client' : ($multi_role ? 'staff' : $role)) ?>s yet</h3>
           <p>Use the form below to add the first one. <?= $role === 'client' ? 'A welcome email with login credentials can be sent automatically.' : '' ?></p>
         </div>
       <?php else: ?>
@@ -634,7 +634,14 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
     </div>
 
     <div class="portal-card">
-      <h2>Create new <?= htmlspecialchars($role) ?></h2>
+      <?php
+        // "Create new admin" reads wrong on the Staff page where the
+        // operator might be making a technician — so we show the role
+        // they're actually creating, falling back to a generic word
+        // when the picker is in play.
+        $create_label = $is_client_view ? 'client' : ($multi_role ? 'staff member' : $role);
+      ?>
+      <h2>Create new <?= htmlspecialchars($create_label) ?></h2>
       <?php if ($is_client_view): ?>
         <p class="muted small">Just the basics here. After save you'll land on the full client editor where you can fill in ID number, GPS, equipment, billing day and the rest.</p>
       <?php endif; ?>
@@ -713,7 +720,7 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
           </div>
         <?php endif; ?>
         <div class="form-actions">
-          <button type="submit" class="btn btn-primary">Create <?= htmlspecialchars($role) ?></button>
+          <button type="submit" class="btn btn-primary">Create <?= htmlspecialchars($create_label) ?></button>
         </div>
       </form>
     </div>

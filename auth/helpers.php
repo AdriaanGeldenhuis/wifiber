@@ -301,8 +301,13 @@ function update_user(int $id, callable $patch): bool {
 }
 
 function create_user(string $username, string $password, string $role, string $name, string $email = '', array $extra = []): array {
-    if (!in_array($role, ['admin', 'client'], true)) {
-        throw new InvalidArgumentException("role must be admin or client");
+    // Allow every staff role we recognise plus 'client'. Mirrors
+    // ACL_STAFF_ROLES_FALLBACK so the staff page's role picker can mint
+    // technicians, billing, support and noc_readonly without falling
+    // back to a phpMyAdmin role-flip after the fact.
+    $valid_roles = array_merge(ACL_STAFF_ROLES_FALLBACK, ['client']);
+    if (!in_array($role, $valid_roles, true)) {
+        throw new InvalidArgumentException("role must be one of: " . implode(', ', $valid_roles));
     }
     if (find_user_by_username($username)) {
         throw new RuntimeException("A user with that username already exists.");
