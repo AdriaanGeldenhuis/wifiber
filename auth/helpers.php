@@ -432,14 +432,15 @@ function reset_login_fails(string $ip): void {
     $stmt->execute([$ip]);
 }
 
-function attempt_login(string $username, string $password, string $required_role): ?array {
+function attempt_login(string $username, string $password, string|array $required_role): ?array {
+    $allowed = is_array($required_role) ? $required_role : [$required_role];
     $ip = client_ip();
     if (is_locked_out($ip)) return null;
     $user = find_user_by_username($username);
     $valid = $user && password_verify($password, $user['password_hash'] ?? '');
-    if (!$valid || ($user['role'] ?? '') !== $required_role) {
+    if (!$valid || !in_array($user['role'] ?? '', $allowed, true)) {
         record_login_fail($ip);
-        audit_log('login.fail', ['meta' => ['username' => $username, 'role' => $required_role]]);
+        audit_log('login.fail', ['meta' => ['username' => $username, 'roles' => $allowed]]);
         return null;
     }
     reset_login_fails($ip);
