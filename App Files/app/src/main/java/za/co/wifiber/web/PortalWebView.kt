@@ -165,6 +165,18 @@ fun PortalWebView(
                         state.currentUrl = url.orEmpty()
                         state.canGoBack = view.canGoBack()
                         state.pageTitle = view.title.orEmpty()
+                        // The session cookie only exists after the customer
+                        // signs in — keep retrying token registration until
+                        // PushTokenRegistrar reports success (it dedupes).
+                        runCatching {
+                            com.google.firebase.messaging.FirebaseMessaging.getInstance().token
+                                .addOnSuccessListener { tok ->
+                                    if (!tok.isNullOrBlank()) {
+                                        za.co.wifiber.notifications.PushTokenRegistrar
+                                            .submit(ctx.applicationContext, tok)
+                                    }
+                                }
+                        }
                     }
 
                     override fun onReceivedError(

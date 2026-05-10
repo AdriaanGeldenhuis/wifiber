@@ -13,8 +13,10 @@ import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.core.content.ContextCompat
+import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.flow.MutableStateFlow
 import za.co.wifiber.firebase.FirebaseSetup
+import za.co.wifiber.notifications.PushTokenRegistrar
 import za.co.wifiber.ui.PortalApp
 import za.co.wifiber.ui.theme.WiFiberTheme
 
@@ -65,6 +67,14 @@ class MainActivity : ComponentActivity() {
         extractTargetUrl(intent)?.let { pendingDeepLink.value = it }
     }
 
+    override fun onResume() {
+        super.onResume()
+        // Try to push the current FCM token to the portal each time the
+        // app comes to the front — first call after login is when the
+        // session cookie is finally available.
+        registerFcmTokenIfPossible()
+    }
+
     private fun extractTargetUrl(intent: Intent?): String? {
         if (intent == null) return null
         val data = intent.data ?: return null
@@ -90,8 +100,12 @@ class MainActivity : ComponentActivity() {
     private fun registerFcmTokenIfPossible() {
         if (!FirebaseSetup.isReady) return
         runCatching {
-            com.google.firebase.messaging.FirebaseMessaging.getInstance().token
-                .addOnCompleteListener { /* token logged via WiFiberMessagingService */ }
+            FirebaseMessaging.getInstance().token.addOnCompleteListener { task ->
+                val token = task.result
+                if (task.isSuccessful && !token.isNullOrBlank()) {
+                    PushTokenRegistrar.submit(applicationContext, token)
+                }
+            }
         }
     }
 }

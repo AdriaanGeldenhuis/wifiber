@@ -13,6 +13,7 @@ swipeRefresh = "1.1.0"
 webkit = "1.12.1"
 coil = "2.7.0"
 firebaseBom = "33.6.0"
+googleServices = "4.4.2"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
@@ -42,3 +43,4 @@ firebase-analytics = { group = "com.google.firebase", name = "firebase-analytics
 android-application = { id = "com.android.application", version.ref = "agp" }
 kotlin-android = { id = "org.jetbrains.kotlin.android", version.ref = "kotlin" }
 kotlin-compose = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
+google-services = { id = "com.google.gms.google-services", version.ref = "googleServices" }
