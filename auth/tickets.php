@@ -347,32 +347,36 @@ function ticket_notify_client(int $ticket_id, int $message_id): array {
     $t = ticket_find($ticket_id);
     $m = ticket_message_find($message_id);
     if (!$t || !$m) return ['ok' => false, 'reason' => 'ticket or message missing'];
-    $email = (string)($t['client_email'] ?? '');
-    if ($email === '' || !filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        return ['ok' => false, 'reason' => 'client has no email'];
-    }
 
-    $site      = load_site_settings();
-    $site_name = $site['name']         ?? 'WiFIBER';
-    $support   = $site['email_support'] ?? 'support@wifiber.co.za';
+    $user = function_exists('find_user_by_id')
+        ? find_user_by_id((int)$t['user_id'])
+        : null;
+    if (!$user) return ['ok' => false, 'reason' => 'client user missing'];
+
+    require_once __DIR__ . '/notifications.php';
+
     $base = (!empty($_SERVER['HTTPS']) ? 'https' : 'http') . '://' . ($_SERVER['HTTP_HOST'] ?? 'wifiber.co.za');
     $url  = rtrim($base, '/') . '/account/tickets.php?id=' . (int)$t['id'];
 
-    $name = $t['client_name'] ?: $t['username'] ?: 'there';
-    $body  = "Hi {$name},\n\n";
-    $body .= "There's a new reply on your support ticket #{$t['id']} — {$t['subject']}.\n\n";
-    $body .= rtrim($m['body']) . "\n\n";
+    $snippet = mb_substr(rtrim((string)$m['body']), 0, 600);
     if (!empty($m['attachment_name'])) {
-        $body .= "Attachment: {$m['attachment_name']}\n\n";
+        $snippet .= "\n\nAttachment: " . $m['attachment_name'];
     }
-    $body .= "View the full thread: {$url}\n\n";
-    $body .= "— The {$site_name} team\n";
 
-    $headers = "From: {$site_name} <no-reply@" . preg_replace('/^www\./', '', $_SERVER['HTTP_HOST'] ?? 'wifiber.co.za') . ">\r\n"
-             . "Reply-To: {$support}\r\n"
-             . "X-Mailer: WiFIBER-Tickets\r\n"
-             . "Content-Type: text/plain; charset=UTF-8\r\n";
-
-    $sent = @mail($email, "[Ticket #{$t['id']}] " . $t['subject'], $body, $headers);
-    return ['ok' => (bool)$sent, 'reason' => $sent ? 'sent' : 'mail() failed'];
+    try {
+        $stats = notify_send($user, 'ticket.reply', [
+            'ticket_id'      => (int)$t['id'],
+            'ticket_subject' => (string)$t['subject'],
+            'snippet'        => $snippet,
+            'url'            => $url,
+        ]);
+    } catch (Throwable $e) {
+        return ['ok' => false, 'reason' => 'notify_send threw: ' . $e->getMessage()];
+    }
+    $sent = (int)($stats['sent'] ?? 0);
+    return [
+        'ok'     => $sent > 0,
+        'reason' => $sent > 0 ? 'sent on ' . $sent . ' channel(s)' : 'no channel delivered',
+        'stats'  => $stats,
+    ];
 }

@@ -17,7 +17,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
 
     // Notification opt-in checkboxes (notify_prefs JSON column).
     $prefs = [];
-    foreach (['outage','maintenance','link'] as $g) {
+    foreach (['outage','maintenance','install','ticket','link'] as $g) {
         foreach (['email','sms','whatsapp','push'] as $c) {
             $key = "{$c}_{$g}";
             $prefs[$key] = !empty($_POST['notify'][$key]);
@@ -84,6 +84,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         $groups = [
           'outage'      => 'Outage alerts',
           'maintenance' => 'Planned maintenance',
+          'install'     => 'Install updates',
+          'ticket'      => 'Support ticket replies',
           'link'        => 'Link health (signal drop, slow connection)',
         ];
       ?>
@@ -91,13 +93,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <thead><tr><th style="text-align:left;">&nbsp;</th><th>Email</th><th>SMS</th><th>WhatsApp</th><th>Push <small class="muted">(app)</small></th></tr></thead>
         <tbody>
           <?php foreach ($groups as $g => $label):
-            // Default-on for outage, default-off for the rest.
-            $default = $g === 'outage';
+            // Mirrors notify_user_wants(): outage / install / ticket
+            // default-on across every channel; the rest are email-only
+            // unless the customer ticks them.
+            $always_on = in_array($g, ['outage','install','ticket'], true);
           ?>
             <tr>
               <td><?= htmlspecialchars($label) ?></td>
               <?php foreach (['email','sms','whatsapp','push'] as $c):
                 $key = "{$c}_{$g}";
+                $default = $always_on || $c === 'email';
                 $checked = array_key_exists($key, $current) ? !empty($current[$key]) : $default;
               ?>
                 <td style="text-align:center;">

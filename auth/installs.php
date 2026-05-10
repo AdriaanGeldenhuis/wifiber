@@ -322,6 +322,15 @@ function install_job_save(array $data, ?int $id = null): int {
         'cpe_vendor'   => in_array($data['cpe_vendor'] ?? '', DEVICE_VENDORS, true) ? (string)$data['cpe_vendor'] : '',
     ];
 
+    /* Snapshot the existing row before we touch it so the post-write
+       notifier can see what actually changed (assignment, schedule). */
+    $before = null;
+    if ($id) {
+        $row = pdo()->prepare("SELECT assigned_to, scheduled_at FROM install_jobs WHERE id = ?");
+        $row->execute([$id]);
+        $before = $row->fetch() ?: null;
+    }
+
     if ($id) {
         $stmt = pdo()->prepare(
             "UPDATE install_jobs
@@ -338,6 +347,7 @@ function install_job_save(array $data, ?int $id = null): int {
             'target_type' => 'install_job', 'target_id' => $id,
             'meta' => ['customer_id' => $customer_id],
         ]);
+        _install_job_notify($id, $args, $before);
         return $id;
     }
 
@@ -357,25 +367,83 @@ function install_job_save(array $data, ?int $id = null): int {
         'target_type' => 'install_job', 'target_id' => $new_id,
         'meta' => ['customer_id' => $customer_id],
     ]);
+    _install_job_notify($new_id, $args, null);
+    return $new_id;
+}
 
-    /* Notify the customer if a date has been picked. We deliberately
-       skip notification on the auto-created shell jobs (no scheduled_at
-       yet) so customers don't get an SMS the moment they sign up. */
-    if (!empty($args['scheduled_at']) && is_file(__DIR__ . '/notifications.php')) {
-        require_once __DIR__ . '/notifications.php';
+/* Decide which install.* notifications to fire and to whom, based on
+   what changed between $before (old row, or null on insert) and $args
+   (new values). Customers get install.scheduled / install.rescheduled,
+   the assigned tech gets install.assigned + install.rescheduled. */
+function _install_job_notify(int $job_id, array $args, ?array $before): void {
+    if (!is_file(__DIR__ . '/notifications.php')) return;
+    require_once __DIR__ . '/notifications.php';
+
+    $sched_now    = $args['scheduled_at'] ?: null;
+    $sched_before = $before['scheduled_at'] ?? null;
+    $tech_now     = $args['assigned_to']  ?: null;
+    $tech_before  = isset($before['assigned_to']) ? (int)$before['assigned_to'] : null;
+    if ($tech_before === 0) $tech_before = null;
+
+    $customer = null;
+    try {
+        $customer = find_user_by_id((int)$args['customer_id']);
+    } catch (Throwable $e) { /* non-fatal */ }
+
+    /* Customer-side: scheduled if a date has been set for the first
+       time, rescheduled if an existing date moved. */
+    if ($customer) {
+        $payload_base = [
+            'job_id'       => $job_id,
+            'scheduled_at' => $sched_now,
+        ];
         try {
-            $u = find_user_by_id($customer_id);
-            if ($u) {
-                notify_send($u, 'install.scheduled', [
-                    'scheduled_at' => $args['scheduled_at'],
-                ]);
+            if ($sched_now && !$sched_before) {
+                notify_send($customer, 'install.scheduled', $payload_base);
+            } elseif ($sched_now && $sched_before && $sched_now !== $sched_before) {
+                notify_send($customer, 'install.rescheduled',
+                    $payload_base + ['previous_at' => $sched_before]);
             }
         } catch (Throwable $e) {
-            error_log('install.scheduled notify failed: ' . $e->getMessage());
+            error_log('install customer notify failed: ' . $e->getMessage());
         }
     }
 
-    return $new_id;
+    /* Tech-side: when a job is assigned to them or moves to them, plus
+       a reschedule heads-up if the date changes on a job they own. */
+    if ($tech_now) {
+        try {
+            $tech = find_user_by_id($tech_now);
+            if ($tech) {
+                $cust_label = trim((string)($customer['name'] ?? ''));
+                if ($cust_label === '') $cust_label = trim((string)($customer['username'] ?? ''));
+                if ($cust_label === '') $cust_label = 'Job #' . $job_id;
+
+                $tech_payload = [
+                    'job_id'         => $job_id,
+                    'customer_label' => $cust_label,
+                    'scheduled_at'   => $sched_now,
+                    'address'        => trim((string)($customer['address'] ?? '')),
+                    'notes'          => mb_substr((string)$args['notes'], 0, 240),
+                    'url'            => '/admin/install-view.php?id=' . $job_id,
+                ];
+
+                $assigned_changed = $tech_now !== $tech_before;
+                if ($assigned_changed) {
+                    notify_send($tech, 'install.assigned', $tech_payload);
+                } elseif ($sched_now && $sched_before && $sched_now !== $sched_before) {
+                    // Same tech, date moved between two real values.
+                    notify_send($tech, 'install.rescheduled', [
+                        'job_id'       => $job_id,
+                        'scheduled_at' => $sched_now,
+                        'previous_at'  => $sched_before,
+                    ]);
+                }
+            }
+        } catch (Throwable $e) {
+            error_log('install tech notify failed: ' . $e->getMessage());
+        }
+    }
 }
 
 function install_job_start(int $id): void {
