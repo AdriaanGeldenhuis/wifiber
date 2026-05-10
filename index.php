@@ -289,8 +289,21 @@ require __DIR__ . '/includes/header.php';
 
       <div class="app-promo-visual" aria-hidden="true">
         <div class="device">
+          <span class="device-side device-side-mute"></span>
+          <span class="device-side device-side-vol-up"></span>
+          <span class="device-side device-side-vol-down"></span>
+          <span class="device-side device-side-power"></span>
           <span class="device-notch"></span>
+          <span class="device-glare"></span>
           <div class="device-screen">
+            <div class="device-status">
+              <span class="device-status-time">9:41</span>
+              <span class="device-status-icons">
+                <svg viewBox="0 0 18 12" width="16" height="11" fill="currentColor" aria-hidden="true"><rect x="0" y="8" width="3" height="4" rx="1"/><rect x="5" y="5" width="3" height="7" rx="1"/><rect x="10" y="2" width="3" height="10" rx="1"/><rect x="15" y="0" width="3" height="12" rx="1" opacity=".5"/></svg>
+                <svg viewBox="0 0 16 12" width="14" height="11" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M1.5 5.2a10 10 0 0 1 13 0"/><path d="M3.6 7.7a7 7 0 0 1 8.8 0"/><path d="M5.7 10a4 4 0 0 1 4.6 0"/></svg>
+                <svg viewBox="0 0 26 12" width="22" height="11" fill="none" stroke="currentColor" stroke-width="1.2" aria-hidden="true"><rect x="1" y="1" width="20" height="10" rx="2.5"/><rect x="3" y="3" width="14" height="6" rx="1" fill="currentColor"/><rect x="22" y="4" width="2" height="4" rx="1" fill="currentColor"/></svg>
+              </span>
+            </div>
             <div class="device-bar">
               <span class="device-bar-icon" aria-hidden="true">
                 <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M3 12h18M3 18h18"/></svg>
@@ -303,7 +316,7 @@ require __DIR__ . '/includes/header.php';
 
             <div class="device-card">
               <span class="device-eyebrow">Welcome back</span>
-              <span class="device-title">Adriaan</span>
+              <span class="device-title">Jason</span>
               <span class="device-meta"><span class="device-pill device-pill-good">Account active</span></span>
             </div>
 
