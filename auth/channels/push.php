@@ -386,14 +386,24 @@ function _fcm_access_token(array $config, ?array &$trace = null): ?string {
         return (string)$cached['access'];
     }
 
-    $now = time();
+    // Back-date iat by a small skew margin so a server clock that is
+    // slightly ahead of Google's doesn't produce a JWT that looks
+    // "issued in the future". Google rejects those — sometimes with the
+    // obvious "Token used too early" message, but sometimes with a
+    // generic "Invalid JWT Signature" — so we always pay the 30 s cost.
+    // exp is pinned to iat + 3600 to stay inside Google's hard 1-hour
+    // JWT-lifetime ceiling.
+    $now  = time();
+    $skew = 30;
+    $iat  = $now - $skew;
+    $exp  = $iat + 3600;
     $header = ['alg' => 'RS256', 'typ' => 'JWT'];
     $claims = [
         'iss'   => $sa['client_email'],
         'scope' => 'https://www.googleapis.com/auth/firebase.messaging',
         'aud'   => 'https://oauth2.googleapis.com/token',
-        'iat'   => $now,
-        'exp'   => $now + 3600,
+        'iat'   => $iat,
+        'exp'   => $exp,
     ];
     $segments = [
         _fcm_b64url(json_encode($header)),
@@ -418,7 +428,14 @@ function _fcm_access_token(array $config, ?array &$trace = null): ?string {
     $trace[] = [
         'step'   => 'jwt_sign',
         'ok'     => true,
-        'detail' => ['alg' => 'RS256', 'sig_bytes' => strlen($signature)],
+        'detail' => [
+            'alg'        => 'RS256',
+            'sig_bytes'  => strlen($signature),
+            'iat'        => $iat,
+            'exp'        => $exp,
+            'server_now' => $now,
+            'skew_back'  => $skew,
+        ],
     ];
     $jwt = $signing_input . '.' . _fcm_b64url($signature);
 
@@ -569,14 +586,32 @@ function _fcm_key_header(string $key): string {
 /**
  * Translate Google's OAuth error JSON into a one-line operator hint.
  * The full body is also stored in the trace for the curious.
+ *
+ * invalid_grant is split by sub-cause: the time-shaped descriptions
+ * ("too early", "too late", "expired") really are clock skew, but
+ * "Invalid JWT Signature" almost always means the private_key on disk
+ * no longer matches the public key Firebase has on file — i.e. the
+ * service-account key was rotated or revoked.
  */
 function _fcm_oauth_hint(string $body): string {
     $j = json_decode($body, true);
     if (!is_array($j)) return 'see body';
     $code = (string)($j['error'] ?? '');
     $desc = (string)($j['error_description'] ?? '');
+    if ($code === 'invalid_grant') {
+        $d = strtolower($desc);
+        if (str_contains($d, 'too early') || str_contains($d, 'future')) {
+            return 'invalid_grant: JWT issued in the future — this server\'s clock is ahead of Google\'s, check NTP sync';
+        }
+        if (str_contains($d, 'too late') || str_contains($d, 'expired')) {
+            return 'invalid_grant: JWT expired before Google read it — this server\'s clock is behind, check NTP sync';
+        }
+        if (str_contains($d, 'signature')) {
+            return 'invalid_grant: Invalid JWT Signature — the service-account private_key on disk no longer matches the public key Firebase has, the key was almost certainly rotated/revoked in Firebase Console (clock skew does not cause this)';
+        }
+        return 'invalid_grant — ' . ($desc ?: 'check clock sync, or whether the service-account key was rotated/revoked in Firebase Console');
+    }
     return match ($code) {
-        'invalid_grant'  => 'invalid_grant — usually clock skew on this server, or the service-account key was rotated/revoked in Firebase Console',
         'invalid_client' => 'invalid_client — the service account no longer exists or has been disabled',
         'invalid_scope'  => 'invalid_scope — JWT scope must be https://www.googleapis.com/auth/firebase.messaging',
         ''               => $desc ?: 'see body',
