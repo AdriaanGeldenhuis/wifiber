@@ -20,6 +20,8 @@ require_once __DIR__ . '/../auth/csv.php';
 
 $h = fn ($v) => htmlspecialchars((string)($v ?? ''), ENT_QUOTES);
 
+$debug_mode = !empty($_GET['debug']) && acl_can($user, 'customers.write');
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     require_csrf();
     acl_require('customers.write');
@@ -31,6 +33,25 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             audit_log('push.token_revoke', ['target_type' => 'device_token', 'target_id' => $tid]);
             flash('success', 'Token revoked. The next app launch on that device will register a fresh one.');
         }
+        header('Location: /admin/notifications.php');
+        exit;
+    }
+    if ($action === 'push_debug') {
+        $target = (int)($_POST['target_user_id'] ?? 0);
+        if ($target <= 0) $target = (int)($user['id'] ?? 0);
+        $diag = notify_push_diag($target);
+        audit_log('push.debug', [
+            'target_type' => 'user',
+            'target_id'   => $target,
+            'meta'        => ['ok' => $diag['ok'], 'reason' => $diag['reason']],
+        ]);
+        $_SESSION['_push_debug_result'] = [
+            'target' => $target,
+            'diag'   => $diag,
+            'at'     => time(),
+        ];
+        header('Location: /admin/notifications.php?debug=1#push-debug');
+        exit;
     }
     elseif ($action === 'push_debug') {
         require_once __DIR__ . '/../auth/channels/push.php';
@@ -117,6 +138,37 @@ $channels_used = ['email', 'sms', 'whatsapp', 'push', 'slack', 'webhook'];
 $statuses_used = ['queued', 'sent', 'failed', 'skipped'];
 
 $push_configured = !empty(notify_load_config()['push']['enabled']);
+
+// "Debug push" card. Pulled from session so the redirect-after-POST
+// pattern still gives the operator the trace from the previous run.
+$push_debug_result = null;
+if ($debug_mode && !empty($_SESSION['_push_debug_result'])) {
+    $push_debug_result = $_SESSION['_push_debug_result'];
+    unset($_SESSION['_push_debug_result']);
+}
+
+// Quick user picker for the debug send. Limit to a sensible set so the
+// dropdown stays usable on a deployment with thousands of clients —
+// staff first, then anyone with an active push token.
+$debug_user_options = [];
+if ($debug_mode) {
+    try {
+        $stmt = $pdo->query(
+            "SELECT u.id, u.username, u.name, u.role,
+                    EXISTS(SELECT 1 FROM device_tokens t
+                            WHERE t.user_id = u.id AND t.is_active = 1) AS has_token
+               FROM users u
+              WHERE u.role IN ('super_admin','admin','technician','noc_readonly')
+                 OR EXISTS(SELECT 1 FROM device_tokens t
+                            WHERE t.user_id = u.id AND t.is_active = 1)
+              ORDER BY has_token DESC, u.username ASC
+              LIMIT 200"
+        );
+        $debug_user_options = $stmt->fetchAll();
+    } catch (Throwable $e) {
+        $debug_user_options = [];
+    }
+}
 ?>
 
 <div class="portal-head">
@@ -346,7 +398,144 @@ $push_configured = !empty(notify_load_config()['push']['enabled']);
     <code>POST /api/v1/push/register</code> (auth: customer session or API token).
     Stale tokens auto-revoke when FCM returns <code>404 UNREGISTERED</code>.
   </p>
+  <?php if (acl_can($user, 'customers.write') && !$debug_mode): ?>
+    <p class="muted small" style="margin-top:6px;">
+      Push not delivering? Open <a href="/admin/notifications.php?debug=1#push-debug">debug mode</a>
+      to trace the FCM pipeline step-by-step.
+    </p>
+  <?php endif; ?>
 </div>
+
+<?php if ($debug_mode): ?>
+<div class="portal-card" id="push-debug">
+  <h2>Debug push</h2>
+  <p class="muted">
+    Step-by-step trace of the FCM pipeline plus a real test send to the
+    target user's registered devices. Failures show the FCM HTTP code
+    and raw response so you can read the reason directly.
+  </p>
+
+  <form method="post" class="form" style="display:flex;gap:14px;align-items:flex-end;flex-wrap:wrap;margin-bottom:18px;">
+    <?= csrf_field() ?>
+    <input type="hidden" name="action" value="push_debug">
+    <div class="field" style="flex:1;min-width:260px;">
+      <label>Target user</label>
+      <select name="target_user_id">
+        <option value="<?= (int)($user['id'] ?? 0) ?>">— me (<?= $h($user['name'] ?: $user['username']) ?>) —</option>
+        <?php foreach ($debug_user_options as $u):
+          if ((int)$u['id'] === (int)($user['id'] ?? 0)) continue;
+          $label = $u['username'] . ($u['name'] ? ' — ' . $u['name'] : '')
+                 . (!empty($u['has_token']) ? '' : ' (no active token)');
+        ?>
+          <option value="<?= (int)$u['id'] ?>"><?= $h($label) ?></option>
+        <?php endforeach; ?>
+      </select>
+    </div>
+    <div class="form-actions">
+      <button type="submit" class="btn btn-primary">Run diagnostic &amp; send test</button>
+    </div>
+  </form>
+
+  <?php if ($push_debug_result):
+    $diag = $push_debug_result['diag'];
+    $ok   = !empty($diag['ok']);
+  ?>
+    <div class="alert <?= $ok ? 'alert-success' : 'alert-error' ?>" style="margin-bottom:14px;">
+      <strong>Result:</strong>
+      <span class="status-pill <?= $ok ? 'status-paid' : 'status-overdue' ?>">
+        <?= $ok ? 'sent' : 'failed' ?>
+      </span>
+      <?php if (!$ok && !empty($diag['reason'])): ?>
+        <div style="margin-top:8px;"><strong>Stopped at:</strong> <?= $h($diag['reason']) ?></div>
+      <?php endif; ?>
+    </div>
+
+    <h3 style="margin-top:0;">Pipeline trace</h3>
+    <table class="data-table" style="margin-bottom:18px;">
+      <thead><tr><th style="width:160px;">Step</th><th>Detail</th></tr></thead>
+      <tbody>
+        <?php foreach ((array)$diag['trace'] as $row):
+          $row_ok = !empty($row['ok']);
+        ?>
+          <tr>
+            <td>
+              <span class="status-pill <?= $row_ok ? 'status-paid' : 'status-overdue' ?>">
+                <?= $row_ok ? 'ok' : 'fail' ?>
+              </span>
+              &nbsp;<code><?= $h((string)($row['step'] ?? '?')) ?></code>
+            </td>
+            <td>
+              <?php if (!$row_ok && !empty($row['error'])): ?>
+                <div style="color:var(--danger);margin-bottom:6px;">
+                  <?= $h((string)$row['error']) ?>
+                </div>
+              <?php endif; ?>
+              <?php if (!empty($row['detail'])): ?>
+                <pre style="white-space:pre-wrap;word-break:break-word;font-size:.85rem;margin:0;background:var(--card-bg-2,rgba(255,255,255,.04));padding:8px;border-radius:6px;"><?= $h(json_encode(notify_push_redact((array)$row['detail']), JSON_PRETTY_PRINT|JSON_UNESCAPED_SLASHES)) ?></pre>
+              <?php endif; ?>
+            </td>
+          </tr>
+        <?php endforeach; ?>
+      </tbody>
+    </table>
+
+    <?php if (!empty($diag['send'])): ?>
+      <h3>Test send result</h3>
+      <table class="data-table">
+        <thead>
+          <tr>
+            <th>Token</th>
+            <th>Platform</th>
+            <th>Device</th>
+            <th>HTTP</th>
+            <th>Response</th>
+          </tr>
+        </thead>
+        <tbody>
+          <?php foreach ((array)$diag['send'] as $s):
+            $sok = !empty($s['ok']);
+          ?>
+            <tr>
+              <td>
+                #<?= (int)$s['token_id'] ?>
+                <span class="status-pill <?= $sok ? 'status-paid' : 'status-overdue' ?>" style="margin-left:6px;">
+                  <?= $sok ? 'sent' : 'failed' ?>
+                </span>
+              </td>
+              <td><?= $h((string)$s['platform']) ?></td>
+              <td><small class="muted"><?= $h($s['device_label'] ?: '—') ?></small></td>
+              <td><?= (int)$s['http'] ?></td>
+              <td>
+                <?php if (!empty($s['curl_error'])): ?>
+                  <div style="color:var(--danger);margin-bottom:6px;">curl: <?= $h((string)$s['curl_error']) ?></div>
+                <?php endif; ?>
+                <?php if (!empty($s['body'])): ?>
+                  <pre style="white-space:pre-wrap;word-break:break-word;font-size:.8rem;margin:0;background:var(--card-bg-2,rgba(255,255,255,.04));padding:8px;border-radius:6px;"><?= $h((string)$s['body']) ?></pre>
+                <?php else: ?>
+                  <span class="muted small">— empty —</span>
+                <?php endif; ?>
+              </td>
+            </tr>
+          <?php endforeach; ?>
+        </tbody>
+      </table>
+    <?php endif; ?>
+  <?php else: ?>
+    <p class="muted small">
+      Pick a user and run a test. The diagnostic checks <code>notify_push</code>
+      config, loads the service account, normalises the private key, signs a
+      JWT, exchanges it for an access token at Google, and finally fires a
+      real FCM message. Each step's status is shown above.
+    </p>
+  <?php endif; ?>
+
+  <p class="muted small" style="margin-top:14px;">
+    The trace never echoes the private key — only its length and PEM
+    header. Audit log records every run under <code>push.debug</code>.
+    <a href="/admin/notifications.php">Exit debug mode</a>.
+  </p>
+</div>
+<?php endif; ?>
 
 <div class="portal-card" id="push-debug">
   <h2>Debug push</h2>
