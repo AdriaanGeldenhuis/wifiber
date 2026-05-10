@@ -102,6 +102,38 @@ function notify_template(string $template, array $data, string $channel): array 
                   . "Reply to this message if the date doesn't work — we'll reschedule.\n\n"
                   . "— {$site_name}";
             break;
+        case 'install.rescheduled':
+            $subject = "Install rescheduled — {$site_name}";
+            $body = "Hi " . ($data['name'] ?? '') . ",\n\n"
+                  . "Heads up — your install has been rescheduled to "
+                  . ($data['scheduled_at'] ?? '?') . "."
+                  . (!empty($data['previous_at']) ? " (Previous slot: " . $data['previous_at'] . ".)" : '')
+                  . "\n\nReply to this message if the new date doesn't work — we'll find another slot.\n\n"
+                  . "— {$site_name}";
+            break;
+        case 'install.assigned':
+            $cust_label = $data['customer_label'] ?? ('Job #' . ($data['job_id'] ?? '?'));
+            $subject = "Install assigned to you: " . $cust_label;
+            $body = "Hi " . ($data['name'] ?? '') . ",\n\n"
+                  . "An install has been assigned to you.\n\n"
+                  . "Customer: " . $cust_label . "\n"
+                  . "Scheduled: " . (!empty($data['scheduled_at']) ? $data['scheduled_at'] : 'not set yet') . "\n"
+                  . (!empty($data['address']) ? "Address: " . $data['address'] . "\n" : '')
+                  . (!empty($data['notes'])   ? "Notes: "   . $data['notes']   . "\n" : '')
+                  . "\nOpen the job: " . ($data['url'] ?? '/admin/installs.php')
+                  . "\n\n— {$site_name}";
+            break;
+        case 'ticket.reply':
+            $subject = "[Ticket #" . ($data['ticket_id'] ?? '?') . "] "
+                     . ($data['ticket_subject'] ?? "Reply from {$site_name}");
+            $body = "Hi " . ($data['name'] ?? '') . ",\n\n"
+                  . "There's a new reply on your support ticket "
+                  . "#" . ($data['ticket_id'] ?? '?') . " — "
+                  . ($data['ticket_subject'] ?? '') . ":\n\n"
+                  . rtrim((string)($data['snippet'] ?? '')) . "\n\n"
+                  . "View the full thread: " . ($data['url'] ?? '/account/tickets.php')
+                  . "\n\n— The {$site_name} team";
+            break;
         case 'install.completed':
             $subject = "Welcome to {$site_name} — you're online";
             $body = "Hi " . ($data['name'] ?? '') . ",\n\n"
@@ -136,11 +168,11 @@ function notify_user_wants(array $user, string $channel, string $template): bool
     if (!is_array($prefs)) $prefs = [];
     $key = $channel . '_' . _notify_template_group($template);
     if (array_key_exists($key, $prefs)) return (bool)$prefs[$key];
-    // Default policy: reach customers on all channels for outage and
-    // install events (those are direct, time-sensitive customer
-    // touchpoints), email-only for everything else.
+    // Default policy: reach the user on every channel for outage,
+    // install, and ticket-reply events (direct, time-sensitive); fall
+    // back to email-only for everything else.
     $group = _notify_template_group($template);
-    return in_array($group, ['outage', 'install'], true)
+    return in_array($group, ['outage', 'install', 'ticket'], true)
         || $channel === 'email';
 }
 
@@ -148,6 +180,7 @@ function _notify_template_group(string $template): string {
     if (str_starts_with($template, 'outage.'))      return 'outage';
     if (str_starts_with($template, 'maintenance.')) return 'maintenance';
     if (str_starts_with($template, 'install.'))     return 'install';
+    if (str_starts_with($template, 'ticket.'))      return 'ticket';
     if (str_starts_with($template, 'link.'))        return 'link';
     if (str_starts_with($template, 'cable.'))       return 'noc';
     if (str_starts_with($template, 'cred.'))        return 'noc';

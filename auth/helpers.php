@@ -21,9 +21,9 @@ const LOCKOUT_SECS    = 900;   // 15 min
 const PW_RESET_TTL    = 3600;  // 1 hour
 const SESSION_NAME    = 'wfsess';
 
-const POST_RATE_LIMIT_MAX    = 30;   // POSTs per IP
-const POST_RATE_LIMIT_WINDOW = 60;   // seconds
-const SESSION_IDLE_TIMEOUT   = 3600; // 1 hour idle -> auto-logout
+const POST_RATE_LIMIT_MAX    = 30;       // POSTs per IP
+const POST_RATE_LIMIT_WINDOW = 60;       // seconds
+const SESSION_LIFETIME       = 2592000;  // 30 days — applies to every user
 
 /* --------------------------------------------------------------- session */
 
@@ -31,8 +31,11 @@ function start_session(): void {
     if (session_status() === PHP_SESSION_ACTIVE) return;
     $secure = !empty($_SERVER['HTTPS']) && $_SERVER['HTTPS'] !== 'off';
     session_name(SESSION_NAME);
+    // Keep the server-side session file alive at least as long as the cookie,
+    // otherwise PHP's GC reaps it within minutes and the cookie becomes useless.
+    @ini_set('session.gc_maxlifetime', (string)SESSION_LIFETIME);
     session_set_cookie_params([
-        'lifetime' => 0,
+        'lifetime' => SESSION_LIFETIME,
         'path'     => '/',
         'domain'   => '',
         'secure'   => $secure,
@@ -298,8 +301,13 @@ function update_user(int $id, callable $patch): bool {
 }
 
 function create_user(string $username, string $password, string $role, string $name, string $email = '', array $extra = []): array {
-    if (!in_array($role, ['admin', 'client'], true)) {
-        throw new InvalidArgumentException("role must be admin or client");
+    // Allow every staff role we recognise plus 'client'. Mirrors
+    // ACL_STAFF_ROLES_FALLBACK so the staff page's role picker can mint
+    // technicians, billing, support and noc_readonly without falling
+    // back to a phpMyAdmin role-flip after the fact.
+    $valid_roles = array_merge(ACL_STAFF_ROLES_FALLBACK, ['client']);
+    if (!in_array($role, $valid_roles, true)) {
+        throw new InvalidArgumentException("role must be one of: " . implode(', ', $valid_roles));
     }
     if (find_user_by_username($username)) {
         throw new RuntimeException("A user with that username already exists.");
@@ -424,14 +432,15 @@ function reset_login_fails(string $ip): void {
     $stmt->execute([$ip]);
 }
 
-function attempt_login(string $username, string $password, string $required_role): ?array {
+function attempt_login(string $username, string $password, string|array $required_role): ?array {
+    $allowed = is_array($required_role) ? $required_role : [$required_role];
     $ip = client_ip();
     if (is_locked_out($ip)) return null;
     $user = find_user_by_username($username);
     $valid = $user && password_verify($password, $user['password_hash'] ?? '');
-    if (!$valid || ($user['role'] ?? '') !== $required_role) {
+    if (!$valid || !in_array($user['role'] ?? '', $allowed, true)) {
         record_login_fail($ip);
-        audit_log('login.fail', ['meta' => ['username' => $username, 'role' => $required_role]]);
+        audit_log('login.fail', ['meta' => ['username' => $username, 'roles' => $allowed]]);
         return null;
     }
     reset_login_fails($ip);
@@ -456,7 +465,6 @@ function attempt_login(string $username, string $password, string $required_role
     $_SESSION['user_role']      = $user['role'];
     $_SESSION['user_name']      = $user['name'];
     $_SESSION['logged_in_at']   = time();
-    $_SESSION['last_activity']  = time();
 
     update_user((int)$user['id'], function (array $u) {
         $u['last_login'] = date('c');
@@ -484,13 +492,6 @@ function logout(): void {
 
 function current_user(): ?array {
     if (empty($_SESSION['user_id'])) return null;
-    // Idle session timeout — kick the user out if they haven't done anything in an hour.
-    $last = (int)($_SESSION['last_activity'] ?? 0);
-    if ($last > 0 && time() - $last > SESSION_IDLE_TIMEOUT) {
-        logout();
-        return null;
-    }
-    $_SESSION['last_activity'] = time();
     return find_user_by_id((int)$_SESSION['user_id']);
 }
 

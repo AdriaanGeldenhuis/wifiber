@@ -20,10 +20,8 @@ import za.co.wifiber.R
 class WiFiberMessagingService : FirebaseMessagingService() {
 
     override fun onNewToken(token: String) {
-        Log.i(TAG, "FCM token: $token")
-        // The portal exposes /account/api/register-device.php — when the
-        // server endpoint is wired up, register the token there. Until
-        // then we just log it for testing via the Firebase Console.
+        Log.i(TAG, "FCM token rotated")
+        PushTokenRegistrar.submit(this, token)
     }
 
     override fun onMessageReceived(message: RemoteMessage) {

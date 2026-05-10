@@ -36,6 +36,8 @@ if (!is_array($prefs)) $prefs = [];
 $pref_groups = [
     'outage'      => 'Outage alerts',
     'maintenance' => 'Planned maintenance',
+    'install'     => 'Install updates',
+    'ticket'      => 'Support replies',
     'link'        => 'Link health',
 ];
 $channels = ['email', 'sms', 'whatsapp', 'push'];
@@ -82,12 +84,13 @@ $channel_label = [
     </thead>
     <tbody>
       <?php foreach ($pref_groups as $g => $label):
-        $default = $g === 'outage';
+        $always_on = in_array($g, ['outage','install','ticket'], true);
       ?>
         <tr>
           <td><?= $h($label) ?></td>
           <?php foreach ($channels as $c):
             $key = "{$c}_{$g}";
+            $default = $always_on || $c === 'email';
             $on = array_key_exists($key, $prefs) ? !empty($prefs[$key]) : $default;
           ?>
             <td style="text-align:center;">

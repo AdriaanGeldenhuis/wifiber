@@ -46,7 +46,7 @@ function _push_api_ok(array $data): void {
 }
 
 $user = current_user();
-if (!$user || ($user['role'] ?? '') !== 'client') {
+if (!$user) {
     _push_api_error(401, 'login required');
 }
 

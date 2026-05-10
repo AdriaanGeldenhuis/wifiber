@@ -64,7 +64,6 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $_SESSION['user_role']      = $candidate['role'];
             $_SESSION['user_name']      = $candidate['name'];
             $_SESSION['logged_in_at']   = time();
-            $_SESSION['last_activity']  = time();
             unset($_SESSION['totp_pending_id'], $_SESSION['totp_pending_expires']);
             update_user((int)$candidate['id'], function (array $u) {
                 $u['last_login'] = date('c');

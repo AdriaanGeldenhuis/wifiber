@@ -9,8 +9,21 @@
 require_once __DIR__ . '/../auth/products.php';
 require_once __DIR__ . '/../auth/validators.php';
 
-function render_users_admin(string $role, string $heading, string $subtitle, array $current_user): void {
+function render_users_admin(string $role, string $heading, string $subtitle, array $current_user, ?array $creatable_roles = null): void {
     $self = strtok($_SERVER['REQUEST_URI'], '?');
+
+    // List + create scope. With $creatable_roles we expand the page to
+    // cover several staff roles at once (so /admin/admins.php becomes a
+    // "Staff" page instead of just admins). Falls back to the single
+    // page-level role when the caller doesn't pass anything.
+    $role_list      = $creatable_roles ?: [$role];
+    $multi_role     = count($role_list) > 1;
+    $is_client_view = ($role === 'client');
+    if ($is_client_view) {
+        // Customer creation never picks a role — clients are clients.
+        $multi_role = false;
+        $role_list  = [$role];
+    }
 
     if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         require_csrf();
@@ -26,6 +39,16 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
             $surname  = trim($_POST['surname']  ?? '');
             $email    = trim($_POST['email']    ?? '');
             $password = (string)($_POST['password'] ?? '');
+            // When the caller offers a role picker, accept the choice
+            // (validated against the allow-list) and use it for create_user.
+            // Otherwise we keep the page-level role — the existing behaviour.
+            $create_role = $role;
+            if ($multi_role) {
+                $picked = (string)($_POST['role'] ?? '');
+                if (in_array($picked, $role_list, true)) {
+                    $create_role = $picked;
+                }
+            }
             $errors   = [];
             if (strlen($username) < 3)                                       $errors[] = 'Username must be at least 3 characters.';
             if ($name === '')                                                $errors[] = 'Display name is required.';
@@ -49,7 +72,7 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
                     if ($product_id > 0 && ($p = products_find($product_id))) {
                         $package = $p['name'];
                     }
-                    $created = create_user($username, $password, $role, $name, $email, [
+                    $created = create_user($username, $password, $create_role, $name, $email, [
                         'phone'         => $_POST['phone']         ?? '',
                         'address'       => $_POST['address']       ?? '',
                         'package'       => $package,
@@ -95,7 +118,7 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
                             }
                         }
                     }
-                    $msg = ucfirst($role) . " '{$username}' created";
+                    $msg = ucfirst($create_role) . " '{$username}' created";
                     if (!empty($created['account_no'])) {
                         $msg .= " (account #{$created['account_no']})";
                     }
@@ -142,12 +165,23 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
                 header('Location: ' . $self);
                 exit;
             }
-            $ok = update_user($id, function (array $u) use ($name, $email, $phone, $addr, $pkg) {
+            // Optional role change — only honoured when the page allows
+            // it (multi_role mode) and the picked value is in the allow-list.
+            // Self-demotion is blocked so an admin can't lock themselves out.
+            $new_role = null;
+            if ($multi_role && isset($_POST['role'])) {
+                $picked = (string)$_POST['role'];
+                if (in_array($picked, $role_list, true) && $id !== (int)$current_user['id']) {
+                    $new_role = $picked;
+                }
+            }
+            $ok = update_user($id, function (array $u) use ($name, $email, $phone, $addr, $pkg, $new_role) {
                 $u['name']    = $name;
                 $u['email']   = $email;
                 $u['phone']   = $phone;
                 $u['address'] = $addr;
                 $u['package'] = $pkg;
+                if ($new_role !== null) $u['role'] = $new_role;
                 return $u;
             });
             flash($ok ? 'success' : 'error', $ok ? 'Account updated.' : 'User not found.');
@@ -256,8 +290,10 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
         }
     }
 
-    $users = array_values(array_filter(load_users(), fn($u) => ($u['role'] ?? '') === $role));
-    $is_client_view = ($role === 'client');
+    $users = array_values(array_filter(
+        load_users(),
+        fn($u) => in_array((string)($u['role'] ?? ''), $role_list, true)
+    ));
 
     // ---- Filters (clients only) ----
     $status_filter   = $is_client_view ? trim((string)($_GET['status'] ?? '')) : '';
@@ -396,7 +432,7 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
       <?php if (empty($users)): ?>
         <div class="empty-state">
           <div class="empty-icon">+</div>
-          <h3>No <?= htmlspecialchars($role) ?>s yet</h3>
+          <h3>No <?= htmlspecialchars($is_client_view ? 'client' : ($multi_role ? 'staff' : $role)) ?>s yet</h3>
           <p>Use the form below to add the first one. <?= $role === 'client' ? 'A welcome email with login credentials can be sent automatically.' : '' ?></p>
         </div>
       <?php else: ?>
@@ -443,6 +479,9 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
                 <strong><?= htmlspecialchars($u['username']) ?></strong>
               <?php endif; ?>
               <span class="muted">&middot; <?= htmlspecialchars($u['name'] ?? '') ?></span>
+              <?php if ($multi_role && !$is_client_view): ?>
+                <span class="pkg-pill"><?= htmlspecialchars((string)($u['role'] ?? '')) ?></span>
+              <?php endif; ?>
               <?php if ($is_client_view && !empty($u['package'])): ?>
                 <span class="pkg-pill"><?= htmlspecialchars($u['package']) ?></span>
               <?php endif; ?>
@@ -486,6 +525,18 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
                   <div class="field"><label>Phone</label>
                     <input type="tel" name="phone" maxlength="40" value="<?= htmlspecialchars($u['phone'] ?? '', ENT_QUOTES) ?>">
                   </div>
+                  <?php if ($multi_role): ?>
+                    <div class="field"><label>Role</label>
+                      <?php $is_self = (int)$u['id'] === (int)$current_user['id']; ?>
+                      <select name="role" <?= $is_self ? 'disabled title="You can&#39;t change your own role"' : '' ?>>
+                        <?php foreach ($role_list as $r): ?>
+                          <option value="<?= htmlspecialchars($r) ?>" <?= $r === ($u['role'] ?? '') ? 'selected' : '' ?>>
+                            <?= htmlspecialchars($r) ?>
+                          </option>
+                        <?php endforeach; ?>
+                      </select>
+                    </div>
+                  <?php endif; ?>
                   <input type="hidden" name="package" value="<?= htmlspecialchars($u['package'] ?? '', ENT_QUOTES) ?>">
                   <input type="hidden" name="address" value="<?= htmlspecialchars($u['address'] ?? '', ENT_QUOTES) ?>">
                   <div class="form-actions">
@@ -583,7 +634,14 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
     </div>
 
     <div class="portal-card">
-      <h2>Create new <?= htmlspecialchars($role) ?></h2>
+      <?php
+        // "Create new admin" reads wrong on the Staff page where the
+        // operator might be making a technician — so we show the role
+        // they're actually creating, falling back to a generic word
+        // when the picker is in play.
+        $create_label = $is_client_view ? 'client' : ($multi_role ? 'staff member' : $role);
+      ?>
+      <h2>Create new <?= htmlspecialchars($create_label) ?></h2>
       <?php if ($is_client_view): ?>
         <p class="muted small">Just the basics here. After save you'll land on the full client editor where you can fill in ID number, GPS, equipment, billing day and the rest.</p>
       <?php endif; ?>
@@ -596,6 +654,17 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
         <div class="field"><label>Display name</label>
           <input type="text" name="name" required maxlength="100">
         </div>
+        <?php if ($multi_role): ?>
+          <div class="field"><label>Role</label>
+            <select name="role" required>
+              <?php foreach ($role_list as $r): ?>
+                <option value="<?= htmlspecialchars($r) ?>" <?= $r === $role ? 'selected' : '' ?>>
+                  <?= htmlspecialchars($r) ?>
+                </option>
+              <?php endforeach; ?>
+            </select>
+          </div>
+        <?php endif; ?>
         <?php if ($is_client_view): ?>
           <div class="field"><label>Surname <span class="muted small">(used for the account number, e.g. GEL0001)</span></label>
             <input type="text" name="surname" required maxlength="60">
@@ -651,7 +720,7 @@ function render_users_admin(string $role, string $heading, string $subtitle, arr
           </div>
         <?php endif; ?>
         <div class="form-actions">
-          <button type="submit" class="btn btn-primary">Create <?= htmlspecialchars($role) ?></button>
+          <button type="submit" class="btn btn-primary">Create <?= htmlspecialchars($create_label) ?></button>
         </div>
       </form>
     </div>

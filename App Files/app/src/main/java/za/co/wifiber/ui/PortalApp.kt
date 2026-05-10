@@ -7,7 +7,6 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -58,10 +57,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 import za.co.wifiber.R
+import za.co.wifiber.nav.Audience
 import za.co.wifiber.nav.PortalDestination
 import za.co.wifiber.nav.PortalGroup
 import za.co.wifiber.web.PortalWebView
@@ -83,16 +82,22 @@ fun PortalApp(
     val context = LocalContext.current
     var moreMenuOpen by remember { mutableStateOf(false) }
 
-    val activeDestination by remember(webState) {
-        derivedStateOf { PortalDestination.fromUrl(webState.currentUrl) ?: PortalDestination.Dashboard }
+    // The WebView's current URL is the most reliable signal we have for
+    // which nav to render: anything under /admin/ is staff, anything
+    // else is client. We don't wait for /account/api/whoami.php — the
+    // bar should swap the instant the page loads.
+    val audience by remember(webState) {
+        derivedStateOf { PortalDestination.audienceForUrl(webState.currentUrl) }
     }
-    val pageHeading by remember(webState) {
+    val isStaff = audience == Audience.Staff
+
+    val activeDestination by remember(webState, audience) {
         derivedStateOf {
-            val title = webState.pageTitle.trim()
-            if (title.isNotEmpty() && !title.equals("WiFiber", true)) title
-            else activeDestination.title
+            PortalDestination.fromUrl(webState.currentUrl, audience)
+                ?: PortalDestination.defaultFor(audience)
         }
     }
+    val bottomBarItems = remember(audience) { PortalDestination.bottomBarFor(audience) }
 
     LaunchedEffect(deepLinkUrl) {
         val target = deepLinkUrl ?: return@LaunchedEffect
@@ -115,6 +120,7 @@ fun PortalApp(
         drawerContent = {
             PortalDrawer(
                 active = activeDestination,
+                isStaff = isStaff,
                 onNavigate = { dest ->
                     scope.launch { drawerState.close() }
                     webState.loadUrl(dest.urlOn(portalHost))
@@ -131,35 +137,17 @@ fun PortalApp(
             topBar = {
                 TopAppBar(
                     colors = TopAppBarDefaults.topAppBarColors(
-                        containerColor = MaterialTheme.colorScheme.primary,
-                        titleContentColor = MaterialTheme.colorScheme.onPrimary,
-                        navigationIconContentColor = MaterialTheme.colorScheme.onPrimary,
-                        actionIconContentColor = MaterialTheme.colorScheme.onPrimary
+                        containerColor = MaterialTheme.colorScheme.surface,
+                        titleContentColor = MaterialTheme.colorScheme.onSurface,
+                        navigationIconContentColor = MaterialTheme.colorScheme.onSurface,
+                        actionIconContentColor = MaterialTheme.colorScheme.onSurface
                     ),
                     title = {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(10.dp)
-                        ) {
-                            Image(
-                                painter = painterResource(id = R.drawable.logo_brand),
-                                contentDescription = "WiFiber",
-                                modifier = Modifier.height(32.dp)
-                            )
-                            Column {
-                                Text(
-                                    pageHeading,
-                                    fontWeight = FontWeight.SemiBold,
-                                    style = MaterialTheme.typography.titleMedium
-                                )
-                                if (webState.isLoading && webState.progress in 1..99) {
-                                    Text(
-                                        "Loading… ${webState.progress}%",
-                                        style = MaterialTheme.typography.bodyMedium
-                                    )
-                                }
-                            }
-                        }
+                        Image(
+                            painter = painterResource(id = R.drawable.logo_brand),
+                            contentDescription = "WiFiber",
+                            modifier = Modifier.height(36.dp)
+                        )
                     },
                     navigationIcon = {
                         IconButton(onClick = { scope.launch { drawerState.open() } }) {
@@ -229,7 +217,7 @@ fun PortalApp(
             },
             bottomBar = {
                 NavigationBar(containerColor = MaterialTheme.colorScheme.surface) {
-                    PortalDestination.bottomBar.forEach { dest ->
+                    bottomBarItems.forEach { dest ->
                         NavigationBarItem(
                             selected = activeDestination == dest ||
                                     (dest == PortalDestination.Invoices && activeDestination == PortalDestination.Payments) ||
@@ -247,13 +235,18 @@ fun PortalApp(
                 }
             },
             floatingActionButton = {
-                ExtendedFloatingActionButton(
-                    onClick = { webState.loadUrl(PortalDestination.Tickets.urlOn(portalHost)) },
-                    containerColor = MaterialTheme.colorScheme.tertiary,
-                    contentColor = MaterialTheme.colorScheme.onTertiary,
-                    icon = { Icon(Icons.Filled.SupportAgent, contentDescription = null) },
-                    text = { Text(stringRes(R.string.action_new_ticket)) }
-                )
+                // The FAB is customer-shaped ("New ticket"). For staff
+                // it'd cover the install/ticket lists they actually
+                // need to see, so we hide it.
+                if (!isStaff) {
+                    ExtendedFloatingActionButton(
+                        onClick = { webState.loadUrl(PortalDestination.Tickets.urlOn(portalHost)) },
+                        containerColor = MaterialTheme.colorScheme.tertiary,
+                        contentColor = MaterialTheme.colorScheme.onTertiary,
+                        icon = { Icon(Icons.Filled.SupportAgent, contentDescription = null) },
+                        text = { Text(stringRes(R.string.action_new_ticket)) }
+                    )
+                }
             }
         ) { padding ->
             Box(
@@ -274,9 +267,11 @@ fun PortalApp(
 @Composable
 private fun PortalDrawer(
     active: PortalDestination,
+    isStaff: Boolean,
     onNavigate: (PortalDestination) -> Unit,
     onSignOut: () -> Unit
 ) {
+    val audience = if (isStaff) Audience.Staff else Audience.Client
     ModalDrawerSheet(
         modifier = Modifier.width(300.dp)
     ) {
@@ -300,7 +295,7 @@ private fun PortalDrawer(
                     )
                     Spacer(Modifier.height(8.dp))
                     Text(
-                        text = "Customer portal",
+                        text = if (isStaff) "Staff portal" else "Customer portal",
                         style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.7f)
                     )
@@ -315,7 +310,7 @@ private fun PortalDrawer(
                 .padding(horizontal = 12.dp, vertical = 4.dp)
         ) {
             PortalGroup.entries.forEach { group ->
-                val items = PortalDestination.entries.filter { it.group == group }
+                val items = PortalDestination.entries.filter { it.group == group && it.isFor(audience) }
                 if (items.isEmpty()) return@forEach
                 Text(
                     text = group.title,
@@ -351,11 +346,17 @@ private fun PortalDrawer(
 }
 
 private fun shortLabel(dest: PortalDestination): String = when (dest) {
-    PortalDestination.Dashboard -> "Home"
-    PortalDestination.Service -> "Service"
-    PortalDestination.Invoices -> "Billing"
-    PortalDestination.Tickets -> "Support"
-    PortalDestination.Profile -> "Profile"
+    PortalDestination.Dashboard         -> "Home"
+    PortalDestination.Service           -> "Service"
+    PortalDestination.Invoices          -> "Billing"
+    PortalDestination.Tickets           -> "Support"
+    PortalDestination.Profile           -> "Profile"
+    PortalDestination.StaffDashboard    -> "Home"
+    PortalDestination.StaffInstalls     -> "Installs"
+    PortalDestination.StaffAlignment    -> "Align"
+    PortalDestination.StaffTickets      -> "Tickets"
+    PortalDestination.StaffMap          -> "Map"
+    PortalDestination.StaffNotifications -> "Alerts"
     else -> dest.title
 }
 

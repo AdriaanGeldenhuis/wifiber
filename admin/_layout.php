@@ -67,7 +67,7 @@ $nav = [
     ]],
     ['group' => 'System Settings', 'items' => [
         ['key' => 'settings',     'label' => 'Site settings', 'href' => '/admin/settings.php'],
-        ['key' => 'admins',       'label' => 'Admins',        'href' => '/admin/admins.php'],
+        ['key' => 'admins',       'label' => 'Staff',         'href' => '/admin/admins.php'],
         ['key' => 'audit',        'label' => 'Audit log',     'href' => '/admin/audit.php'],
         ['key' => 'integrations', 'label' => 'Integrations',  'href' => '/admin/integrations.php'],
         ['key' => 'imports',      'label' => 'Imports',       'href' => '/admin/imports.php'],
