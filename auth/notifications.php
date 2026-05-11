@@ -539,13 +539,8 @@ function notify_push_diag(int $user_id): array {
         if ($ok) {
             device_token_touch((int)$row['id']);
             $any_ok = true;
-        } else {
-            $blob = strtolower((string)$resp);
-            if ($http === 404
-                || str_contains($blob, 'unregistered')
-                || str_contains($blob, 'invalid_argument')) {
-                device_token_revoke((int)$row['id']);
-            }
+        } elseif (_fcm_response_revokes_token($http, (string)$resp)) {
+            device_token_revoke((int)$row['id']);
         }
 
         $sends[] = [
